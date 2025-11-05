@@ -1,44 +1,45 @@
 import express from "express";
-import { IUser } from '../types'
-import { User } from "./user-model";
+import { User } from "./user.model";
+import { protect } from "../middleware/auth.middleware";
+import { getUserFavorites, updateUserFavorites } from "./user.controller";
 
 const router = express.Router();
-const BASE_PATH = "/api/users";
+//const BASE_PATH = "/users";
 
 router
-  .route(BASE_PATH)
+  .route("/")
   // find all
   .get((_req, res, next) => {
     User.find()
       .lean()
-      .then((users: IUser[]) => res.send(users))
+      .then((users) => res.send(users))
       .catch(next);
   })
   // create new
   .post((req, res, next) => {
     User.create(req.body)
-      .then((user: IUser) => res.send(user))
+      .then((user) => res.send(user))
       .catch(next);
   });
 
 router
-  .route(`${BASE_PATH}/search`)
+  .route(`/search`)
   // search
   .post((req, res, next) => {
     User.find(req.body)
       .lean()
-      .then((users: IUser[]) => res.send(users))
+      .then((users) => res.send(users))
       .catch(next);
   });
 
 router
-  .route(`${BASE_PATH}/:id`)
+  .route(`/:id`)
   // get one
   .get((req, res, next) => {
     User.findById(req.params.id)
       .lean()
       .orFail()
-      .then((user: IUser) => res.send(user))
+      .then((user) => res.send(user))
       .catch(next);
   })
   // update
@@ -46,7 +47,7 @@ router
     User.findByIdAndUpdate(req.params.id, req.body, { new: true })
       .lean()
       .orFail()
-      .then((user: IUser) => res.send(user))
+      .then((user) => res.send(user))
       .catch(next);
   })
   // delete
@@ -57,5 +58,8 @@ router
       .then(() => res.send(req.params))
       .catch(next);
   });
+
+router.get(`/:userId/favorites`, protect, getUserFavorites);
+router.put(`/:userId/favorites`, protect, updateUserFavorites)
 
 export default router;

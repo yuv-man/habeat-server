@@ -1,0 +1,143 @@
+### Test Generate Plan Function
+
+# First, you need to get a JWT token by logging in
+# Replace with your actual server URL and user credentials
+
+### 1. Login to get JWT token
+POST http://localhost:5000/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "test@example.com",
+  "password": "yourpassword"
+}
+
+### 2. Generate Meal Plan (use the token from login response)
+POST http://localhost:5000/api/plan/generate
+Content-Type: application/json
+Authorization: Bearer YOUR_JWT_TOKEN_HERE
+
+{
+  "title": "Weekly Healthy Meal Plan",
+  "userData": {
+    "age": 30,
+    "gender": "male",
+    "height": 175,
+    "weight": 75,
+    "path": "healthy",
+    "activityLevel": "moderate",
+    "allergies": ["nuts"],
+    "dietaryRestrictions": ["vegetarian"]
+  },
+  "language": "en"
+}
+
+### 3. Alternative: Generate Plan for Weight Loss
+POST http://localhost:5000/api/plan/generate
+Content-Type: application/json
+Authorization: Bearer YOUR_JWT_TOKEN_HERE
+
+{
+  "title": "Weight Loss Meal Plan",
+  "userData": {
+    "age": 28,
+    "gender": "female",
+    "height": 165,
+    "weight": 70,
+    "path": "lose",
+    "activityLevel": "light",
+    "allergies": [],
+    "dietaryRestrictions": ["gluten-free"]
+  },
+  "language": "en"
+}
+
+### 4. Alternative: Generate Plan for Muscle Building
+POST http://localhost:5000/api/plan/generate
+Content-Type: application/json
+Authorization: Bearer YOUR_JWT_TOKEN_HERE
+
+{
+  "title": "Muscle Building Meal Plan",
+  "userData": {
+    "age": 25,
+    "gender": "male",
+    "height": 180,
+    "weight": 80,
+    "path": "muscle",
+    "activityLevel": "very_active",
+    "allergies": ["shellfish"],
+    "dietaryRestrictions": ["dairy-free"]
+  },
+  "language": "en"
+}
+
+### 5. Alternative: Generate Keto Plan
+POST http://localhost:5000/api/plan/generate
+Content-Type: application/json
+Authorization: Bearer YOUR_JWT_TOKEN_HERE
+
+{
+  "title": "Keto Meal Plan",
+  "userData": {
+    "age": 35,
+    "gender": "female",
+    "height": 160,
+    "weight": 65,
+    "path": "keto",
+    "activityLevel": "moderate",
+    "allergies": ["eggs"],
+    "dietaryRestrictions": ["low-carb"]
+  },
+  "language": "en"
+}
+
+### 6. Alternative: Generate Fasting Plan
+POST http://localhost:5000/api/plan/generate
+Content-Type: application/json
+Authorization: Bearer YOUR_JWT_TOKEN_HERE
+
+{
+  "title": "Intermittent Fasting Plan",
+  "userData": {
+    "age": 32,
+    "gender": "male",
+    "height": 170,
+    "weight": 78,
+    "path": "fasting",
+    "activityLevel": "active",
+    "allergies": [],
+    "dietaryRestrictions": ["plant-based"]
+  },
+  "language": "en"
+}
+
+### 7. Alternative: Generate Custom Plan
+POST http://localhost:5000/api/plan/generate
+Content-Type: application/json
+Authorization: Bearer YOUR_JWT_TOKEN_HERE
+
+{
+  "title": "Custom Dietary Plan",
+  "userData": {
+    "age": 40,
+    "gender": "female",
+    "height": 168,
+    "weight": 72,
+    "path": "custom",
+    "activityLevel": "sedentary",
+    "allergies": ["peanuts", "soy"],
+    "dietaryRestrictions": ["vegan", "low-sodium"]
+  },
+  "language": "en"
+}
+
+### Notes:
+# - Replace YOUR_JWT_TOKEN_HERE with the actual token from login
+# - Adjust the server URL if different from localhost:5000
+# - Modify userData values according to your test needs
+# - The path field determines the type of meal plan generated
+# - All requests require authentication (JWT token in Authorization header)
+# - Validation will check age (16-100), height (100-250 cm), weight (30-300 kg)
+# - Gender must be 'male' or 'female'
+# - Path must be one of: 'healthy', 'lose', 'muscle', 'keto', 'fasting', 'custom'

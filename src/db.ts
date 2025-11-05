@@ -7,12 +7,12 @@ export const ObjectId = mongoose.Schema.Types.ObjectId;
 
 // open db connection
 export const openDbConnection = async () => {
-  const uri = process.env.MONGO_URL;
+  const uri = process.env.MONGO_URL_LOCAL;
   if (!uri) {
     throw new Error("MONGO_URL is not defined");
   }
   return mongoose.connect(uri, {
-    dbName: "randomUsers",
+    dbName: "habeat",
   });
 };
 

@@ -1,0 +1,675 @@
+{
+    "success": true,
+    "data": {
+        "plan": {
+            "userMetrics": {
+                "bmr": 1334.187,
+                "tdee": 2067.98985,
+                "targetCalories": 2068,
+                "idealWeight": 57.12334999999999,
+                "weightRange": "49.152649999999994 - 66.15681"
+            },
+            "userData": {
+                "age": 40,
+                "gender": "female",
+                "height": 163,
+                "weight": 60,
+                "path": "healthy",
+                "allergies": [],
+                "dietaryRestrictions": []
+            },
+            "_id": "6896610d1f9375d9d090aee4",
+            "userId": "6896610d1f9375d9d090aee2",
+            "title": "My First Plan",
+            "language": "weekly",
+            "weeklyPlan": [
+                {
+                    "day": "monday",
+                    "date": "2025-08-31T21:00:00.000Z",
+                    "meals": {
+                        "breakfast": {
+                            "name": "Oatmeal with Fruit and Nuts",
+                            "calories": 480,
+                            "macros": {
+                                "protein": 15,
+                                "carbs": 70,
+                                "fat": 15
+                            },
+                            "category": "breakfast",
+                            "ingredients": [
+                                "1/2 cup rolled oats, 1 cup milk (skim or almond), 1/2 cup berries, 1/4 cup chopped nuts"
+                            ],
+                            "prepTime": 5,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0120"
+                        },
+                        "lunch": {
+                            "name": "Lentil Soup with Whole Wheat Bread",
+                            "calories": 650,
+                            "macros": {
+                                "protein": 30,
+                                "carbs": 80,
+                                "fat": 20
+                            },
+                            "category": "lunch",
+                            "ingredients": [
+                                "1.5 cups lentil soup, 1 slice whole wheat bread"
+                            ],
+                            "prepTime": 10,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0121"
+                        },
+                        "dinner": {
+                            "name": "Chicken Stir-fry with Brown Rice",
+                            "calories": 600,
+                            "macros": {
+                                "protein": 40,
+                                "carbs": 60,
+                                "fat": 20
+                            },
+                            "category": "dinner",
+                            "ingredients": [
+                                "4oz chicken breast, 1 cup brown rice, 1 cup mixed vegetables (broccoli, carrots, peppers), soy sauce (low sodium)"
+                            ],
+                            "prepTime": 20,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0122"
+                        },
+                        "snacks": [
+                            {
+                                "name": "Greek Yogurt with a handful of berries",
+                                "calories": 150,
+                                "macros": {
+                                    "protein": 15,
+                                    "carbs": 20,
+                                    "fat": 5
+                                },
+                                "category": "snack",
+                                "ingredients": [
+                                    "1/2 cup Greek yogurt (2%), 1/2 cup berries"
+                                ],
+                                "prepTime": 2,
+                                "done": false,
+                                "_id": "68b2e010b9bbe9847b0d0123"
+                            },
+                            {
+                                "name": "Hard-boiled egg",
+                                "calories": 77,
+                                "macros": {
+                                    "protein": 6,
+                                    "carbs": 1,
+                                    "fat": 5
+                                },
+                                "category": "snack",
+                                "ingredients": [
+                                    "1 hard-boiled egg"
+                                ],
+                                "prepTime": 0,
+                                "done": false,
+                                "_id": "68b2e010b9bbe9847b0d0124"
+                            }
+                        ]
+                    },
+                    "totalCalories": 1957,
+                    "totalProtein": 106,
+                    "totalCarbs": 231,
+                    "totalFat": 65,
+                    "waterIntake": 8,
+                    "workouts": [
+                        {
+                            "name": "30-minute brisk walk",
+                            "duration": 30,
+                            "caloriesBurned": 200,
+                            "done": false,
+                            "category": "walking",
+                            "_id": "68b2e010b9bbe9847b0d018e"
+                        },
+                        {
+                            "name": "15-minute bodyweight strength training",
+                            "duration": 15,
+                            "caloriesBurned": 100,
+                            "done": false,
+                            "category": "bodyweight",
+                            "_id": "68b2e010b9bbe9847b0d018f"
+                        }
+                    ],
+                    "netCalories": 1957,
+                    "_id": "68b2e010b9bbe9847b0d018d"
+                },
+                {
+                    "day": "tuesday",
+                    "date": "2025-09-01T21:00:00.000Z",
+                    "meals": {
+                        "breakfast": {
+                            "name": "Scrambled Eggs with Spinach and Whole Wheat Toast",
+                            "calories": 470,
+                            "macros": {
+                                "protein": 28,
+                                "carbs": 45,
+                                "fat": 17
+                            },
+                            "category": "breakfast",
+                            "ingredients": [
+                                "2 eggs, 1 cup spinach, 1 slice whole wheat toast"
+                            ],
+                            "prepTime": 10,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0125"
+                        },
+                        "lunch": {
+                            "name": "Turkey and Avocado Sandwich on Whole Wheat",
+                            "calories": 680,
+                            "macros": {
+                                "protein": 40,
+                                "carbs": 65,
+                                "fat": 25
+                            },
+                            "category": "lunch",
+                            "ingredients": [
+                                "4oz turkey breast, 1/2 avocado, 2 slices whole wheat bread, lettuce, tomato"
+                            ],
+                            "prepTime": 10,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0126"
+                        },
+                        "dinner": {
+                            "name": "Lentil Shepherd's Pie",
+                            "calories": 580,
+                            "macros": {
+                                "protein": 35,
+                                "carbs": 65,
+                                "fat": 20
+                            },
+                            "category": "dinner",
+                            "ingredients": [
+                                "1.5 cups lentil shepherd's pie (made with sweet potato topping)"
+                            ],
+                            "prepTime": 30,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0127"
+                        },
+                        "snacks": [
+                            {
+                                "name": "Small handful of almonds",
+                                "calories": 180,
+                                "macros": {
+                                    "protein": 6,
+                                    "carbs": 6,
+                                    "fat": 16
+                                },
+                                "category": "snack",
+                                "ingredients": [
+                                    "1/4 cup almonds"
+                                ],
+                                "prepTime": 0,
+                                "done": false,
+                                "_id": "68b2e010b9bbe9847b0d0128"
+                            }
+                        ]
+                    },
+                    "totalCalories": 1910,
+                    "totalProtein": 109,
+                    "totalCarbs": 181,
+                    "totalFat": 78,
+                    "waterIntake": 8,
+                    "workouts": [],
+                    "netCalories": 1910,
+                    "_id": "68b2e010b9bbe9847b0d0190"
+                },
+                {
+                    "day": "wednesday",
+                    "date": "2025-09-02T21:00:00.000Z",
+                    "meals": {
+                        "breakfast": {
+                            "name": "Smoothie with Protein Powder, Spinach, and Banana",
+                            "calories": 500,
+                            "macros": {
+                                "protein": 30,
+                                "carbs": 55,
+                                "fat": 10
+                            },
+                            "category": "breakfast",
+                            "ingredients": [
+                                "1 scoop protein powder, 1 cup spinach, 1 banana, 1/2 cup milk (skim or almond)"
+                            ],
+                            "prepTime": 5,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0129"
+                        },
+                        "lunch": {
+                            "name": "Quinoa Salad with Chickpeas and Vegetables",
+                            "calories": 700,
+                            "macros": {
+                                "protein": 35,
+                                "carbs": 90,
+                                "fat": 20
+                            },
+                            "category": "lunch",
+                            "ingredients": [
+                                "1 cup cooked quinoa, 1/2 cup chickpeas, 1 cup mixed vegetables, olive oil and lemon juice dressing"
+                            ],
+                            "prepTime": 15,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d012a"
+                        },
+                        "dinner": {
+                            "name": "Baked Chicken Breast with Sweet Potato and Green Beans",
+                            "calories": 600,
+                            "macros": {
+                                "protein": 45,
+                                "carbs": 50,
+                                "fat": 20
+                            },
+                            "category": "dinner",
+                            "ingredients": [
+                                "4oz baked chicken breast, 1 medium sweet potato, 1 cup green beans"
+                            ],
+                            "prepTime": 25,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d012b"
+                        },
+                        "snacks": [
+                            {
+                                "name": "Cottage cheese (1/2 cup) with sliced peaches",
+                                "calories": 150,
+                                "macros": {
+                                    "protein": 20,
+                                    "carbs": 15,
+                                    "fat": 5
+                                },
+                                "category": "snack",
+                                "ingredients": [
+                                    "1/2 cup cottage cheese, 1/2 cup sliced peaches"
+                                ],
+                                "prepTime": 5,
+                                "done": false,
+                                "_id": "68b2e010b9bbe9847b0d012c"
+                            }
+                        ]
+                    },
+                    "totalCalories": 1950,
+                    "totalProtein": 130,
+                    "totalCarbs": 210,
+                    "totalFat": 55,
+                    "waterIntake": 8,
+                    "workouts": [
+                        {
+                            "name": "30 minutes cycling",
+                            "duration": 30,
+                            "caloriesBurned": 250,
+                            "done": false,
+                            "category": "cycling",
+                            "_id": "68b2e010b9bbe9847b0d0192"
+                        },
+                        {
+                            "name": "15-minute Pilates",
+                            "duration": 15,
+                            "caloriesBurned": 80,
+                            "done": false,
+                            "category": "pilates",
+                            "_id": "68b2e010b9bbe9847b0d0193"
+                        }
+                    ],
+                    "netCalories": 1950,
+                    "_id": "68b2e010b9bbe9847b0d0191"
+                },
+                {
+                    "day": "thursday",
+                    "date": "2025-09-03T21:00:00.000Z",
+                    "meals": {
+                        "breakfast": {
+                            "name": "Greek Yogurt with Berries and Granola",
+                            "calories": 480,
+                            "macros": {
+                                "protein": 25,
+                                "carbs": 60,
+                                "fat": 12
+                            },
+                            "category": "breakfast",
+                            "ingredients": [
+                                "1 cup plain Greek yogurt (2%), 1/2 cup mixed berries, 1/4 cup granola"
+                            ],
+                            "prepTime": 5,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d012d"
+                        },
+                        "lunch": {
+                            "name": "Tuna Salad Lettuce Wraps",
+                            "calories": 650,
+                            "macros": {
+                                "protein": 40,
+                                "carbs": 50,
+                                "fat": 25
+                            },
+                            "category": "lunch",
+                            "ingredients": [
+                                "4oz tuna, 2 tbsp light mayonnaise, celery, lettuce leaves"
+                            ],
+                            "prepTime": 10,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d012e"
+                        },
+                        "dinner": {
+                            "name": "Shrimp Scampi with Zucchini Noodles",
+                            "calories": 550,
+                            "macros": {
+                                "protein": 30,
+                                "carbs": 45,
+                                "fat": 25
+                            },
+                            "category": "dinner",
+                            "ingredients": [
+                                "4oz shrimp, zucchini noodles, garlic, olive oil, lemon juice"
+                            ],
+                            "prepTime": 20,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d012f"
+                        },
+                        "snacks": [
+                            {
+                                "name": "Rice cakes with avocado and tomato",
+                                "calories": 180,
+                                "macros": {
+                                    "protein": 4,
+                                    "carbs": 25,
+                                    "fat": 10
+                                },
+                                "category": "snack",
+                                "ingredients": [
+                                    "2 rice cakes, 1/4 avocado, tomato slices"
+                                ],
+                                "prepTime": 5,
+                                "done": false,
+                                "_id": "68b2e010b9bbe9847b0d0130"
+                            }
+                        ]
+                    },
+                    "totalCalories": 1860,
+                    "totalProtein": 99,
+                    "totalCarbs": 180,
+                    "totalFat": 72,
+                    "waterIntake": 8,
+                    "workouts": [],
+                    "netCalories": 1860,
+                    "_id": "68b2e010b9bbe9847b0d0194"
+                },
+                {
+                    "day": "friday",
+                    "date": "2025-09-04T21:00:00.000Z",
+                    "meals": {
+                        "breakfast": {
+                            "name": "Whole Wheat Pancakes with Berries and a dollop of Greek Yogurt",
+                            "calories": 520,
+                            "macros": {
+                                "protein": 20,
+                                "carbs": 70,
+                                "fat": 15
+                            },
+                            "category": "breakfast",
+                            "ingredients": [
+                                "2 whole wheat pancakes, 1/2 cup berries, 2 tablespoons Greek Yogurt (2%)"
+                            ],
+                            "prepTime": 15,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0131"
+                        },
+                        "lunch": {
+                            "name": "Chicken Caesar Salad (light dressing)",
+                            "calories": 700,
+                            "macros": {
+                                "protein": 45,
+                                "carbs": 60,
+                                "fat": 25
+                            },
+                            "category": "lunch",
+                            "ingredients": [
+                                "4oz grilled chicken breast, romaine lettuce, croutons (small amount), light Caesar dressing"
+                            ],
+                            "prepTime": 10,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0132"
+                        },
+                        "dinner": {
+                            "name": "Vegetarian Chili with Whole Wheat Bread",
+                            "calories": 600,
+                            "macros": {
+                                "protein": 30,
+                                "carbs": 70,
+                                "fat": 20
+                            },
+                            "category": "dinner",
+                            "ingredients": [
+                                "1.5 cups vegetarian chili, 1 slice whole wheat bread"
+                            ],
+                            "prepTime": 20,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0133"
+                        },
+                        "snacks": [
+                            {
+                                "name": "String cheese",
+                                "calories": 80,
+                                "macros": {
+                                    "protein": 8,
+                                    "carbs": 1,
+                                    "fat": 6
+                                },
+                                "category": "snack",
+                                "ingredients": [
+                                    "1 string cheese"
+                                ],
+                                "prepTime": 0,
+                                "done": false,
+                                "_id": "68b2e010b9bbe9847b0d0134"
+                            },
+                            {
+                                "name": "Baby carrots with hummus (2 tablespoons)",
+                                "calories": 127,
+                                "macros": {
+                                    "protein": 4,
+                                    "carbs": 10,
+                                    "fat": 8
+                                },
+                                "category": "snack",
+                                "ingredients": [
+                                    "1 cup baby carrots, 2 tablespoons hummus"
+                                ],
+                                "prepTime": 0,
+                                "done": false,
+                                "_id": "68b2e010b9bbe9847b0d0135"
+                            }
+                        ]
+                    },
+                    "totalCalories": 2027,
+                    "totalProtein": 107,
+                    "totalCarbs": 211,
+                    "totalFat": 74,
+                    "waterIntake": 8,
+                    "workouts": [
+                        {
+                            "name": "30-minute swimming",
+                            "duration": 30,
+                            "caloriesBurned": 300,
+                            "done": false,
+                            "category": "swimming",
+                            "_id": "68b2e010b9bbe9847b0d0196"
+                        },
+                        {
+                            "name": "15 minute stretching",
+                            "duration": 15,
+                            "caloriesBurned": 50,
+                            "done": false,
+                            "category": "stretching",
+                            "_id": "68b2e010b9bbe9847b0d0197"
+                        }
+                    ],
+                    "netCalories": 2027,
+                    "_id": "68b2e010b9bbe9847b0d0195"
+                },
+                {
+                    "day": "saturday",
+                    "date": "2025-09-05T21:00:00.000Z",
+                    "meals": {
+                        "breakfast": {
+                            "name": "Breakfast Burrito (whole wheat tortilla, scrambled eggs, black beans, salsa)",
+                            "calories": 500,
+                            "macros": {
+                                "protein": 25,
+                                "carbs": 60,
+                                "fat": 15
+                            },
+                            "category": "breakfast",
+                            "ingredients": [
+                                "1 whole wheat tortilla, 2 eggs, 1/2 cup black beans, salsa"
+                            ],
+                            "prepTime": 10,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0136"
+                        },
+                        "lunch": {
+                            "name": "Leftover Vegetarian Chili",
+                            "calories": 600,
+                            "macros": {
+                                "protein": 30,
+                                "carbs": 70,
+                                "fat": 20
+                            },
+                            "category": "lunch",
+                            "ingredients": [
+                                "1.5 cups vegetarian chili"
+                            ],
+                            "prepTime": 5,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0137"
+                        },
+                        "dinner": {
+                            "name": "Baked Chicken Breast with Roasted Sweet Potatoes and Asparagus",
+                            "calories": 580,
+                            "macros": {
+                                "protein": 40,
+                                "carbs": 55,
+                                "fat": 20
+                            },
+                            "category": "dinner",
+                            "ingredients": [
+                                "4oz baked chicken breast, 1 medium sweet potato, 1 cup asparagus"
+                            ],
+                            "prepTime": 25,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d0138"
+                        },
+                        "snacks": [
+                            {
+                                "name": "Trail mix (nuts, seeds, dried fruit)",
+                                "calories": 200,
+                                "macros": {
+                                    "protein": 10,
+                                    "carbs": 25,
+                                    "fat": 10
+                                },
+                                "category": "snack",
+                                "ingredients": [
+                                    "1/4 cup trail mix"
+                                ],
+                                "prepTime": 0,
+                                "done": false,
+                                "_id": "68b2e010b9bbe9847b0d0139"
+                            }
+                        ]
+                    },
+                    "totalCalories": 1880,
+                    "totalProtein": 105,
+                    "totalCarbs": 210,
+                    "totalFat": 65,
+                    "waterIntake": 8,
+                    "workouts": [],
+                    "netCalories": 1880,
+                    "_id": "68b2e010b9bbe9847b0d0198"
+                },
+                {
+                    "day": "sunday",
+                    "date": "2025-08-30T21:00:00.000Z",
+                    "meals": {
+                        "breakfast": {
+                            "name": "Scrambled Tofu with Vegetables and Whole Wheat Toast",
+                            "calories": 450,
+                            "macros": {
+                                "protein": 20,
+                                "carbs": 55,
+                                "fat": 15
+                            },
+                            "category": "breakfast",
+                            "ingredients": [
+                                "1/2 block firm tofu, 1 cup mixed vegetables, 1 slice whole wheat toast"
+                            ],
+                            "prepTime": 10,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d013a"
+                        },
+                        "lunch": {
+                            "name": "Leftover Baked Chicken and Sweet Potatoes",
+                            "calories": 650,
+                            "macros": {
+                                "protein": 40,
+                                "carbs": 60,
+                                "fat": 20
+                            },
+                            "category": "lunch",
+                            "ingredients": [
+                                "Leftover baked chicken, sweet potatoes, and asparagus"
+                            ],
+                            "prepTime": 5,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d013b"
+                        },
+                        "dinner": {
+                            "name": "Vegetarian Pizza on Whole Wheat Crust",
+                            "calories": 600,
+                            "macros": {
+                                "protein": 30,
+                                "carbs": 75,
+                                "fat": 15
+                            },
+                            "category": "dinner",
+                            "ingredients": [
+                                "1 slice of whole wheat crust vegetarian pizza"
+                            ],
+                            "prepTime": 10,
+                            "done": false,
+                            "_id": "68b2e010b9bbe9847b0d013c"
+                        },
+                        "snacks": [
+                            {
+                                "name": "Banana with 1 tablespoon almond butter",
+                                "calories": 200,
+                                "macros": {
+                                    "protein": 4,
+                                    "carbs": 30,
+                                    "fat": 10
+                                },
+                                "category": "snack",
+                                "ingredients": [
+                                    "1 banana, 1 tablespoon almond butter"
+                                ],
+                                "prepTime": 2,
+                                "done": false,
+                                "_id": "68b2e010b9bbe9847b0d013d"
+                            }
+                        ]
+                    },
+                    "totalCalories": 1900,
+                    "totalProtein": 94,
+                    "totalCarbs": 220,
+                    "totalFat": 60,
+                    "waterIntake": 8,
+                    "workouts": [],
+                    "netCalories": 1900,
+                    "_id": "68b2e010b9bbe9847b0d0199"
+                }
+            ],
+            "createdAt": "2025-08-08T20:41:49.103Z",
+            "updatedAt": "2025-08-30T11:27:13.091Z",
+            "__v": 16
+        }
+    }
+}
