@@ -1,114 +1,128 @@
-import logger from "../utils/logger";
-import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { User } from "./user.model";
-import { Meal } from "../meal/meal.model";
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Param,
+  UseGuards,
+  Request,
+} from "@nestjs/common";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiParam,
+  ApiBody,
+} from "@nestjs/swagger";
+import { UserService } from "./user.service";
+import { AuthGuard } from "../auth/auth.guard";
+import generateToken from "../utils/generateToken";
 
-export const getUserFavorites = async (req: Request, res: Response) => {
+@ApiTags("users")
+@Controller("users")
+export class UserController {
+  constructor(private userService: UserService) {}
 
-    try {
-        const userId = req.params.userId;
-        const user = await User.findById(userId);
-        if (!user) {
-            res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-            return;
-        }
-        // Ensure we have an array of IDs
-        const favoriteMealsIds = Array.isArray(user.favoriteMeals) 
-            ? user.favoriteMeals 
-            : Object.values(user.favoriteMeals || {});
-            
-        logger.info('Original favorite meal IDs:', favoriteMealsIds);
-        
-        // Try to convert each ID, skipping invalid ones
-        const validIds = favoriteMealsIds
-            .filter(id => id) // Remove any null/undefined values
-            .map(id => {
-                try {
-                    return typeof id === 'string' ? new mongoose.Types.ObjectId(id) : id;
-                } catch (e) {
-                    logger.error('Invalid meal ID:', id);
-                    return null;
-                }
-            })
-            .filter(id => id !== null);
-            
-        logger.info('Converted valid ObjectIds:', validIds);
-        
-        const favoriteMeals = await Meal.find({ 
-            _id: { $in: validIds }
-        }).lean();
-        
-        logger.info('Found meals:', favoriteMeals.length);
-        res.status(200).json({
-            success: true,
-            data: favoriteMeals
-        });
-    } catch (error) {
-        logger.error('Error getting user favorites:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to get user favorites'
-        });
-    }
-}
+  @Get()
+  findAll() {
+    return this.userService.findAll();
+  }
 
-export const updateUserFavorites = async (req: Request, res: Response) => {
-    try {
-        const { isFavorite, mealId } = req.body;
-        const userId = req.params.userId;
-        
-        logger.info('Updating favorites - Input mealId:', mealId);
-        
-        // Convert mealId to string if it's an object
-        const mealIdStr = typeof mealId === 'object' ? JSON.stringify(mealId) : mealId;
-        
-        // First verify the meal exists
-        const meal = await Meal.findById(mealIdStr);
-        if (!meal) {
-            logger.error('Meal not found with ID:', mealId);
-            res.status(404).json({
-                success: false,
-                message: 'Meal not found'
-            });
-            return;
-        }
-        logger.info('Found meal:', meal._id.toString(), meal.name);
-        
-        const user = await User.findById(userId);
-        if (!user) {
-            res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-            return;
-        }
-        
-        let favoriteMeals = Array.isArray(user.favoriteMeals) ? user.favoriteMeals : [];
-        logger.info('Current favorite meals:', favoriteMeals);
-        
-        if (isFavorite && !favoriteMeals.includes(mealIdStr)) {
-            favoriteMeals.push(mealIdStr);
-            logger.info('Added to favorites:', mealIdStr);
-        } else {
-            favoriteMeals = favoriteMeals.filter((id: string) => id !== mealIdStr);
-            logger.info('Removed from favorites:', mealIdStr);
-        }
+  @Post()
+  create(@Body() userData: any) {
+    return this.userService.create(userData);
+  }
 
-        user.favoriteMeals = favoriteMeals;
-        await user.save();
-        res.status(200).json({
-            success: true,
-            data: user
-        });
-    } catch (error) {
-        logger.error('Error updating user favorites:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to update user favorites'
-        });
-    }
+  @Post("search")
+  search(@Body() searchCriteria: any) {
+    return this.userService.search(searchCriteria);
+  }
+
+  @Get("me")
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth("JWT-auth")
+  @ApiOperation({ summary: "Get current user information" })
+  @ApiResponse({
+    status: 200,
+    description: "User information retrieved successfully",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async getCurrentUser(@Request() req) {
+    const userId = req.user._id.toString();
+    const user = await this.userService.findById(userId);
+    return {
+      status: "success",
+      data: {
+        user,
+        token: generateToken(userId),
+      },
+    };
+  }
+
+  @Get(":id")
+  findById(@Param("id") id: string) {
+    return this.userService.findById(id);
+  }
+
+  @Put(":id")
+  update(@Param("id") id: string, @Body() updateData: any) {
+    return this.userService.update(id, updateData);
+  }
+
+  @Delete(":id")
+  delete(@Param("id") id: string) {
+    return this.userService.delete(id);
+  }
+
+  @Get(":userId/favorite-meals")
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth("JWT-auth")
+  @ApiOperation({
+    summary: "Get user favorite meals (actual meals user has favorited)",
+  })
+  @ApiParam({ name: "userId", description: "User ID or 'me' for current user" })
+  @ApiResponse({
+    status: 200,
+    description: "Favorite meals retrieved successfully",
+  })
+  @ApiResponse({ status: 404, description: "User not found" })
+  getUserFavoriteMeals(@Param("userId") userId: string, @Request() req) {
+    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    return this.userService.getUserFavoriteMeals(resolvedUserId);
+  }
+
+  @Put(":userId/favorite-meals")
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth("JWT-auth")
+  @ApiOperation({ summary: "Add or remove a meal from favorites" })
+  @ApiParam({ name: "userId", description: "User ID or 'me' for current user" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        isFavorite: { type: "boolean", example: true },
+        mealId: { type: "string", example: "507f1f77bcf86cd799439011" },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Favorite meals updated successfully",
+  })
+  @ApiResponse({ status: 404, description: "User or meal not found" })
+  updateUserFavoriteMeals(
+    @Param("userId") userId: string,
+    @Body() body: { isFavorite: boolean; mealId: string },
+    @Request() req
+  ) {
+    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    return this.userService.updateUserFavoriteMeals(
+      resolvedUserId,
+      body.isFavorite,
+      body.mealId
+    );
+  }
 }

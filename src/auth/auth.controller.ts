@@ -1,445 +1,381 @@
-import { User } from '../user/user.model';
-import generateToken from '../utils/generateToken';
-import logger from '../utils/logger';
-import { Request, Response } from 'express';
-import { IUserData } from '../types/interfaces';
-import { verifyGoogleToken, verifyFacebookToken, generateOAuthPassword } from '../utils/oauth';
-import { createInitialPlanFunction } from '../plan/plan.service';
-import jwt from 'jsonwebtoken';
-import { JwtPayload } from '../types/interfaces';
-import { Plan } from '../plan/plan.model';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  UseGuards,
+  Request,
+  HttpCode,
+  HttpStatus,
+  BadRequestException,
+  Query,
+  Res,
+  Redirect,
+  NotFoundException,
+} from "@nestjs/common";
+import { Response } from "express";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiBody,
+} from "@nestjs/swagger";
+import { AuthService } from "./auth.service";
+import { AuthGuard } from "./auth.guard";
+import { SignupDto } from "./dto/signup.dto";
 
-// @desc    Register a new user
-// @route   POST /auth/signup
-// @access  Public
-const registerUser = async (req: Request, res: Response) => {
-  try {
-    const data: {email: string, password: string, userData: IUserData} = req.body;
-    
-    // Check if user already exists
-    const userExists = await User.findOne({ email: data.email });
-    
-    if (userExists) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'User already exists'
-      });
-    }
-    
-    // Create new user
-    const user = await User.create({
-      ...data.userData,
-    });
+@ApiTags("auth")
+@Controller("auth")
+export class AuthController {
+  constructor(private authService: AuthService) {}
 
-    const initialPlan = await createInitialPlanFunction(user._id.toString(), data.userData, 'en');
-    
-    if (user) {
-      res.status(201).json({
-        status: 'success',
-        data: {
-          user: user,
-          plan: initialPlan,
-          token: generateToken(user._id.toString())
-        }
-      });
+  @Post("signup")
+  @ApiOperation({ summary: "Register a new user" })
+  @ApiResponse({ status: 201, description: "User successfully registered" })
+  @ApiResponse({ status: 400, description: "User already exists" })
+  async registerUser(@Body() data: SignupDto) {
+    // If provider is specified, use OAuth signup
+    if (data.provider === "google" && data.idToken) {
+      return this.authService.googleSignup(data.idToken, data.userData as any);
+    } else if (data.provider === "facebook" && data.idToken) {
+      return this.authService.facebookSignup(
+        data.idToken,
+        data.userData as any
+      );
     } else {
-      res.status(400).json({
-        status: 'fail',
-        message: 'Invalid user data'
+      // Regular signup
+      const email = data.email || data.userData.email;
+      if (!email) {
+        throw new BadRequestException("Email is required");
+      }
+      return this.authService.register({
+        email: email,
+        password: data.password || data.userData.password || "",
+        userData: {
+          ...data.userData,
+          email,
+          preferences: data.userData.preferences || {},
+        } as any,
       });
     }
-  } catch (error) {
-    logger.error('Error registering user:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error'
-    });
   }
-};
 
-// @desc    Auth user & get token
-// @route   POST /auth/login
-// @access  Public
-const loginUser = async (req: Request, res: Response) => {
-  try {
-    const { email, password } = req.body;
-    
-    // Find user by email
-    const user = await User.findOne({ email });
-    
-    // Check if user exists and password is correct
-    if (user && user.comparePassword && await user.comparePassword(password)) {
-      res.json({
-        status: 'success',
-        data: {
-          user: user,
-          token: generateToken(user._id.toString())
-        }
-      });
-    } else {
-      res.status(401).json({
-        status: 'fail',
-        message: 'Invalid email or password'
-      });
-    }
-  } catch (error) {
-    logger.error('Error logging in user:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error'
-    });
+  @Post("login")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Login user" })
+  @ApiResponse({ status: 200, description: "User successfully logged in" })
+  @ApiResponse({ status: 401, description: "Invalid credentials" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        email: { type: "string", example: "user@example.com" },
+        password: { type: "string", example: "password123" },
+      },
+    },
+  })
+  async loginUser(@Body() body: { email: string; password: string }) {
+    return this.authService.login(body.email, body.password);
   }
-};
 
-// @desc    Logout user
-// @route   POST /auth/logout
-// @access  Private
-const logoutUser = async (req: Request, res: Response) => {
-  try {
-    res.json({
-      status: 'success',
-      message: 'Logged out successfully'
-    });
-  } catch (error) {
-    logger.error('Error logging out user:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Server error'
-    });
+  @Post("logout")
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth("JWT-auth")
+  @ApiOperation({ summary: "Logout user" })
+  @ApiResponse({ status: 200, description: "User successfully logged out" })
+  async logoutUser() {
+    return this.authService.logout();
   }
-};
 
-// @desc    Google OAuth signup - Create new user
-// @route   POST /auth/google/signup
-// @access  Public
-const googleSignup = async (req: Request, res: Response) => {
-  try {
-    const { idToken, userData } = req.body;
-
-    if (!idToken) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Google ID token is required'
-      });
-    }
-
-    // Verify Google ID token
-    const googleUser = await verifyGoogleToken(idToken);
-    
-    if (!googleUser) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Invalid Google token'
-      });
-    }
-
-    // Check if user already exists
-    const existingUser = await User.findOne({ email: googleUser.email });
-    
-    if (existingUser) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'User already exists. Please use sign in instead.'
-      });
-    }
-
-    // Create new user from Google data
-    const user = await User.create({
-      email: googleUser.email,
-      name: userData?.name || `${googleUser.given_name || ''} ${googleUser.family_name || ''}`.trim() || 'User',
-      password: generateOAuthPassword('google'),
-      age: userData?.age || 25,
-      gender: userData?.gender || 'male',
-      height: userData?.height || 170,
-      weight: userData?.weight || 70,
-      activityLevel: userData?.activityLevel || 'moderate',
-      path: userData?.path || 'healthy',
-      targetWeight: userData?.targetWeight,
-      allergies: userData?.allergies || [],
-      dietaryRestrictions: userData?.dietaryRestrictions || [],
-      favoriteMeals: userData?.favoriteMeals || [],
-      picture: googleUser.picture,
-      oauthProvider: 'google',
-      oauthId: googleUser.sub
-    });
-
-    // Create initial plan for new user
-    const userDataForPlan: IUserData = {
-      email: user.email,
-      password: user.password,
-      name: user.name,
-      age: user.age,
-      gender: user.gender,
-      height: user.height,
-      weight: user.weight,
-      activityLevel: user.activityLevel,
-      path: user.path,
-      targetWeight: user.targetWeight,
-      allergies: user.allergies,
-      dietaryRestrictions: user.dietaryRestrictions,
-      favoriteMeals: user.favoriteMeals,
-      preferences: {}
-    };
-
-    const initialPlan = await createInitialPlanFunction(user._id.toString(), userDataForPlan, 'en');
-
-    res.status(201).json({
-      token: generateToken(user._id.toString()),
-      user: user
-    });
-
-  } catch (error) {
-    logger.error('Error with Google OAuth signup:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Google signup failed'
-    });
+  @Get("users/me")
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth("JWT-auth")
+  @ApiOperation({ summary: "Get current user information" })
+  @ApiResponse({
+    status: 200,
+    description: "User information retrieved successfully",
+  })
+  @ApiResponse({ status: 401, description: "Unauthorized" })
+  async getUser(@Request() req) {
+    return this.authService.getUser(req.user._id.toString());
   }
-};
 
-// @desc    Google OAuth signin - Get existing user
-// @route   POST /auth/google/signin
-// @access  Public
-const googleSignin = async (req: Request, res: Response) => {
-  try {
-    const { idToken } = req.body;
-
-    if (!idToken) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Google ID token is required'
-      });
-    }
-
-    // Verify Google ID token
-    const googleUser = await verifyGoogleToken(idToken);
-    
-    if (!googleUser) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Invalid Google token'
-      });
-    }
-
-    // Find existing user
-    const user = await User.findOne({ email: googleUser.email });
-
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found. Please sign up first.'
-      });
-    }
-
-    // Update OAuth info for existing user
-    user.oauthProvider = 'google';
-    user.oauthId = googleUser.sub;
-    if (googleUser.picture && !user.picture) {
-      user.picture = googleUser.picture;
-    }
-    await user.save();
-
-    // Get user's plan
-    const plan = await Plan.findOne({ userId: user._id });
-
-    res.json({
-      token: generateToken(user._id.toString()),
-      user: user
-    });
-
-  } catch (error) {
-    logger.error('Error with Google OAuth signin:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Google signin failed'
-    });
-  }
-};
-
-// @desc    Facebook OAuth signup - Create new user
-// @route   POST /auth/facebook/signup
-// @access  Public
-const facebookSignup = async (req: Request, res: Response) => {
-  try {
-    const { accessToken, userData } = req.body;
-
-    if (!accessToken) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Facebook access token is required'
-      });
-    }
-
-    // Verify Facebook access token
-    const facebookUser = await verifyFacebookToken(accessToken);
-    
-    if (!facebookUser) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Invalid Facebook token'
-      });
-    }
-
-    // Check if user already exists
-    const existingUser = await User.findOne({ email: facebookUser.email });
-    
-    if (existingUser) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'User already exists. Please use sign in instead.'
-      });
-    }
-
-    // Create new user from Facebook data
-    const user = await User.create({
-      email: facebookUser.email,
-      name: userData?.name || `${facebookUser.first_name || ''} ${facebookUser.last_name || ''}`.trim() || 'User',
-      password: generateOAuthPassword('facebook'),
-      age: userData?.age || 25,
-      gender: userData?.gender || 'male',
-      height: userData?.height || 170,
-      weight: userData?.weight || 70,
-      activityLevel: userData?.activityLevel || 'moderate',
-      path: userData?.path || 'healthy',
-      targetWeight: userData?.targetWeight,
-      allergies: userData?.allergies || [],
-      dietaryRestrictions: userData?.dietaryRestrictions || [],
-      favoriteMeals: userData?.favoriteMeals || [],
-      picture: facebookUser.picture,
-      oauthProvider: 'facebook',
-      oauthId: facebookUser.id
-    });
-
-    // Create initial plan for new user
-    const userDataForPlan: IUserData = {
-      email: user.email,
-      password: user.password,
-      name: user.name,
-      age: user.age,
-      gender: user.gender,
-      height: user.height,
-      weight: user.weight,
-      activityLevel: user.activityLevel,
-      path: user.path,
-      targetWeight: user.targetWeight,
-      allergies: user.allergies,
-      dietaryRestrictions: user.dietaryRestrictions,
-      favoriteMeals: user.favoriteMeals,
-      preferences: {}
-    };
-
-    const initialPlan = await createInitialPlanFunction(user._id.toString(), userDataForPlan, 'en');
-
-    res.status(201).json({
-      token: generateToken(user._id.toString()),
-      user: user
-    });
-
-  } catch (error) {
-    logger.error('Error with Facebook OAuth signup:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Facebook signup failed'
-    });
-  }
-};
-
-// @desc    Facebook OAuth signin - Get existing user
-// @route   POST /auth/facebook/signin
-// @access  Public
-const facebookSignin = async (req: Request, res: Response) => {
-  try {
-    const { accessToken } = req.body;
-
-    if (!accessToken) {
-      return res.status(400).json({
-        status: 'fail',
-        message: 'Facebook access token is required'
-      });
-    }
-
-    // Verify Facebook access token
-    const facebookUser = await verifyFacebookToken(accessToken);
-    
-    if (!facebookUser) {
-      return res.status(401).json({
-        status: 'fail',
-        message: 'Invalid Facebook token'
-      });
-    }
-
-    // Find existing user
-    const user = await User.findOne({ email: facebookUser.email });
-
-    if (!user) {
-      return res.status(404).json({
-        status: 'fail',
-        message: 'User not found. Please sign up first.'
-      });
-    }
-
-    // Update OAuth info for existing user
-    user.oauthProvider = 'facebook';
-    user.oauthId = facebookUser.id;
-    if (facebookUser.picture && !user.picture) {
-      user.picture = facebookUser.picture;
-    }
-    await user.save();
-
-    // Get user's plan (optional, not required for signin)
-    const plan = await Plan.findOne({ userId: user._id });
-
-    res.json({
-      token: generateToken(user._id.toString()),
-      user: user
-    });
-
-  } catch (error) {
-    logger.error('Error with Facebook OAuth signin:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Facebook signin failed'
-    });
-  }
-};
-
-const getUser = async (req: Request, res: Response) => {
-  if (
-    req.headers.authorization &&
-    req.headers.authorization.startsWith('Bearer')
+  @Get("google/signin")
+  @ApiOperation({
+    summary: "Initiate Google OAuth signin",
+    description:
+      "Returns Google OAuth URL. If called via AJAX (Accept: application/json), returns JSON. Otherwise redirects. Requires redirectUri (backend callback) and frontendRedirectUri (where to redirect after auth). Optional prompt parameter: 'select_account' to show account picker, 'consent' to force consent screen (default).",
+  })
+  @ApiResponse({
+    status: 302,
+    description: "Redirects to Google OAuth (when accessed via browser)",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Returns OAuth URL as JSON (when called via AJAX)",
+    schema: {
+      type: "object",
+      properties: {
+        authUrl: { type: "string" },
+      },
+    },
+  })
+  async initiateGoogleSignin(
+    @Query("redirectUri") redirectUri: string,
+    @Query("frontendRedirectUri") frontendRedirectUri: string,
+    @Request() req: any,
+    @Res() res: Response,
+    @Query("format") format?: string,
+    @Query("prompt") prompt?: string
   ) {
+    if (!redirectUri) {
+      throw new BadRequestException("redirectUri query parameter is required");
+    }
+
+    if (!frontendRedirectUri) {
+      throw new BadRequestException(
+        "frontendRedirectUri query parameter is required"
+      );
+    }
+
+    // Normalize redirectUri to ensure it includes /api prefix
+    // This prevents issues where frontend passes redirectUri without /api
     try {
-      // Get token from header
-      const token = req.headers.authorization.split(' ')[1];
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || '') as JwtPayload;
-      const user = await User.findById(decoded.id);
-      if (!user) {
-        return res.status(401).json({
-          status: 'fail',
-          message: 'Unauthorized'
-        });
+      const redirectUrl = new URL(redirectUri);
+      if (!redirectUrl.pathname.includes("/api/auth/google/callback")) {
+        // Replace the pathname to ensure it includes /api
+        redirectUrl.pathname = "/api/auth/google/callback";
+        redirectUri = redirectUrl.toString();
       }
-      const plan = await Plan.findOne({ userId: user._id });
-      if (!plan) {
-        return res.status(401).json({
-          status: 'fail',
-          message: 'Unauthorized'
-        });
-      }
-      res.json({
-        status: 'success',
-        data: {
-          user: user,
-          plan: plan
-        }
-      });
-    } catch (error) {
-      res.status(401).json({
-        status: 'fail',
-        message: 'Unauthorized'
-      });
+    } catch (e) {
+      // If redirectUri is not a valid URL, construct it from the request
+      const protocol = req.protocol || "http";
+      const host = req.get("host") || "localhost:5000";
+      redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+    }
+
+    // Set CORS headers
+    const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+      );
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, Accept"
+      );
+    }
+
+    const authUrl = await this.authService.getGoogleSigninUrl(
+      redirectUri,
+      frontendRedirectUri,
+      prompt
+    );
+
+    // Check if this is an AJAX request (via Accept header or format query param)
+    const acceptHeader = req.headers.accept || "";
+    const isJsonRequest =
+      format === "json" ||
+      acceptHeader.includes("application/json") ||
+      req.headers["x-requested-with"] === "XMLHttpRequest";
+
+    if (isJsonRequest) {
+      // Return JSON for AJAX requests so frontend can handle navigation
+      res.json({ authUrl });
+    } else {
+      // Redirect for direct browser navigation
+      res.redirect(authUrl);
     }
   }
-};
 
-export { registerUser, loginUser, logoutUser, googleSignup, googleSignin, facebookSignup, facebookSignin, getUser };
+  @Post("google/signin")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Initiate Google OAuth signin (POST)",
+    description:
+      "Returns Google OAuth URL as JSON. Accepts parameters in request body. Requires redirectUri (backend callback) and frontendRedirectUri (where to redirect after auth). Optional prompt parameter: 'select_account' to show account picker, 'consent' to force consent screen (default).",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Returns OAuth URL as JSON",
+    schema: {
+      type: "object",
+      properties: {
+        authUrl: { type: "string" },
+      },
+    },
+  })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        redirectUri: {
+          type: "string",
+          example: "http://localhost:5000/api/auth/google/callback",
+        },
+        frontendRedirectUri: {
+          type: "string",
+          example:
+            "http://localhost:8080/auth/callback?provider=google&action=signin",
+        },
+        prompt: {
+          type: "string",
+          enum: ["consent", "select_account", "none"],
+          example: "select_account",
+        },
+      },
+      required: ["redirectUri", "frontendRedirectUri"],
+    },
+  })
+  async initiateGoogleSigninPost(
+    @Body()
+    body: {
+      provider: string;
+      userId: string;
+      accessToken: string;
+    },
+    @Request() req: any,
+    @Res() res: Response
+  ) {
+    const { provider, userId, accessToken } = body;
+
+    // Normalize redirectUri to ensure it includes /api prefix
+    const redirectUri = `${req.protocol}://${req.get("host") || "localhost:5000"}/api/auth/google/callback`;
+
+    // Set CORS headers
+    const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+      );
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, Accept"
+      );
+    }
+
+    // this is after i already have token and user id need to find the user in db and return the user
+    if (!userId) {
+      throw new BadRequestException("userId is required");
+    }
+    const data = await this.authService.getUser(userId);
+    const user = data.data.user;
+    // save the access token to the user
+    user.token = accessToken;
+    await user.save();
+    res.json({
+      status: "success",
+      data: {
+        user,
+        plan: data.data.plan,
+        token: accessToken,
+      },
+    });
+  }
+
+  @Get("google/callback")
+  @ApiOperation({
+    summary: "Google OAuth callback",
+    description:
+      "Handles Google OAuth callback, exchanges code for tokens, and redirects to frontend with JWT token. The frontendRedirectUri is passed via the state parameter.",
+  })
+  @ApiResponse({
+    status: 302,
+    description: "Redirects to frontend with token",
+  })
+  async googleCallback(
+    @Query("code") code: string,
+    @Query("state") state: string,
+    @Query("redirectUri") redirectUri: string,
+    @Request() req: any,
+    @Res() res: Response
+  ) {
+    // Set CORS headers before redirect
+    const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+      );
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, Accept"
+      );
+    }
+
+    if (!code) {
+      throw new BadRequestException("Authorization code is required");
+    }
+
+    // Construct redirectUri from request if not provided (Google doesn't send it back)
+    // This ensures it always includes the /api prefix
+    if (!redirectUri) {
+      const protocol = req.protocol || "http";
+      const host = req.get("host") || "localhost:5000";
+      redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+    } else {
+      // Ensure redirectUri includes /api prefix if it's missing
+      if (!redirectUri.includes("/api/auth/google/callback")) {
+        const url = new URL(redirectUri);
+        redirectUri = `${url.protocol}//${url.host}/api/auth/google/callback`;
+      }
+    }
+
+    try {
+      const redirectUrl = await this.authService.handleGoogleCallback(
+        code,
+        redirectUri,
+        state
+      );
+      res.redirect(redirectUrl);
+    } catch (error) {
+      // Decode frontendRedirectUri from state for error redirect
+      let frontendRedirectUri =
+        process.env.FRONTEND_REDIRECT_URI || "http://localhost:3000";
+      if (state) {
+        try {
+          frontendRedirectUri = Buffer.from(state, "base64").toString("utf-8");
+        } catch (e) {
+          // Use default if decoding fails
+        }
+      }
+      // Redirect to frontend with error
+      const errorUrl = new URL(frontendRedirectUri);
+      errorUrl.searchParams.set("error", "authentication_failed");
+      res.redirect(errorUrl.toString());
+    }
+  }
+
+  @Post("facebook/signin")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Sign in user with Facebook OAuth" })
+  @ApiResponse({
+    status: 200,
+    description: "User successfully signed in with Facebook",
+  })
+  @ApiResponse({ status: 404, description: "User not found" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        accessToken: { type: "string", example: "facebook_access_token_here" },
+      },
+    },
+  })
+  async facebookSignin(@Body() body: { accessToken: string }) {
+    return this.authService.facebookSignin(body.accessToken);
+  }
+}

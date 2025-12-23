@@ -1,130 +1,204 @@
-import { Request, Response } from 'express';
-import { Goal } from './goal.model';
-import logger from '../utils/logger';
-import aiService from '../generator/generate.service';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Body,
+  Param,
+  UseGuards,
+  Request,
+} from "@nestjs/common";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiBearerAuth,
+  ApiParam,
+  ApiBody,
+} from "@nestjs/swagger";
+import { GoalService } from "./goal.service";
+import { AuthGuard } from "../auth/auth.guard";
 
-const getGoals = async (req: Request, res: Response) => {
-  try {
-    const userId = req.user?._id;
-    const goals = await Goal.find({ userId });
+@ApiTags("goals")
+@Controller("goals")
+@UseGuards(AuthGuard)
+@ApiBearerAuth("JWT-auth")
+export class GoalController {
+  constructor(private goalService: GoalService) {}
 
-    res.status(200).json({
-      success: true,
-      data: goals
-    });
-  } catch (error) {
-    logger.error('Error getting goals:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get goals'
-    });
+  @Get()
+  @ApiOperation({ summary: "Get all goals for the authenticated user" })
+  @ApiResponse({
+    status: 200,
+    description: "Goals retrieved successfully",
+  })
+  async getGoals(@Request() req) {
+    return this.goalService.findAll(req.user._id.toString());
   }
-};
 
-const getGoalsByUserId = async (req: Request, res: Response) => {
-  try {
-    const userId = req.user?._id;
-    const goal = await Goal.findOne({ userId });
-
-    res.status(200).json({
-      success: true,
-      data: goal
-    });
-  } catch (error) {
-    logger.error('Error getting goals by user id:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get goals by user id'
-    });
+  @Get("user/:userId")
+  @ApiOperation({ summary: "Get goals by user ID" })
+  @ApiParam({ name: "userId", description: "User ID or 'me' for current user" })
+  @ApiResponse({
+    status: 200,
+    description: "Goals retrieved successfully",
+  })
+  async getGoalsByUserId(@Param("userId") userId: string, @Request() req) {
+    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    return this.goalService.findByUserId(resolvedUserId);
   }
-};
 
-const getGoalById = async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const goal = await Goal.findById(id);
-
-    res.status(200).json({
-      success: true,
-      data: goal
-    });
-  } catch (error) {
-    logger.error('Error getting goal by id:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to get goal by id'
-    });
+  @Get(":id")
+  @ApiOperation({ summary: "Get goal by ID" })
+  @ApiParam({ name: "id", description: "Goal ID" })
+  @ApiResponse({
+    status: 200,
+    description: "Goal retrieved successfully",
+  })
+  @ApiResponse({ status: 404, description: "Goal not found" })
+  async getGoalById(@Param("id") id: string) {
+    return this.goalService.findById(id);
   }
-};
 
-const createGoal = async (req: Request, res: Response) => {
-  try {
-    const { goal, description, category, targetDate, startDate, target } = req.body;
-    const newGoal = new Goal({ goal, description, category, targetDate, startDate, target });
-    await newGoal.save();
-    res.status(201).json({
-      success: true,
-      data: newGoal
-    });
-  } catch (error) {
-    logger.error('Error creating goal:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create goal'
-    });
+  @Post()
+  @ApiOperation({ summary: "Create a new goal" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", example: "Lose 10kg" },
+        description: {
+          type: "string",
+          example: "Lose weight through diet and exercise",
+        },
+        category: { type: "string", example: "weight_loss" },
+        targetDate: { type: "string", format: "date", example: "2024-12-31" },
+        startDate: { type: "string", format: "date", example: "2024-01-01" },
+        target: { type: "number", example: 10 },
+      },
+      required: [
+        "goal",
+        "description",
+        "category",
+        "targetDate",
+        "startDate",
+        "target",
+      ],
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description: "Goal created successfully",
+  })
+  async createGoal(
+    @Request() req,
+    @Body()
+    body: {
+      goal: string;
+      description: string;
+      category: string;
+      targetDate: Date;
+      startDate: Date;
+      target: number;
+    }
+  ) {
+    return this.goalService.create(req.user._id.toString(), body);
   }
-};
 
-const updateGoal = async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    const { goal, description, category, targetDate, startDate, target } = req.body;
-    const updatedGoal = await Goal.findByIdAndUpdate(id, { goal, description, category, targetDate, startDate, target }, { new: true });
-    res.status(200).json({
-      success: true,
-      data: updatedGoal
-    });
-  } catch (error) {
-    logger.error('Error updating goal:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update goal'
-    });
+  @Put(":id")
+  @ApiOperation({ summary: "Update a goal" })
+  @ApiParam({ name: "id", description: "Goal ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        goal: { type: "string" },
+        description: { type: "string" },
+        category: { type: "string" },
+        targetDate: { type: "string", format: "date" },
+        startDate: { type: "string", format: "date" },
+        target: { type: "number" },
+        progress: { type: "number" },
+        status: {
+          type: "string",
+          enum: ["active", "completed", "archived", "deleted"],
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Goal updated successfully",
+  })
+  @ApiResponse({ status: 404, description: "Goal not found" })
+  async updateGoal(
+    @Param("id") id: string,
+    @Body()
+    body: {
+      goal?: string;
+      description?: string;
+      category?: string;
+      targetDate?: Date;
+      startDate?: Date;
+      target?: number;
+      progress?: number;
+      status?: string;
+    }
+  ) {
+    return this.goalService.update(id, body);
   }
-};
 
-const deleteGoal = async (req: Request, res: Response) => {
-  try {
-    const { id } = req.params;
-    await Goal.findByIdAndDelete(id);
-    res.status(200).json({
-      success: true,
-      message: 'Goal deleted successfully'
-    });
-  } catch (error) {
-    logger.error('Error deleting goal:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to delete goal'
-    });
+  @Delete(":id")
+  @ApiOperation({ summary: "Delete a goal" })
+  @ApiParam({ name: "id", description: "Goal ID" })
+  @ApiResponse({
+    status: 200,
+    description: "Goal deleted successfully",
+  })
+  @ApiResponse({ status: 404, description: "Goal not found" })
+  async deleteGoal(@Param("id") id: string) {
+    return this.goalService.delete(id);
   }
-};
 
-const generateGoal = async (req: Request, res: Response) => {
-  try {
-    const { description, category, targetDate, startDate, language } = req.body;
-    const goal = await aiService.generateGoal(description, category, targetDate, startDate, language);
-    res.status(200).json({
-      success: true,
-      data: goal
-    });
-  } catch (error) {
-    logger.error('Error generating goal:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to generate goal'
-    });
+  @Post("generate")
+  @ApiOperation({ summary: "Generate a goal using AI" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        description: { type: "string", example: "I want to lose weight" },
+        category: { type: "string", example: "weight_loss" },
+        targetDate: { type: "string", format: "date", example: "2024-12-31" },
+        startDate: { type: "string", format: "date", example: "2024-01-01" },
+        language: { type: "string", example: "en", default: "en" },
+      },
+      required: ["description", "category", "targetDate", "startDate"],
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Goal generated successfully",
+  })
+  @ApiResponse({ status: 400, description: "Failed to generate goal" })
+  async generateGoal(
+    @Request() req,
+    @Body()
+    body: {
+      description: string;
+      category: string;
+      targetDate: Date;
+      startDate: Date;
+      language?: string;
+    }
+  ) {
+    return this.goalService.generateGoal(
+      req.user._id.toString(),
+      body.description,
+      body.category,
+      body.targetDate,
+      body.startDate,
+      body.language
+    );
   }
-};
-
-export { getGoals, getGoalsByUserId, getGoalById, createGoal, updateGoal, deleteGoal, generateGoal   };
+}

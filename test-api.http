@@ -1,0 +1,456 @@
+### ===========================================
+### Habeat API Test Suite
+### ===========================================
+### Base URL
+@baseUrl = http://localhost:5000/api
+@token = YOUR_JWT_TOKEN_HERE
+
+### ===========================================
+### AUTH ENDPOINTS
+### ===========================================
+
+### 1. Register a new user
+POST {{baseUrl}}/auth/signup
+Content-Type: application/json
+
+{
+  "email": "newuser@example.com",
+  "password": "password123",
+  "userData": {
+    "name": "New User",
+    "age": 30,
+    "gender": "male",
+    "height": 175,
+    "weight": 75,
+    "path": "healthy",
+    "workoutFrequency": 3,
+    "allergies": [],
+    "dietaryRestrictions": []
+  }
+}
+
+### 2. Login
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "newuser@example.com",
+  "password": "password123"
+}
+
+### 3. Get current user (auth required)
+GET {{baseUrl}}/auth/users/me
+Authorization: Bearer {{token}}
+
+### 4. Logout (auth required)
+POST {{baseUrl}}/auth/logout
+Authorization: Bearer {{token}}
+
+### ===========================================
+### USER ENDPOINTS
+### ===========================================
+
+### 5. Get all users
+GET {{baseUrl}}/users
+
+### 6. Get current user info (auth required)
+GET {{baseUrl}}/users/me
+Authorization: Bearer {{token}}
+
+### 7. Get user by ID
+GET {{baseUrl}}/users/USER_ID_HERE
+
+### 8. Update user
+PUT {{baseUrl}}/users/USER_ID_HERE
+Content-Type: application/json
+
+{
+  "name": "Updated Name",
+  "weight": 72,
+  "height": 176
+}
+
+### 9. Get user favorites (auth required)
+GET {{baseUrl}}/users/me/favorites
+Authorization: Bearer {{token}}
+
+### 10. Add/Remove meal from favorites (auth required)
+PUT {{baseUrl}}/users/me/favorites
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "isFavorite": true,
+  "mealId": "MEAL_ID_HERE"
+}
+
+### ===========================================
+### RECIPE ENDPOINTS
+### ===========================================
+
+### 11. Get all recipes
+GET {{baseUrl}}/recipes
+
+### 12. Get recipes by category
+GET {{baseUrl}}/recipes?category=breakfast&language=en
+
+### 13. Get popular recipes
+GET {{baseUrl}}/recipes/popular?limit=10
+
+### 14. Get popular recipes by category
+GET {{baseUrl}}/recipes/popular?limit=5&category=lunch
+
+### 15. Search recipes
+GET {{baseUrl}}/recipes/search?q=chicken
+
+### 16. Search recipes with filters
+GET {{baseUrl}}/recipes/search?q=salad&category=lunch&language=en
+
+### 17. Get recipe by meal name
+GET {{baseUrl}}/recipes/meal/Grilled%20Chicken?language=en
+
+### 18. Get recipe by ID
+GET {{baseUrl}}/recipes/RECIPE_ID_HERE
+
+### 19. Create a new recipe (auth required)
+POST {{baseUrl}}/recipes
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "mealName": "Grilled Chicken Salad",
+  "title": "Mediterranean Grilled Chicken Salad",
+  "description": "A healthy and delicious Mediterranean-style salad",
+  "category": "lunch",
+  "servings": 2,
+  "prepTime": 15,
+  "cookTime": 20,
+  "difficulty": "easy",
+  "nutrition": {
+    "calories": 450,
+    "protein": 35,
+    "carbs": 20,
+    "fat": 25,
+    "fiber": 5
+  },
+  "ingredients": [
+    { "name": "chicken breast", "amount": "200", "unit": "g" },
+    { "name": "mixed greens", "amount": "100", "unit": "g" },
+    { "name": "cherry tomatoes", "amount": "100", "unit": "g" },
+    { "name": "cucumber", "amount": "1", "unit": "medium" },
+    { "name": "feta cheese", "amount": "50", "unit": "g" },
+    { "name": "olive oil", "amount": "2", "unit": "tbsp" }
+  ],
+  "instructions": [
+    { "step": 1, "instruction": "Season chicken breast with salt, pepper, and herbs", "time": 5 },
+    { "step": 2, "instruction": "Grill chicken for 6-7 minutes per side until cooked through", "time": 15 },
+    { "step": 3, "instruction": "Let chicken rest for 5 minutes, then slice", "time": 5 },
+    { "step": 4, "instruction": "Combine greens, tomatoes, and cucumber in a bowl" },
+    { "step": 5, "instruction": "Top with sliced chicken and crumbled feta" },
+    { "step": 6, "instruction": "Drizzle with olive oil and serve" }
+  ],
+  "equipment": ["grill pan", "cutting board", "knife", "mixing bowl"],
+  "tags": ["healthy", "high-protein", "mediterranean", "salad"],
+  "dietaryInfo": {
+    "isVegetarian": false,
+    "isVegan": false,
+    "isGlutenFree": true,
+    "isDairyFree": false,
+    "isKeto": true,
+    "isLowCarb": true
+  },
+  "mealPrepNotes": "Can be prepared ahead and stored in the fridge for up to 2 days",
+  "variations": ["Use shrimp instead of chicken", "Add olives for extra flavor"],
+  "chefTips": ["Let the chicken rest before slicing for juicier results"],
+  "language": "en"
+}
+
+### 20. Update a recipe (auth required)
+PUT {{baseUrl}}/recipes/RECIPE_ID_HERE
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "title": "Updated Mediterranean Grilled Chicken Salad",
+  "servings": 4
+}
+
+### 21. Delete a recipe (auth required)
+DELETE {{baseUrl}}/recipes/RECIPE_ID_HERE
+Authorization: Bearer {{token}}
+
+### ===========================================
+### MEAL ENDPOINTS
+### ===========================================
+
+### 22. Get all meals
+GET {{baseUrl}}/meals
+
+### 23. Get meals by category
+GET {{baseUrl}}/meals?category=breakfast
+
+### 24. Get meal by ID
+GET {{baseUrl}}/meals/MEAL_ID_HERE
+
+### 25. Create a new meal (auth required)
+POST {{baseUrl}}/meals
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "name": "Avocado Toast",
+  "category": "breakfast",
+  "calories": 350,
+  "macros": {
+    "protein": 12,
+    "carbs": 35,
+    "fat": 18
+  },
+  "ingredients": [
+    ["bread", "2 slices"],
+    ["avocado", "1 medium"],
+    ["eggs", "2"],
+    ["cherry tomatoes", "50g"]
+  ],
+  "prepTime": 10,
+  "tags": ["healthy", "quick", "vegetarian"]
+}
+
+### 26. Update a meal (auth required)
+PUT {{baseUrl}}/meals/MEAL_ID_HERE
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "calories": 380,
+  "prepTime": 15
+}
+
+### 27. Delete a meal (auth required)
+DELETE {{baseUrl}}/meals/MEAL_ID_HERE
+Authorization: Bearer {{token}}
+
+### ===========================================
+### PLAN ENDPOINTS
+### ===========================================
+
+### 28. Generate a new meal plan (auth required)
+POST {{baseUrl}}/plan/generate
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "title": "Weekly Healthy Meal Plan",
+  "userData": {
+    "age": 30,
+    "gender": "male",
+    "height": 175,
+    "weight": 75,
+    "path": "healthy",
+    "workoutFrequency": 3,
+    "allergies": [],
+    "dietaryRestrictions": []
+  },
+  "language": "en"
+}
+
+### 29. Get current user's plan (auth required)
+GET {{baseUrl}}/plan
+Authorization: Bearer {{token}}
+
+### 30. Get plan by user ID (auth required)
+GET {{baseUrl}}/plan/user/USER_ID_HERE
+Authorization: Bearer {{token}}
+
+### 31. Update plan (auth required)
+PUT {{baseUrl}}/plan/PLAN_ID_HERE
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "title": "Updated Meal Plan"
+}
+
+### 32. Get shopping list (auth required)
+GET {{baseUrl}}/plan/shopping-list
+Authorization: Bearer {{token}}
+
+### 33. Replace a meal in plan (auth required)
+POST {{baseUrl}}/plan/replace-meal
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "dateKey": "2024-12-07",
+  "mealType": "lunch",
+  "options": {
+    "mealName": "Grilled Salmon",
+    "category": "lunch",
+    "dietaryRestrictions": ["gluten-free"]
+  }
+}
+
+### ===========================================
+### PROGRESS ENDPOINTS
+### ===========================================
+
+### 34. Get today's progress (auth required)
+GET {{baseUrl}}/progress/today
+Authorization: Bearer {{token}}
+
+### 35. Get progress by date (auth required)
+GET {{baseUrl}}/progress/date/2024-12-07
+Authorization: Bearer {{token}}
+
+### 36. Get progress by date range (auth required)
+GET {{baseUrl}}/progress/range?startDate=2024-12-01&endDate=2024-12-07
+Authorization: Bearer {{token}}
+
+### 37. Mark meal as completed (auth required)
+POST {{baseUrl}}/progress/meal/complete
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "mealType": "breakfast"
+}
+
+### 38. Mark snack as completed (auth required)
+POST {{baseUrl}}/progress/meal/complete
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "mealType": "snacks",
+  "snackIndex": 0
+}
+
+### 39. Add water glass (auth required)
+POST {{baseUrl}}/progress/water/add
+Authorization: Bearer {{token}}
+
+### 40. Update water intake (auth required)
+PUT {{baseUrl}}/progress/water
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "glasses": 5
+}
+
+### 41. Mark workout as completed (auth required)
+POST {{baseUrl}}/progress/workout/complete
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "workoutName": "Morning Run",
+  "duration": 30,
+  "caloriesBurned": 300
+}
+
+### 42. Add custom calories (auth required)
+POST {{baseUrl}}/progress/calories/add
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "calories": 200,
+  "mealName": "Snack",
+  "macros": {
+    "protein": 10,
+    "carbs": 25,
+    "fat": 8
+  }
+}
+
+### 43. Get weekly summary (auth required)
+GET {{baseUrl}}/progress/weekly-summary
+Authorization: Bearer {{token}}
+
+### 44. Reset today's progress (auth required)
+POST {{baseUrl}}/progress/reset
+Authorization: Bearer {{token}}
+
+### ===========================================
+### GOAL ENDPOINTS
+### ===========================================
+
+### 45. Get all goals for user (auth required)
+GET {{baseUrl}}/goals
+Authorization: Bearer {{token}}
+
+### 46. Get goal by ID (auth required)
+GET {{baseUrl}}/goals/GOAL_ID_HERE
+Authorization: Bearer {{token}}
+
+### 47. Create a new goal (auth required)
+POST {{baseUrl}}/goals
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "goal": "Lose 5kg",
+  "description": "Lose 5 kilograms in 3 months through healthy eating and exercise",
+  "category": "weight-loss",
+  "targetDate": "2025-03-07",
+  "startDate": "2024-12-07",
+  "target": 5
+}
+
+### 48. Update a goal (auth required)
+PUT {{baseUrl}}/goals/GOAL_ID_HERE
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "progress": 2,
+  "status": "active"
+}
+
+### 49. Delete a goal (auth required)
+DELETE {{baseUrl}}/goals/GOAL_ID_HERE
+Authorization: Bearer {{token}}
+
+### ===========================================
+### GENERATOR ENDPOINTS
+### ===========================================
+
+### 50. Generate meal (auth required)
+POST {{baseUrl}}/generate/meal
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "mealName": "Healthy Breakfast",
+  "targetCalories": 400,
+  "category": "breakfast",
+  "dietaryRestrictions": ["vegetarian"],
+  "language": "en"
+}
+
+### 51. Generate recipe for meal (auth required)
+POST {{baseUrl}}/generate/recipe
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "mealName": "Grilled Chicken Salad",
+  "category": "lunch",
+  "language": "en"
+}
+
+### ===========================================
+### NOTES
+### ===========================================
+# 
+# 1. Replace {{token}} with your actual JWT token from login
+# 2. Replace USER_ID_HERE, MEAL_ID_HERE, RECIPE_ID_HERE, etc. with actual IDs
+# 3. Adjust dates in progress endpoints to current dates
+# 4. The server should be running at http://localhost:5000
+#
+# To use this file:
+# - Install REST Client extension in VS Code
+# - Click "Send Request" above each request
+# - Or use the requests in Postman/Insomnia
+

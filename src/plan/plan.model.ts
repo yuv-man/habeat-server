@@ -1,99 +1,133 @@
-import mongoose, { Document, Schema } from 'mongoose';
-import { IDailyPlan, IPlan, IWorkout } from '../types/interfaces';
-import { Meal } from '../meal/meal.model';
+import { Schema } from "mongoose";
+import { IDayPlan, IPlan, IWorkout } from "../types/interfaces";
 
-const embeddedMealSchema = new Schema({
+// Model name constant for NestJS
+export const Plan = { name: "Plan" };
+
+// Ingredients schema: array of tuples [name, amount]
+const ingredientTupleSchema = new Schema(
+  {
+    name: { type: String, required: true },
+    amount: { type: String, required: true },
+  },
+  { _id: false }
+);
+
+const embeddedMealSchema = new Schema(
+  {
     name: { type: String, required: true },
     calories: { type: Number, required: true },
     macros: {
-        protein: { type: Number, required: true },
-        carbs: { type: Number, required: true },
-        fat: { type: Number, required: true }
+      protein: { type: Number, required: true },
+      carbs: { type: Number, required: true },
+      fat: { type: Number, required: true },
     },
-    category: { type: String, enum: ['breakfast', 'lunch', 'dinner', 'snack'], required: true },
-    ingredients: [String],
+    category: {
+      type: String,
+      enum: ["breakfast", "lunch", "dinner", "snack"],
+      required: true,
+    },
+    ingredients: [ingredientTupleSchema], // Array of [name, amount] tuples
     prepTime: { type: Number, required: true },
-    done: { type: Boolean, required: true, default: false },
-    _id: { type: Schema.Types.ObjectId, ref: 'Meal', required: true }
-}, { _id: false });
+    _id: { type: Schema.Types.ObjectId, ref: "Meal", required: true },
+  },
+  { _id: false }
+);
 
 const workoutSchema = new Schema<IWorkout>({
-    name: { type: String, required: true },
-    duration: { type: Number, required: true },
-    caloriesBurned: { type: Number, required: true },
-    done: { type: Boolean, required: true, default: false }
+  name: { type: String, required: true },
+  category: { type: String, required: true },
+  duration: { type: Number, required: true },
+  caloriesBurned: { type: Number, required: true },
+  time: { type: String, required: false }, // Scheduled time in HH:MM format
 });
 
-const dayPlanSchema = new Schema<IDailyPlan>({
-    day: {
-      type: String,
-      enum: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
-      required: true
-    },
-    date: {
-      type: Date,
-      required: true
-    },
+const dayPlanSchema = new Schema<IDayPlan>(
+  {
     meals: {
       breakfast: embeddedMealSchema,
       lunch: embeddedMealSchema,
       dinner: embeddedMealSchema,
-      snacks: [embeddedMealSchema]
+      snacks: [embeddedMealSchema],
     },
-    totalCalories: { type: Number, required: true },
-    totalProtein: { type: Number, required: true },
-    totalCarbs: { type: Number, required: true },
-    totalFat: { type: Number, required: true },
-    waterIntake: { type: Number },
-    workouts: [{ type: workoutSchema }],
-    netCalories: { type: Number, required: true }
-  });
-  
-  const planSchema = new Schema<IPlan>({
+    workouts: [workoutSchema],
+    waterIntake: { type: Number, required: true },
+  },
+  { _id: false }
+);
+
+const planSchema = new Schema<IPlan>(
+  {
     userId: {
       type: Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
-      unique: true // Each user can have only ONE plan
+      ref: "User",
+      required: false,
+      unique: true, // Each user can have only ONE plan
     },
     title: {
       type: String,
-      required: true,
+      required: false,
       trim: true,
-      maxlength: 200
+      maxlength: 200,
     },
     userMetrics: {
-      bmr: { type: Number, required: true },
-      tdee: { type: Number, required: true },
-      targetCalories: { type: Number, required: true },
-      idealWeight: { type: Number, required: true },
-      weightRange: { type: String, required: true },
+      bmr: { type: Number, required: false },
+      tdee: { type: Number, required: false },
+      targetCalories: { type: Number, required: false },
+      idealWeight: { type: Number, required: false },
+      weightRange: { type: String, required: false },
       dailyMacros: {
-        protein: { type: Number },
-        carbs: { type: Number },
-        fat: { type: Number }
-      }
+        protein: { type: Number, required: false },
+        carbs: { type: Number, required: false },
+        fat: { type: Number, required: false },
+      },
     },
     userData: {
-      age: { type: Number, required: true },
-      gender: { type: String, enum: ['male', 'female'], required: true },
-      height: { type: Number, required: true },
-      weight: { type: Number, required: true },
-      activityLevel: { type: String },
-      path: { type: String, required: true },
-      targetWeight: { type: Number },
-      allergies: [{ type: String }],
-      dietaryRestrictions: [{ type: String }]
+      age: { type: Number, required: false },
+      gender: { type: String, enum: ["male", "female"], required: false },
+      height: { type: Number, required: false },
+      weight: { type: Number, required: false },
+      workoutFrequency: { type: Number, required: false },
+      path: { type: String, required: false },
+      targetWeight: { type: Number, required: false },
+      allergies: { type: [String], required: false, default: [] },
+      dietaryRestrictions: { type: [String], required: false, default: [] },
+      foodPreferences: { type: [String], required: false, default: [] }, // food preferences from KYC
+      dislikes: { type: [String], required: false, default: [] },
+      fastingHours: { type: Number, required: false },
+      fastingStartTime: { type: String, required: false },
     },
-    weeklyPlan: [{ type: dayPlanSchema, required: true }],
+    weeklyPlan: {
+      type: Schema.Types.Mixed,
+      default: {},
+    },
+    weeklyMacros: {
+      calories: {
+        consumed: { type: Number, default: 0 },
+        total: { type: Number, default: 0 },
+      },
+      protein: {
+        consumed: { type: Number, default: 0 },
+        total: { type: Number, default: 0 },
+      },
+      carbs: {
+        consumed: { type: Number, default: 0 },
+        total: { type: Number, default: 0 },
+      },
+      fat: {
+        consumed: { type: Number, default: 0 },
+        total: { type: Number, default: 0 },
+      },
+    },
     language: {
       type: String,
-      default: 'en'
-    }
-  }, {
-    timestamps: true
-  });
-  
-  export const Plan = mongoose.model<IPlan>('Plan', planSchema);
+      default: "en",
+    },
+  },
+  {
+    timestamps: true,
+    collection: "plans",
+  }
+);
 
-
+export const PlanSchema = planSchema;

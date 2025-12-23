@@ -1,104 +1,140 @@
-import mongoose, { Schema } from 'mongoose';
-import { IDailyProgress, IMeal } from '../types/interfaces';
+import { Schema } from "mongoose";
+import { IDailyProgress } from "../types/interfaces";
 
-const mealSnapshotSchema = new Schema({
+// Model name constant for NestJS
+export const DailyProgress = { name: "DailyProgress" };
+
+const mealSnapshotSchema = new Schema(
+  {
     name: { type: String, required: true },
     calories: { type: Number, required: true },
     macros: {
-        protein: { type: Number, required: true },
-        carbs: { type: Number, required: true },
-        fat: { type: Number, required: true }
+      protein: { type: Number, required: true },
+      carbs: { type: Number, required: true },
+      fat: { type: Number, required: true },
     },
-    category: { type: String, enum: ['breakfast', 'lunch', 'dinner', 'snack'], required: true },
+    category: {
+      type: String,
+      enum: ["breakfast", "lunch", "dinner", "snack"],
+      required: true,
+    },
     prepTime: { type: Number, required: true },
     done: { type: Boolean, required: true, default: false },
-    _id: { type: Schema.Types.ObjectId, ref: 'Meal', required: true }
-}, { _id: false });
+    _id: { type: Schema.Types.ObjectId, ref: "Meal", required: true },
+  },
+  { _id: false }
+);
 
-const dailyProgressSchema = new Schema<IDailyProgress>({
+const dailyProgressSchema = new Schema<IDailyProgress>(
+  {
     userId: {
-        type: Schema.Types.ObjectId,
-        ref: 'User',
-        required: true
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
     },
     date: {
-        type: Date,
-        required: true,
-        default: Date.now
+      type: Date,
+      required: true,
+      default: Date.now,
+    },
+    // dateKey is YYYY-MM-DD string for timezone-safe querying
+    dateKey: {
+      type: String,
+      required: true,
     },
     planId: {
-        type: Schema.Types.ObjectId,
-        ref: 'Plan',
-        required: true
+      type: Schema.Types.ObjectId,
+      ref: "Plan",
+      required: true,
     },
     caloriesConsumed: {
-        type: Number,
-        required: true,
-        default: 0
+      type: Number,
+      required: true,
+      default: 0,
     },
     caloriesGoal: {
-        type: Number,
-        required: true,
-        default: 2000
+      type: Number,
+      required: true,
+      default: 2000,
     },
     water: {
-        consumed: {
-            type: Number,
-            required: true,
-            default: 0
-        },
-        goal: {
-            type: Number,
-            required: true,
-            default: 8
-        }
+      consumed: {
+        type: Number,
+        required: true,
+        default: 0,
+      },
+      goal: {
+        type: Number,
+        required: true,
+        default: 8,
+      },
     },
-    workouts: [{
+    workouts: [
+      {
         name: {
-            type: String,
-            required: true
+          type: String,
+          required: true,
         },
         category: {
-            type: String,
-            enum: ['cardio', 'strength', 'flexibility', 'balance', 'endurance', 'yoga', 'pilates', 'hiit', 'running', 'cycling', 'swimming', 'walking', 'bodyweight', 'weights', 'core', 'stretching'],
-            required: true
+          type: String,
+          required: true,
         },
         duration: {
-            type: Number,
-            required: true
+          type: Number,
+          required: true,
         },
         caloriesBurned: {
-            type: Number,
-            required: true
+          type: Number,
+          required: true,
+        },
+        time: {
+          type: String,
+          required: false, // Scheduled time in HH:MM format
         },
         done: {
-            type: Boolean,
-            required: true
-        }
-    }],
+          type: Boolean,
+          required: true,
+        },
+      },
+    ],
     meals: {
-        breakfast: mealSnapshotSchema,
-        lunch: mealSnapshotSchema,
-        dinner: mealSnapshotSchema,
-        snacks: [mealSnapshotSchema]
+      breakfast: mealSnapshotSchema,
+      lunch: mealSnapshotSchema,
+      dinner: mealSnapshotSchema,
+      snacks: [mealSnapshotSchema],
     },
-    protein: { consumed: { type: Number, default: 0 }, goal: { type: Number, default: 0 } },
-    carbs: { consumed: { type: Number, default: 0 }, goal: { type: Number, default: 0 } },
-    fat: { consumed: { type: Number, default: 0 }, goal: { type: Number, default: 0 } },
+    protein: {
+      consumed: { type: Number, default: 0 },
+      goal: { type: Number, default: 0 },
+    },
+    carbs: {
+      consumed: { type: Number, default: 0 },
+      goal: { type: Number, default: 0 },
+    },
+    fat: {
+      consumed: { type: Number, default: 0 },
+      goal: { type: Number, default: 0 },
+    },
     weight: {
-        type: Number
+      type: Number,
     },
     notes: {
-        type: String
-    }
-}, {
-    timestamps: true
-});
+      type: String,
+    },
+  },
+  {
+    timestamps: true,
+    collection: "progress",
+  }
+);
 
-// Compound index for efficient queries by user and date
-dailyProgressSchema.index({ userId: 1, date: 1 }, { unique: true });
+// Compound index for efficient queries by user and dateKey (unique per user per day)
+dailyProgressSchema.index({ userId: 1, dateKey: 1 }, { unique: true });
 
-// Index for date range queries
+// Index for dateKey queries
+dailyProgressSchema.index({ dateKey: 1 });
+
+// Keep date index for backwards compatibility
 dailyProgressSchema.index({ date: 1 });
 
-export const DailyProgress = mongoose.model<IDailyProgress>('DailyProgress', dailyProgressSchema); 
+export const DailyProgressSchema = dailyProgressSchema;

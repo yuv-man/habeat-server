@@ -1,599 +1,1226 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import axios from 'axios';
-import logger from '../utils/logger';
-import { enumLanguage } from '../enums/enumLanguage';
-import { IUserData, IDailyPlan } from '../types/interfaces';
-import mongoose from 'mongoose';
-import { generateFullWeek } from '../mocks/mockWeeklyPlan';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import axios from "axios";
+import logger from "../utils/logger";
+import { enumLanguage } from "../enums/enumLanguage";
+import {
+  IUserData,
+  IParsedWeeklyPlanResponse,
+  IMeal,
+  IRecipe,
+} from "../types/interfaces";
+import mongoose from "mongoose";
+import { generateFullWeek } from "../mocks/mockWeeklyPlan";
 import {
   calculateBMR,
   calculateTDEE,
-  calculateIdealWeight,
   calculateTargetCalories,
-  calculateMacros
-} from '../utils/healthCalculations';
-import { PATH_WORKOUTS_GOAL } from '../enums/enumPaths';
-import { pathGuidelines, workoutCategories } from './helper';
-import { Meal } from '../meal/meal.model';
+  calculateMacros,
+} from "../utils/healthCalculations";
+import { PATH_WORKOUTS_GOAL } from "../enums/enumPaths";
+import { pathGuidelines, workoutCategories } from "./helper";
+import {
+  transformWeeklyPlan,
+  MealPlanResponse,
+  cleanMealData,
+  convertAIIngredientsToMealFormat,
+  convertMealIngredientsToRecipeFormat,
+  MealIngredient,
+} from "../utils/helpers";
 
-interface MealPlanResponse {
-  mealPlan: {
-    weeklyPlan: IDailyPlan[];
+// Helper function to extract error message
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && "message" in error)
+    return String(error.message);
+  return "Unknown error";
+};
+
+// Helper to get local date key in YYYY-MM-DD format (avoids timezone issues with toISOString which uses UTC)
+const getLocalDateKey = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+// Helper function to repair common JSON errors from LLM responses
+const repairJSON = (jsonString: string): string => {
+  let repaired = jsonString;
+  repaired = repaired.replace(/\/\/.*$/gm, "");
+  repaired = repaired.replace(/\/\*[\s\S]*?\*\//g, "");
+  repaired = repaired.replace(/,(\s*[}\]])/g, "$1");
+  repaired = repaired.replace(/,(\s*\n\s*[}\]])/g, "$1");
+  repaired = repaired.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, "");
+
+  const openBraces = (repaired.match(/{/g) || []).length;
+  const closeBraces = (repaired.match(/}/g) || []).length;
+  const openBrackets = (repaired.match(/\[/g) || []).length;
+  const closeBrackets = (repaired.match(/\]/g) || []).length;
+
+  if (openBraces > closeBraces && openBraces - closeBraces <= 2) {
+    repaired += "}".repeat(openBraces - closeBraces);
+  }
+  if (openBrackets > closeBrackets && openBrackets - closeBrackets <= 2) {
+    repaired += "]".repeat(openBrackets - closeBrackets);
+  }
+
+  return repaired.trim();
+};
+
+// Helper function to extract and clean JSON from LLM response
+const extractAndCleanJSON = (text: string): string => {
+  let cleaned = text;
+  const jsonMatch = text.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
+  if (jsonMatch) {
+    cleaned = jsonMatch[1];
+  }
+
+  cleaned = cleaned.replace(/```/g, "").trim();
+  cleaned = cleaned.replace(/^\s*\w+\s*=\s*\{/gm, "{");
+  cleaned = cleaned.replace(/^\s*\w+\s*=\s*\[/gm, "[");
+
+  const lines = cleaned.split("\n");
+  let jsonStartLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (
+      /^\s*\w+\s*=/.test(lines[i]) ||
+      /^\s*#/.test(lines[i]) ||
+      /^\s*\/\//.test(lines[i])
+    ) {
+      continue;
+    }
+    if (lines[i].includes("{") || lines[i].includes("[")) {
+      jsonStartLine = i;
+      break;
+    }
+  }
+
+  if (jsonStartLine >= 0) {
+    cleaned = lines.slice(jsonStartLine).join("\n");
+  }
+
+  let braceCount = 0;
+  let jsonStart = -1;
+  let jsonEnd = -1;
+
+  for (let i = 0; i < cleaned.length; i++) {
+    if (cleaned[i] === "{") {
+      if (braceCount === 0) {
+        jsonStart = i;
+      }
+      braceCount++;
+    } else if (cleaned[i] === "}") {
+      braceCount--;
+      if (braceCount === 0 && jsonStart >= 0) {
+        jsonEnd = i + 1;
+        break;
+      }
+    }
+  }
+
+  if (jsonStart >= 0 && jsonEnd > jsonStart) {
+    cleaned = cleaned.slice(jsonStart, jsonEnd);
+  } else {
+    let bracketCount = 0;
+    let arrayStart = -1;
+    let arrayEnd = -1;
+
+    for (let i = 0; i < cleaned.length; i++) {
+      if (cleaned[i] === "[") {
+        if (bracketCount === 0) {
+          arrayStart = i;
+        }
+        bracketCount++;
+      } else if (cleaned[i] === "]") {
+        bracketCount--;
+        if (bracketCount === 0 && arrayStart >= 0) {
+          arrayEnd = i + 1;
+          break;
+        }
+      }
+    }
+
+    if (arrayStart >= 0 && arrayEnd > arrayStart) {
+      cleaned = cleaned.slice(arrayStart, arrayEnd);
+    }
+  }
+
+  cleaned = repairJSON(cleaned);
+  return cleaned;
+};
+
+// Helper function to call Ollama API
+const callOllama = async (
+  prompt: string,
+  model: string = "phi",
+  isWeeklyPlan: boolean = false
+): Promise<string> => {
+  const ollamaBaseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+
+  try {
+    await axios.get(`${ollamaBaseUrl}/api/tags`, { timeout: 5000 });
+  } catch (error) {
+    throw new Error(
+      `Ollama is not running at ${ollamaBaseUrl}. Start Ollama first with: ollama serve`
+    );
+  }
+
+  try {
+    const timeout = isWeeklyPlan ? 600000 : 300000;
+
+    const response = await axios.post(
+      `${ollamaBaseUrl}/api/generate`,
+      {
+        model: model,
+        prompt: prompt,
+        stream: false,
+        options: {
+          temperature: 0.7,
+          top_p: 0.9,
+          top_k: 40,
+          num_predict: isWeeklyPlan ? 8000 : 4000,
+        },
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+        },
+        timeout: timeout,
+      }
+    );
+
+    if (response.data && response.data.response) {
+      return response.data.response;
+    }
+    throw new Error("Invalid response from Ollama API");
+  } catch (error: unknown) {
+    const errorMsg = getErrorMessage(error);
+    throw new Error(`Ollama API error: ${errorMsg}`);
+  }
+};
+
+// Check which Gemini models are available
+const getAvailableGeminiModels = async (apiKey: string): Promise<string[]> => {
+  try {
+    const response = await axios.get(
+      `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`,
+      { timeout: 5000 }
+    );
+
+    const allModels = (response.data.models || [])
+      .filter((model: any) =>
+        model.supportedGenerationMethods?.includes("generateContent")
+      )
+      .map((model: any) => {
+        // Extract model name from path like "models/gemini-2.5-flash"
+        return model.name.split("/")[1];
+      })
+      .filter((name: string) => name && name.includes("gemini"));
+
+    // Prioritize better models
+    const priorityOrder = [
+      "gemini-2.5-flash",
+      "gemini-2.5-pro",
+      "gemini-2.0-flash",
+      "gemini-2.0-flash-001",
+      "gemini-2.5-flash-lite",
+    ];
+
+    const sortedModels = allModels.sort((a: string, b: string) => {
+      const indexA = priorityOrder.indexOf(a);
+      const indexB = priorityOrder.indexOf(b);
+      if (indexA === -1) return 1;
+      if (indexB === -1) return -1;
+      return indexA - indexB;
+    });
+
+    logger.info(`[Gemini] Available models: ${sortedModels.join(", ")}`);
+    return sortedModels;
+  } catch (error: unknown) {
+    logger.warn(
+      `[Gemini] Could not list available models: ${getErrorMessage(error)}`
+    );
+    // Return default models as fallback
+    return [
+      "gemini-2.5-flash",
+      "gemini-2.5-pro",
+      "gemini-2.0-flash",
+      "gemini-2.0-flash-001",
+    ];
+  }
+};
+
+// Generic retry logic with exponential backoff
+const retryWithBackoffGeneric = async <T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000,
+  context: string = "AI"
+): Promise<T> => {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      logger.info(`[${context}] Attempt ${attempt + 1}/${maxRetries}...`);
+      return await fn();
+    } catch (err: unknown) {
+      const errorMsg = getErrorMessage(err);
+      const isRetryable =
+        errorMsg.includes("503") ||
+        errorMsg.includes("overloaded") ||
+        errorMsg.includes("429") ||
+        errorMsg.includes("500") ||
+        errorMsg.includes("502") ||
+        errorMsg.includes("504") ||
+        errorMsg.includes("timed out");
+
+      if (!isRetryable || attempt === maxRetries - 1) {
+        throw err;
+      }
+
+      const delay = baseDelay * Math.pow(2, attempt);
+      logger.warn(
+        `[${context}] Attempt ${attempt + 1} failed (retryable). Waiting ${delay}ms before retry...`
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+
+  throw new Error(`[${context}] Max retries exceeded`);
+};
+
+// Backward compatible wrapper for MealPlanResponse
+const retryWithBackoff = async (
+  fn: () => Promise<MealPlanResponse>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000
+): Promise<MealPlanResponse> => {
+  return retryWithBackoffGeneric(fn, maxRetries, baseDelay, "Gemini");
+};
+
+// Generic AI generation with model fallback and timeout
+const generateWithFallback = async <T>(
+  prompt: string,
+  parseResponse: (text: string) => T,
+  options: {
+    timeoutMs?: number;
+    maxRetries?: number;
+    context?: string;
+  } = {}
+): Promise<T> => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY not configured");
+  }
+
+  const { timeoutMs = 60000, maxRetries = 3, context = "AI" } = options;
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+
+  // Get available models
+  const availableModels = await getAvailableGeminiModels(apiKey);
+  const modelsToTry =
+    availableModels.length > 0
+      ? availableModels
+      : ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"];
+
+  logger.info(`[${context}] Will try models: ${modelsToTry.join(", ")}`);
+
+  const callModelWithTimeout = async (modelName: string): Promise<T> => {
+    logger.info(
+      `[${context}] Calling ${modelName} (timeout: ${timeoutMs / 1000}s)`
+    );
+
+    const model = genAI.getGenerativeModel({ model: modelName });
+
+    // Create timeout promise
+    let timeoutHandle: NodeJS.Timeout;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(
+          new Error(
+            `[${context}] Request to ${modelName} timed out after ${timeoutMs / 1000}s`
+          )
+        );
+      }, timeoutMs);
+    });
+
+    try {
+      const resultPromise = (async () => {
+        const result = await model.generateContent([
+          { text: prompt + "\n\nReturn ONLY JSON. No other text." },
+        ]);
+
+        clearTimeout(timeoutHandle!);
+
+        if (!result || !result.response) {
+          throw new Error("Empty response from Gemini API");
+        }
+
+        const responseText = result.response.text();
+        if (!responseText || responseText.trim().length === 0) {
+          throw new Error("Gemini returned empty response text");
+        }
+
+        logger.info(
+          `[${context}] Received response: ${responseText.length} characters`
+        );
+
+        // Clean and parse JSON
+        let cleanedJSON = extractAndCleanJSON(responseText);
+        cleanedJSON = repairJSON(cleanedJSON);
+
+        return parseResponse(cleanedJSON);
+      })();
+
+      return await Promise.race([resultPromise, timeoutPromise]);
+    } catch (error: unknown) {
+      clearTimeout(timeoutHandle!);
+      const errorMsg = getErrorMessage(error);
+
+      if (
+        errorMsg.includes("401") ||
+        errorMsg.includes("403") ||
+        errorMsg.includes("API_KEY_INVALID")
+      ) {
+        throw new Error(`Invalid Gemini API key: ${errorMsg}`);
+      }
+      if (errorMsg.includes("429") || errorMsg.includes("quota")) {
+        throw new Error(`Gemini quota exceeded: ${errorMsg}`);
+      }
+
+      throw error;
+    }
   };
-  planType: 'daily' | 'weekly';
-  language: string;
-  generatedAt: string;
-  fallbackModel?: string;
-}
 
-const generateMealPlanWithAI = async (
-  userData: IUserData, 
+  let lastError: Error | null = null;
+
+  for (const modelName of modelsToTry) {
+    try {
+      return await retryWithBackoffGeneric(
+        () => callModelWithTimeout(modelName),
+        maxRetries,
+        2000,
+        context
+      );
+    } catch (error: unknown) {
+      lastError =
+        error instanceof Error ? error : new Error(getErrorMessage(error));
+      logger.warn(
+        `[${context}] Model ${modelName} failed: ${getErrorMessage(error)}`
+      );
+
+      if (modelsToTry.indexOf(modelName) < modelsToTry.length - 1) {
+        logger.info(`[${context}] Trying next model...`);
+      }
+    }
+  }
+
+  throw (
+    lastError ||
+    new Error(
+      `[${context}] All models failed. Tried: ${modelsToTry.join(", ")}`
+    )
+  );
+};
+
+// Gemini generation with timeout
+const generateMealPlanWithGemini = async (
+  userData: IUserData,
   weekStartDate: Date,
-  planType: 'daily' | 'weekly' = 'daily',
-  language: string = 'en',
-  useMock: boolean = false,
+  planType: "daily" | "weekly",
+  language: string,
+  apiKey: string
+): Promise<MealPlanResponse> => {
+  if (!apiKey.startsWith("AIza") || apiKey.length < 39) {
+    logger.warn(
+      `GEMINI_API_KEY format may be invalid. Expected: "AIza..." (length 39+). Got: ${apiKey.substring(0, 4)}... (length: ${apiKey.length})`
+    );
+  }
+
+  let genAI: GoogleGenerativeAI;
+  try {
+    genAI = new GoogleGenerativeAI(apiKey);
+    logger.info("Gemini API client initialized");
+  } catch (error: unknown) {
+    throw new Error(`Failed to initialize Gemini: ${getErrorMessage(error)}`);
+  }
+
+  // Get available models for this API key
+  logger.info("[Gemini] Checking available models...");
+  const availableModels = await getAvailableGeminiModels(apiKey);
+
+  // Use available models, or fallback to known working models
+  const modelsToTry =
+    availableModels.length > 0
+      ? availableModels
+      : [
+          "gemini-2.5-flash",
+          "gemini-2.5-pro",
+          "gemini-2.0-flash",
+          "gemini-2.0-flash-001",
+        ];
+
+  if (modelsToTry.length === 0) {
+    throw new Error(
+      "No Gemini models available. Please check your API key and quota."
+    );
+  }
+
+  logger.info(`[Gemini] Will try models in order: ${modelsToTry.join(", ")}`);
+
+  const { prompt, dayToName, nameToDay, dates, activeDays, workoutDays } =
+    buildPrompt(userData, planType, language, weekStartDate);
+
+  // Helper to get day name from date string
+  const getDayNameFromDate = (dateStr: string): string => {
+    try {
+      if (!dateStr || typeof dateStr !== "string") {
+        return "monday";
+      }
+      const date = new Date(dateStr);
+      // Check if date is valid
+      if (isNaN(date.getTime())) {
+        logger.warn(
+          `[Gemini] Invalid date string: ${dateStr}, defaulting to monday`
+        );
+        return "monday";
+      }
+      const dayNum = date.getDay();
+      return dayToName[dayNum] || "monday";
+    } catch (error) {
+      logger.warn(
+        `[Gemini] Error parsing date string "${dateStr}": ${getErrorMessage(error)}, defaulting to monday`
+      );
+      return "monday";
+    }
+  };
+
+  const callModelWithTimeout = async (
+    modelName: string,
+    timeoutMs: number = 120000
+  ): Promise<MealPlanResponse> => {
+    logger.info(
+      `[Gemini] Calling ${modelName} (timeout: ${timeoutMs / 1000}s)`
+    );
+
+    let model;
+    try {
+      model = genAI.getGenerativeModel({ model: modelName });
+    } catch (error: unknown) {
+      throw new Error(
+        `Failed to initialize model ${modelName}: ${getErrorMessage(error)}`
+      );
+    }
+
+    // Create timeout that rejects after timeoutMs
+    let timeoutHandle: NodeJS.Timeout;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(
+          new Error(
+            `[Gemini] Request to ${modelName} timed out after ${timeoutMs / 1000}s. Service may be overloaded.`
+          )
+        );
+      }, timeoutMs);
+    });
+
+    try {
+      logger.info(`[Gemini] Sending request to ${modelName}...`);
+
+      const resultPromise = (async () => {
+        const result = await model.generateContent([
+          {
+            text:
+              prompt +
+              "\n\nCRITICAL REQUIREMENTS:\n" +
+              "1. You MUST generate meal plans for ALL 7 DAYS\n" +
+              "2. Each day MUST include: breakfast, lunch, dinner, snacks, hydration, workouts\n" +
+              "3. Return ONLY valid JSON\n" +
+              "4. No markdown formatting or explanations\n\n",
+          },
+          {
+            text: "Remember: Return ONLY the JSON object. No other text.",
+          },
+        ]);
+
+        clearTimeout(timeoutHandle!);
+
+        if (!result || !result.response) {
+          throw new Error("Empty response from Gemini API");
+        }
+
+        const responseText = result.response.text();
+
+        if (!responseText || responseText.trim().length === 0) {
+          throw new Error("Gemini returned empty response text");
+        }
+
+        logger.info(
+          `[Gemini] Received response from ${modelName}: ${responseText.length} characters`
+        );
+
+        return responseText;
+      })();
+
+      const responseText = await Promise.race([resultPromise, timeoutPromise]);
+
+      // Use the same JSON extraction logic as Llama for consistency
+      let cleanedJSON: string;
+      try {
+        cleanedJSON = extractAndCleanJSON(responseText);
+      } catch (error: unknown) {
+        logger.error(
+          `[Gemini] Failed to extract JSON. Raw response (first 1000 chars): ${responseText.substring(0, 1000)}`
+        );
+        throw new Error(
+          `Failed to extract JSON from Gemini response: ${getErrorMessage(error)}`
+        );
+      }
+
+      if (!cleanedJSON || cleanedJSON.trim().length === 0) {
+        logger.error(
+          `[Gemini] Empty JSON after extraction. Raw response (first 1000 chars): ${responseText.substring(0, 1000)}`
+        );
+        throw new Error("Failed to extract JSON from Gemini response");
+      }
+
+      logger.info(`[Gemini] Parsing JSON from response...`);
+      logger.debug(
+        `[Gemini] Extracted JSON preview (first 500 chars): ${cleanedJSON.substring(0, 500)}...`
+      );
+
+      let parsedResponse: any;
+      try {
+        parsedResponse = JSON.parse(cleanedJSON);
+      } catch (parseError: unknown) {
+        logger.error(
+          `[Gemini] JSON parse error. Extracted JSON (first 2000 chars): ${cleanedJSON.substring(0, 2000)}`
+        );
+        throw new Error(
+          `Failed to parse Gemini JSON: ${getErrorMessage(parseError)}`
+        );
+      }
+
+      // Check if weeklyPlan exists at root or nested in mealPlan
+      let weeklyPlan = parsedResponse?.weeklyPlan;
+      if (!weeklyPlan && parsedResponse?.mealPlan?.weeklyPlan) {
+        weeklyPlan = parsedResponse.mealPlan.weeklyPlan;
+        logger.info(
+          `[Gemini] Found weeklyPlan nested in mealPlan object, using it`
+        );
+      }
+
+      // If weeklyPlan doesn't exist, check if days are at root level (monday, tuesday, etc.)
+      // and convert them to date-keyed format
+      if (!weeklyPlan) {
+        const responseKeys = Object.keys(parsedResponse || {});
+        const dayNames = [
+          "monday",
+          "tuesday",
+          "wednesday",
+          "thursday",
+          "friday",
+          "saturday",
+          "sunday",
+        ];
+
+        // Check if response has day names as keys
+        const hasDayKeys = dayNames.some((day) => responseKeys.includes(day));
+
+        if (hasDayKeys) {
+          logger.info(
+            `[Gemini] Found days at root level, converting to date-keyed weeklyPlan object`
+          );
+          // Convert day-keyed object to date-keyed object
+          const dateKeyedPlan: { [date: string]: any } = {};
+
+          dayNames.forEach((dayName) => {
+            if (parsedResponse[dayName]) {
+              const dayData = parsedResponse[dayName];
+              // Use the date from dayData, or calculate from dates array
+              const dayIndex = dayNames.indexOf(dayName);
+              let dateKey = dayData.date;
+
+              // If no date in dayData, try to get it from dates array
+              if (!dateKey && dates[dayIndex]) {
+                try {
+                  const date = dates[dayIndex];
+                  // Validate date before getting local date key
+                  if (date instanceof Date && !isNaN(date.getTime())) {
+                    dateKey = getLocalDateKey(date);
+                  } else {
+                    logger.warn(
+                      `[Gemini] Invalid date at index ${dayIndex} for ${dayName}, skipping`
+                    );
+                  }
+                } catch (error) {
+                  logger.warn(
+                    `[Gemini] Error formatting date for ${dayName}: ${getErrorMessage(error)}`
+                  );
+                }
+              }
+
+              if (dateKey) {
+                dateKeyedPlan[dateKey] = {
+                  day: dayName,
+                  date: dateKey,
+                  ...dayData,
+                };
+              }
+            }
+          });
+
+          weeklyPlan = dateKeyedPlan;
+        }
+      }
+
+      if (!weeklyPlan) {
+        const responseKeys = Object.keys(parsedResponse || {});
+        const responsePreview = JSON.stringify(parsedResponse).substring(
+          0,
+          2000
+        );
+        const errorMsg = `Missing weeklyPlan in response. Response keys: ${responseKeys.join(", ")}. Response preview: ${responsePreview}`;
+        logger.error(`[Gemini] ${errorMsg}`);
+        throw new Error(errorMsg);
+      }
+
+      // weeklyPlan can be either array or object (date-keyed)
+      // If it's an object, we need to convert it to array format for transformWeeklyPlan
+      let weeklyPlanArray: any[] = [];
+
+      if (Array.isArray(weeklyPlan)) {
+        weeklyPlanArray = weeklyPlan;
+      } else if (typeof weeklyPlan === "object") {
+        // Convert date-keyed object to array format
+        weeklyPlanArray = Object.entries(weeklyPlan).map(
+          ([dateKey, dayData]: [string, any]) => ({
+            day: dayData.day || getDayNameFromDate(dateKey),
+            date: dateKey,
+            ...dayData,
+          })
+        );
+      } else {
+        const errorMsg = `weeklyPlan is neither array nor object. Type: ${typeof weeklyPlan}, Value: ${JSON.stringify(weeklyPlan).substring(0, 500)}`;
+        logger.error(`[Gemini] ${errorMsg}`);
+        throw new Error(errorMsg);
+      }
+
+      if (weeklyPlanArray.length === 0) {
+        throw new Error("weeklyPlan is empty");
+      }
+
+      // Update parsedResponse to have weeklyPlan as array for transformWeeklyPlan
+      parsedResponse = { weeklyPlan: weeklyPlanArray } as {
+        weeklyPlan: Array<any>;
+      };
+
+      logger.info(
+        `[Gemini] Successfully parsed ${parsedResponse.weeklyPlan.length} days`
+      );
+
+      return await transformWeeklyPlan(
+        parsedResponse,
+        dayToName,
+        nameToDay,
+        dates,
+        activeDays,
+        workoutDays,
+        planType,
+        language,
+        weekStartDate
+      );
+    } catch (error: unknown) {
+      clearTimeout(timeoutHandle!);
+
+      const errorMsg = getErrorMessage(error);
+
+      if (
+        errorMsg.includes("401") ||
+        errorMsg.includes("403") ||
+        errorMsg.includes("API_KEY_INVALID")
+      ) {
+        throw new Error(`Invalid Gemini API key: ${errorMsg}`);
+      }
+
+      if (errorMsg.includes("429") || errorMsg.includes("quota")) {
+        throw new Error(`Gemini quota exceeded: ${errorMsg}`);
+      }
+
+      if (errorMsg.includes("503") || errorMsg.includes("overloaded")) {
+        throw new Error(`Gemini model overloaded: ${errorMsg}`);
+      }
+
+      throw new Error(`Gemini error: ${errorMsg}`);
+    }
+  };
+
+  let lastError: Error | null = null;
+
+  for (const modelName of modelsToTry) {
+    try {
+      logger.info(`[Gemini] Attempting model: ${modelName}`);
+      return await retryWithBackoff(
+        () => callModelWithTimeout(modelName, 120000),
+        3,
+        2000
+      );
+    } catch (error: unknown) {
+      lastError =
+        error instanceof Error ? error : new Error(getErrorMessage(error));
+      const errorMsg = getErrorMessage(error);
+
+      logger.warn(`[Gemini] Model ${modelName} failed: ${errorMsg}`);
+
+      if (modelsToTry.indexOf(modelName) < modelsToTry.length - 1) {
+        logger.info(`[Gemini] Trying next model...`);
+      }
+    }
+  }
+
+  throw (
+    lastError ||
+    new Error(
+      `All available Gemini models failed. Tried: ${modelsToTry.join(", ")}`
+    )
+  );
+};
+
+// MAIN: Try Gemini first, fallback to Llama
+const generateMealPlanWithAI = async (
+  userData: IUserData,
+  weekStartDate: Date,
+  planType: "daily" | "weekly" = "daily",
+  language: string = "en",
+  useMock: boolean = false
 ): Promise<MealPlanResponse> => {
   try {
-    // If mock data is requested, return it immediately
     if (useMock) {
       logger.info("Using mock data as requested");
       const mockPlan = generateFullWeek();
-      return new Promise(resolve => 
+      return new Promise((resolve) =>
         setTimeout(() => {
           resolve({
-            mealPlan: mockPlan,
+            mealPlan: { weeklyPlan: mockPlan },
             planType,
             language,
             generatedAt: new Date().toISOString(),
-            fallbackModel: "mock"
+            fallbackModel: "mock",
           });
         }, 3000)
       );
     }
 
-    // Check if API key is configured
+    // TRY GEMINI FIRST
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error('GEMINI_API_KEY is not configured in environment variables');
-    }
-
-    const genAI = new GoogleGenerativeAI(apiKey);
-
-    // Helper function to build the prompt (shared between Grok and Gemini)
-    const buildPrompt = (
-      userData: IUserData,
-      planType: 'daily' | 'weekly',
-      language: string,
-      weekStartDate: Date
-    ): { prompt: string; jsonStructure: any; dayToName: any; nameToDay: any; dates: Date[]; activeDays: number[]; workoutDays: number[] } => {
-      const bmr = calculateBMR(userData.weight, userData.height, userData.age, userData.gender);
-      const tdee = calculateTDEE(bmr, userData.activityLevel);
-      const targetCalories = calculateTargetCalories(tdee, userData.path);
-      const macros = calculateMacros(targetCalories, userData.path);
-      
-      const startDate = new Date(weekStartDate);
-      startDate.setHours(0, 0, 0, 0);
-      const currentDay = startDate.getDay();
-      const daysToGenerate: number[] = [1, 2, 3, 4, 5, 6, 0];
-      const dates: Date[] = [];
-      
-      for (const day of daysToGenerate) {
-        const date = new Date(startDate);
-        const currentDayOffset = currentDay === 0 ? 7 : currentDay;
-        const targetDayOffset = day === 0 ? 7 : day;
-        let daysToAdd = targetDayOffset - currentDayOffset;
-        if (daysToAdd < 0) daysToAdd += 7;
-        date.setDate(date.getDate() + daysToAdd);
-        dates.push(date);
-      }
-      
-      const activeDays = daysToGenerate.filter(day => {
-        const dayOffset = day === 0 ? 7 : day;
-        const currentDayOffset = currentDay === 0 ? 7 : currentDay;
-        return dayOffset >= currentDayOffset;
-      });
-      
-      const dayToName: { [key: number]: string } = {
-        1: 'monday', 2: 'tuesday', 3: 'wednesday', 4: 'thursday', 5: 'friday', 6: 'saturday', 0: 'sunday'
-      };
-      
-      const nameToDay: { [key: string]: number } = {
-        'monday': 1, 'tuesday': 2, 'wednesday': 3, 'thursday': 4, 'friday': 5, 'saturday': 6, 'sunday': 0
-      };
-
-      const totalWorkoutsPerWeek = PATH_WORKOUTS_GOAL[userData.path as keyof typeof PATH_WORKOUTS_GOAL];
-      const daysLeft = daysToGenerate.length;
-      const workoutsToInclude = Math.min(totalWorkoutsPerWeek, daysLeft);
-      const workoutDays = Array.from({ length: workoutsToInclude }, (_, i) => 
-        daysToGenerate[Math.floor(i * daysLeft / workoutsToInclude)]
-      );
-
-      const pathGuideline = pathGuidelines[userData.path as keyof typeof pathGuidelines] || pathGuidelines.custom;
-      const validWorkoutCategories = Object.keys(workoutCategories).join(',');
-
-      const prompt = `As a certified nutritionist, create a personalized ${planType} meal plan optimized for ${userData.path}. 
-    
-    Client Profile:
-    - ${userData.age} year old ${userData.gender}, ${userData.height}cm, ${userData.weight}kg
-    - Daily targets: ${targetCalories} calories
-      * Breakfast: ${Math.round(targetCalories * 0.25)} cal (25%) - focus on energy and metabolism
-      * Lunch: ${Math.round(targetCalories * 0.35)} cal (35%) - peak nutrition for daily activities
-      * Dinner: ${Math.round(targetCalories * 0.30)} cal (30%) - balanced recovery
-      * Snacks: ${Math.round(targetCalories * 0.10)} cal (10%) - sustained energy
-    - Macro Distribution:
-      * Protein: ${macros.protein}g for muscle maintenance and recovery
-      * Carbs: ${macros.carbs}g for energy and performance
-      * Fat: ${macros.fat}g for hormonal balance and satiety
-    ${userData.allergies ? `- Health Considerations: Allergies to ${userData.allergies.join(', ')}` : ''}
-    ${userData.dietaryRestrictions ? `- Dietary Protocol: ${userData.dietaryRestrictions.join(', ')}` : ''}
-
-    Path Guidelines for ${userData.path}:
-    ${pathGuideline}
-
-    Exercise Integration:
-    - ${totalWorkoutsPerWeek} structured workouts/week on: ${workoutDays.map(d => dayToName[d]).join(', ')}
-    - Focus on progressive overload and recovery cycles
-    
-    Meal Plan Period:
-    ${daysToGenerate.map((d, i) => `${dayToName[d]} (${dates[i].toISOString().split('T')[0]})`).join(', ')}
-
-    Requirements:
-    1. Each meal must be nutrient-dense and support the ${userData.path} goals
-    2. Include specific portions and ingredients for accurate tracking
-    3. Consider meal timing relative to workouts
-    4. Ensure variety while maintaining consistent macro distribution
-    5. Follow the path guidelines above for ${userData.path}
-    6. Language: ${enumLanguage[language as keyof typeof enumLanguage]}
-
-    Return ONLY a JSON object where each meal includes:
-    - name: descriptive and specific
-    - category: [breakfast,lunch,dinner,snack]
-    - tags: [tag1,tag2,tag3]
-    - calories: exact count
-    - macros: protein, carbs, fat in grams
-    - ingredients: array of strings in format "ingredient_name|portion_amount|unit" (e.g. "potato|200|g", "egg|2|unit", "olive_oil|15|ml")
-    - prepTime: in minutes
-    - benefits: array of health benefits specific to ${userData.path}
-
-    IMPORTANT: For ingredients, always use base ingredient names (e.g. "potato" not "boiled potato", "chicken_breast" not "grilled chicken") and separate with underscores if needed. This helps with shopping list creation.
-
-    Workouts must specify:
-    - category: [${validWorkoutCategories}] - must be one of these exact values
-    - duration: minutes
-    - caloriesBurned: estimated expenditure
-    - intensity: relative to client's level`;
-
-      const jsonStructure = {
-        weeklyPlan: [{
-          day: "monday",
-          meals: {
-            breakfast: { name: "string", category: "breakfast", tags: ["string"], calories: 0, macros: { protein: 0, carbs: 0, fat: 0 }, ingredients: ["string"], prepTime: 0, benefits: ["string"] },
-            lunch: { name: "string", category: "lunch", tags: ["string"], calories: 0, macros: { protein: 0, carbs: 0, fat: 0 }, ingredients: ["string"], prepTime: 0, benefits: ["string"] },
-            dinner: { name: "string", category: "dinner", tags: ["string"], calories: 0, macros: { protein: 0, carbs: 0, fat: 0 }, ingredients: ["string"], prepTime: 0, benefits: ["string"] },
-            snacks: [{ name: "string", tags: ["string"], calories: 0, macros: { protein: 0, carbs: 0, fat: 0 }, ingredients: ["string"], prepTime: 0, category: "snack" }]
-          },
-          hydration: { waterTarget: 2000, recommendations: ["string"] },
-          workouts: [{ name: "string", category: validWorkoutCategories.split(',')[0] || "cardio", duration: 30, caloriesBurned: 300, done: false }]
-        }]
-      };
-
-      return { prompt, jsonStructure, dayToName, nameToDay, dates, activeDays, workoutDays };
-    };
-
-    // Function to call Grok API
-    const callGrokModel = async (
-      apiKey: string,
-      userData: IUserData,
-      weekStartDate: Date,
-      planType: 'daily' | 'weekly',
-      language: string
-    ): Promise<MealPlanResponse> => {
-      const { prompt, jsonStructure, dayToName, nameToDay, dates, activeDays, workoutDays } = buildPrompt(userData, planType, language, weekStartDate);
-      
-      const fullPrompt = prompt + "\n\nIMPORTANT: You MUST return ONLY a complete meal plan for all 7 days (Monday through Sunday) as a valid JSON object. No other text, explanations, or markdown formatting.\n\nEXACT required structure:\n" + JSON.stringify(jsonStructure, null, 2) + "\n\nRemember: Return ONLY the JSON object. No other text or formatting.";
-
+    if (apiKey) {
       try {
-        const response = await axios.post(
-          'https://api.x.ai/v1/chat/completions',
-          {
-            model: 'grok-beta',
-            messages: [
-              {
-                role: 'system',
-                content: 'You are a certified nutritionist expert at creating detailed meal plans. Always respond with valid JSON only, no markdown formatting or explanations.'
-              },
-              {
-                role: 'user',
-                content: fullPrompt
-              }
-            ],
-            temperature: 0.7,
-            max_tokens: 8000
-          },
-          {
-            headers: {
-              'Authorization': `Bearer ${apiKey}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 120000
-          }
+        logger.info("=== ATTEMPTING GEMINI (PRIMARY) ===");
+        return await generateMealPlanWithGemini(
+          userData,
+          weekStartDate,
+          planType,
+          language,
+          apiKey
         );
-
-        let responseText = response.data.choices[0]?.message?.content || '';
-        if (!responseText) {
-          throw new Error('Empty response from Grok API');
-        }
-
-        // Clean up the response text (same as Gemini)
-        let cleanedResponse = responseText;
-        const jsonMatch = responseText.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
-        if (jsonMatch) {
-          cleanedResponse = jsonMatch[1];
-        }
-        cleanedResponse = cleanedResponse.replace(/```/g, '').trim();
-        const jsonStart = cleanedResponse.indexOf('{');
-        const jsonEnd = cleanedResponse.lastIndexOf('}') + 1;
-        if (jsonStart >= 0 && jsonEnd > jsonStart) {
-          cleanedResponse = cleanedResponse.slice(jsonStart, jsonEnd);
-        }
-
-        const parsedResponse = JSON.parse(cleanedResponse) as { weeklyPlan: Array<any> };
-        
-        // Use the same transformation logic as Gemini
-        return await transformWeeklyPlan(parsedResponse, dayToName, nameToDay, dates, activeDays, workoutDays, planType, language);
-      } catch (error: any) {
-        logger.error('Grok API error:', error.response?.data || error.message);
-        throw new Error(`Grok API failed: ${error.response?.data?.error?.message || error.message}`);
-      }
-    };
-
-    // Helper function to transform weekly plan (shared between Grok and Gemini)
-    const transformWeeklyPlan = async (
-      parsedResponse: { weeklyPlan: Array<any> },
-      dayToName: any,
-      nameToDay: any,
-      dates: Date[],
-      activeDays: number[],
-      workoutDays: number[],
-      planType: 'daily' | 'weekly',
-      language: string
-    ): Promise<MealPlanResponse> => {
-      const daysToGenerate: number[] = [1, 2, 3, 4, 5, 6, 0];
-      
-      const allMeals: { name: string; category: string; calories: number; mealData: any }[] = [];
-      parsedResponse.weeklyPlan.forEach((day: any) => {
-        if (day.meals.breakfast?.name) allMeals.push({ ...day.meals.breakfast, category: 'breakfast', mealData: day.meals.breakfast });
-        if (day.meals.lunch?.name) allMeals.push({ ...day.meals.lunch, category: 'lunch', mealData: day.meals.lunch });
-        if (day.meals.dinner?.name) allMeals.push({ ...day.meals.dinner, category: 'dinner', mealData: day.meals.dinner });
-        day.meals.snacks?.forEach((snack: any) => {
-          if (snack?.name) allMeals.push({ ...snack, category: 'snack', mealData: snack });
-        });
-      });
-
-      const existingMeals = await Meal.find({
-        $or: allMeals.map(meal => ({
-          name: meal.name,
-          category: meal.category,
-          calories: { $gte: meal.calories - 50, $lte: meal.calories + 50 }
-        }))
-      });
-
-      const mealLookup = new Map();
-      existingMeals.forEach(meal => {
-        const key = `${meal.name}-${meal.category}-${meal.calories}`;
-        mealLookup.set(key, meal);
-      });
-
-      const newMeals = allMeals.filter(meal => {
-        const key = `${meal.name}-${meal.category}-${meal.calories}`;
-        return !mealLookup.has(key);
-      });
-
-      if (newMeals.length > 0) {
-        try {
-          const createdMeals = await Meal.insertMany(
-            newMeals.map(meal => ({
-              ...meal.mealData,
-              category: meal.category,
-              done: false
-            }))
-          );
-          createdMeals.forEach(meal => {
-            const key = `${meal.name}-${meal.category}-${meal.calories}`;
-            mealLookup.set(key, meal);
-          });
-        } catch (err: any) {
-          logger.error(`Error creating meals in batch: ${err?.message || 'Unknown error'}`);
-          newMeals.forEach(meal => {
-            const key = `${meal.name}-${meal.category}-${meal.calories}`;
-            mealLookup.set(key, {
-              ...meal.mealData,
-              _id: new mongoose.Types.ObjectId(),
-              category: meal.category,
-              done: false
-            });
-          });
-        }
-      }
-
-      const transformedWeeklyPlan = await Promise.all(parsedResponse.weeklyPlan.map(async (day: any) => {
-        const findMeal = (mealData: any, category: string) => {
-          if (!mealData?.name) return null;
-          const key = `${mealData.name}-${category}-${mealData.calories}`;
-          const meal = mealLookup.get(key);
-          return meal ? { ...mealData, _id: meal._id, category, done: false } : null;
-        };
-
-        const breakfast = findMeal(day.meals.breakfast, 'breakfast');
-        const lunch = findMeal(day.meals.lunch, 'lunch');
-        const dinner = findMeal(day.meals.dinner, 'dinner');
-        const snacks = day.meals.snacks.map((snack: any) => findMeal(snack, 'snack')).filter(Boolean);
-
-        const dayNumber = nameToDay[day.day.toLowerCase()];
-        if (dayNumber === undefined) {
-          throw new Error(`Invalid day name: ${day.day}`);
-        }
-
-        const dayIndex = daysToGenerate.indexOf(dayNumber);
-        const isActiveDay = activeDays.includes(dayNumber);
-
-        if (!isActiveDay) {
-          return {
-            day: day.day.toLowerCase() as 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday',
-            date: dates[dayIndex],
-            meals: {
-              breakfast: { _id: new mongoose.Types.ObjectId(), name: 'No meal planned', calories: 0, macros: { protein: 0, carbs: 0, fat: 0 }, category: 'breakfast', ingredients: [], prepTime: 0, done: false },
-              lunch: { _id: new mongoose.Types.ObjectId(), name: 'No meal planned', calories: 0, macros: { protein: 0, carbs: 0, fat: 0 }, category: 'lunch', ingredients: [], prepTime: 0, done: false },
-              dinner: { _id: new mongoose.Types.ObjectId(), name: 'No meal planned', calories: 0, macros: { protein: 0, carbs: 0, fat: 0 }, category: 'dinner', ingredients: [], prepTime: 0, done: false },
-              snacks: []
-            },
-            totalCalories: 0, totalProtein: 0, totalCarbs: 0, totalFat: 0, waterIntake: 0, workouts: [], netCalories: 0
-          };
-        }
-
-        return {
-          day: day.day.toLowerCase() as 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday',
-          date: dates[dayIndex],
-          meals: { breakfast, lunch, dinner, snacks },
-          totalCalories: breakfast.calories + lunch.calories + dinner.calories + snacks.reduce((total: number, snack: any) => total + snack.calories, 0),
-          totalProtein: breakfast.macros.protein + lunch.macros.protein + dinner.macros.protein + snacks.reduce((total: number, snack: any) => total + snack.macros.protein, 0),
-          totalCarbs: breakfast.macros.carbs + lunch.macros.carbs + dinner.macros.carbs + snacks.reduce((total: number, snack: any) => total + snack.macros.carbs, 0),
-          totalFat: breakfast.macros.fat + lunch.macros.fat + dinner.macros.fat + snacks.reduce((total: number, snack: any) => total + snack.macros.fat, 0),
-          waterIntake: Math.round(day.hydration?.waterTarget / 250 || 8),
-          workouts: workoutDays.includes(nameToDay[day.day.toLowerCase()]) 
-            ? day.workouts.map((w: any) => ({
-                name: w.name,
-                category: (w.category || 'cardio').toLowerCase(),
-                duration: w.duration,
-                caloriesBurned: w.caloriesBurned,
-                done: w.done || false
-              }))
-            : [],
-          netCalories: breakfast.calories + lunch.calories + dinner.calories + snacks.reduce((total: number, snack: any) => total + snack.calories, 0)
-        };
-      }));
-
-      return {
-        mealPlan: {
-          weeklyPlan: transformedWeeklyPlan.filter((day): day is IDailyPlan => day !== null)
-        },
-        planType,
-        language,
-        generatedAt: new Date().toISOString()
-      };
-    };
-
-    // function to call Gemini with a given model
-    const callModel = async (modelName: string): Promise<MealPlanResponse> => {
-      const model = genAI.getGenerativeModel({ model: modelName });
-      const { prompt, jsonStructure, dayToName, nameToDay, dates, activeDays, workoutDays } = buildPrompt(userData, planType, language, weekStartDate);
-
-      try {
-        const result = await model.generateContent([
-          {
-            text: prompt + "\n\nIMPORTANT: You MUST return ONLY a complete meal plan for all 7 days (Monday through Sunday) as a valid JSON object. No other text, explanations, or markdown formatting.\n\nEXACT required structure:\n" + JSON.stringify(jsonStructure, null, 2)
-          },
-          {
-            text: "\n\nRemember: Return ONLY the JSON object. No other text or formatting."
-          }
-        ]);
-        const responseText = result.response.text();
-        
-        try {
-          // Clean up the response text
-          let cleanedResponse = responseText;
-          
-          // Remove markdown code blocks if present
-          const jsonMatch = responseText.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
-          if (jsonMatch) {
-            cleanedResponse = jsonMatch[1];
-          }
-          
-          // Remove any remaining markdown formatting and whitespace
-          cleanedResponse = cleanedResponse.replace(/```/g, '').trim();
-          
-          // Remove any text before or after the JSON object
-          const jsonStart = cleanedResponse.indexOf('{');
-          const jsonEnd = cleanedResponse.lastIndexOf('}') + 1;
-          if (jsonStart >= 0 && jsonEnd > jsonStart) {
-            cleanedResponse = cleanedResponse.slice(jsonStart, jsonEnd);
-          }
-          
-          // Try to parse as JSON
-          const parsedResponse = JSON.parse(cleanedResponse) as { weeklyPlan: Array<any> };
-          
-          // Use shared transformation function
-          return await transformWeeklyPlan(parsedResponse, dayToName, nameToDay, dates, activeDays, workoutDays, planType, language);
-        } catch (error) {
-          logger.error('Failed to parse AI response:', error);
-          throw new Error('Failed to parse AI response as JSON');
-        }
-  } catch (error) {
-        logger.error(`Error generating content with model ${modelName}:`, error);
-        throw error;
-      }
-    };
-
-    // Retry logic with exponential backoff
-    const retryWithBackoff = async (
-      fn: () => Promise<MealPlanResponse>,
-      maxRetries: number = 3,
-      baseDelay: number = 1000
-    ): Promise<MealPlanResponse> => {
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-          return await fn();
-        } catch (err: any) {
-          const isRetryable = err?.message?.includes('503') || 
-                             err?.message?.includes('overloaded') ||
-                             err?.message?.includes('Service Unavailable');
-          
-          if (!isRetryable || attempt === maxRetries - 1) {
-            throw err;
-          }
-          
-          const delay = baseDelay * Math.pow(2, attempt);
-          logger.warn(`Attempt ${attempt + 1} failed, retrying in ${delay}ms...`, err.message);
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-      }
-      throw new Error('Max retries exceeded');
-    };
-
-    // Try Grok first, then fallback to Gemini models
-    const grokApiKey = process.env.GROK_API_KEY || process.env.XAI_API_KEY;
-    
-    if (grokApiKey) {
-      try {
-        logger.info('Attempting to generate meal plan with Grok');
-        return await callGrokModel(grokApiKey, userData, weekStartDate, planType, language);
-      } catch (err: any) {
-        logger.warn(`Grok model failed: ${err.message}, falling back to Gemini`);
+      } catch (geminiError: unknown) {
+        logger.warn(
+          `Gemini failed: ${getErrorMessage(geminiError)}. Falling back to Llama...`
+        );
       }
     } else {
-      logger.info('Grok API key not found, using Gemini models');
+      logger.warn("GEMINI_API_KEY not configured, using Llama");
     }
-    
-    // Fallback to Gemini models (removed deprecated gemini-pro)
-    const models = ["gemini-1.5-flash", "gemini-1.5-pro"];
-    
-    for (const modelName of models) {
-      try {
-        logger.info(`Attempting to generate meal plan with model: ${modelName}`);
-        return await retryWithBackoff(() => callModel(modelName));
-      } catch (err: any) {
-        logger.warn(`Model ${modelName} failed:`, err.message);
-        // Continue to next model if this one fails
-        if (models.indexOf(modelName) === models.length - 1) {
-          // Last model failed, throw error
-          throw new Error(`All models failed. Last error: ${err.message}`);
-        }
+
+    // FALLBACK TO LLAMA
+    try {
+      logger.info("=== ATTEMPTING LLAMA (FALLBACK) ===");
+      return await generateMealPlanWithLlama2(
+        userData,
+        weekStartDate,
+        planType,
+        language,
+        false
+      );
+    } catch (llamaError: unknown) {
+      throw new Error(
+        `Both Gemini and Llama failed. Llama: ${getErrorMessage(llamaError)}`
+      );
+    }
+  } catch (error: unknown) {
+    logger.error("Meal plan generation failed:", error);
+    throw error;
+  }
+};
+
+const buildPrompt = (
+  userData: IUserData,
+  planType: "daily" | "weekly",
+  language: string,
+  weekStartDate: Date
+): {
+  prompt: string;
+  dayToName: Record<number, string>;
+  nameToDay: Record<string, number>;
+  dates: Date[];
+  activeDays: number[];
+  workoutDays: number[];
+} => {
+  const bmr = calculateBMR(
+    userData.weight,
+    userData.height,
+    userData.age,
+    userData.gender
+  );
+  const tdee = calculateTDEE(bmr, userData.workoutFrequency);
+  const targetCalories = calculateTargetCalories(tdee, userData.path);
+  const macros = calculateMacros(targetCalories, userData.path);
+
+  // Always use today's date as the start date
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Use today regardless of what weekStartDate was passed
+  const actualStartDate = today;
+  const currentDay = actualStartDate.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+
+  const todayLocalKey = getLocalDateKey(actualStartDate);
+  logger.info(
+    `[buildPrompt] Using today as start date: ${todayLocalKey} (day: ${currentDay}, ${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][currentDay]})`
+  );
+
+  const daysToGenerate: number[] = [];
+  const dates: Date[] = [];
+
+  // Generate from today until end of current week (Sunday)
+  // Week is Monday(1) to Sunday(0)
+  if (currentDay === 0) {
+    // Today is Sunday - only generate Sunday (last day of week)
+    daysToGenerate.push(0);
+    dates.push(new Date(actualStartDate));
+  } else {
+    // Generate from today (currentDay) through Saturday (6), then Sunday (0)
+    for (let day = currentDay; day <= 6; day++) {
+      daysToGenerate.push(day);
+      const date = new Date(actualStartDate);
+      date.setDate(actualStartDate.getDate() + (day - currentDay));
+      dates.push(date);
+    }
+    // Add Sunday (end of week)
+    daysToGenerate.push(0);
+    const sundayDate = new Date(actualStartDate);
+    sundayDate.setDate(actualStartDate.getDate() + (7 - currentDay));
+    dates.push(sundayDate);
+  }
+
+  // Validate: should never have more than 7 days
+  if (dates.length > 7) {
+    logger.error(`[buildPrompt] Generated ${dates.length} days, max is 7!`);
+    throw new Error("Cannot generate more than 7 days");
+  }
+
+  logger.info(
+    `[buildPrompt] Generating ${dates.length} days: ${dates.map((d) => getLocalDateKey(d)).join(", ")}`
+  );
+
+  // Validate all dates are valid
+  const invalidDates = dates.filter(
+    (date) => !(date instanceof Date) || isNaN(date.getTime())
+  );
+  if (invalidDates.length > 0) {
+    logger.error(
+      `[buildPrompt] Found ${invalidDates.length} invalid dates in dates array`
+    );
+    throw new Error("Invalid dates generated in buildPrompt");
+  }
+
+  const activeDays = daysToGenerate;
+
+  const dayToName: Record<number, string> = {
+    1: "monday",
+    2: "tuesday",
+    3: "wednesday",
+    4: "thursday",
+    5: "friday",
+    6: "saturday",
+    0: "sunday",
+  };
+
+  const nameToDay: Record<string, number> = {
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6,
+    sunday: 0,
+  };
+
+  // Use workoutFrequency from userData if provided, otherwise fall back to path-based default
+  const defaultWorkoutsPerWeek =
+    PATH_WORKOUTS_GOAL[userData.path as keyof typeof PATH_WORKOUTS_GOAL];
+  const totalWorkoutsPerWeek =
+    userData.workoutFrequency ?? defaultWorkoutsPerWeek;
+  const daysLeft = daysToGenerate.length;
+  const workoutsToInclude = Math.min(totalWorkoutsPerWeek, daysLeft);
+  const workoutDays = Array.from(
+    { length: workoutsToInclude },
+    (_, i) => daysToGenerate[Math.floor((i * daysLeft) / workoutsToInclude)]
+  );
+
+  const pathGuideline =
+    pathGuidelines[userData.path as keyof typeof pathGuidelines] ||
+    pathGuidelines.custom;
+  const validWorkoutCategories = Object.keys(workoutCategories).join(",");
+
+  const prompt = `As a certified nutritionist, create a personalized ${planType} meal plan optimized for ${
+    userData.path
+  }.
+      
+  Client Profile:
+  - ${userData.age} year old ${userData.gender}, ${userData.height}cm, ${
+    userData.weight
+  }kg
+  - Daily targets: ${targetCalories} calories
+  - Macro Distribution: Protein: ${macros.protein}g, Carbs: ${macros.carbs}g, Fat: ${macros.fat}g
+  ${userData.allergies ? `- Allergies: ${userData.allergies.join(", ")}` : ""}
+  ${userData.dietaryRestrictions ? `- Dietary: ${userData.dietaryRestrictions.join(", ")}` : ""}
+  
+  Path Guidelines for ${userData.path}: ${pathGuideline}
+  
+  Exercise: ${totalWorkoutsPerWeek} workouts/week on ${workoutDays
+    .map((d) => dayToName[d])
+    .join(", ")}
+  
+  Meal Plan Days: ${daysToGenerate
+    .map((d, i) => {
+      const date = dates[i];
+      if (date && date instanceof Date && !isNaN(date.getTime())) {
+        return `${dayToName[d]} (${getLocalDateKey(date)})`;
+      } else {
+        logger.warn(
+          `[buildPrompt] Invalid date at index ${i} for day ${d}, using fallback`
+        );
+        return `${dayToName[d]} (invalid-date)`;
       }
+    })
+    .join(", ")}
+  
+  CRITICAL INGREDIENT RULES:
+  1. Use raw ingredients only (e.g., "egg" not "poached egg")
+  2. NEVER use "mixed_vegetables" - list each vegetable separately
+  3. Format: "ingredient|amount|unit|category" (e.g., "chicken_breast|200|g|Proteins")
+  4. Valid categories: Proteins, Vegetables, Fruits, Grains, Dairy, Pantry, Spices
+  
+  Return ONLY valid JSON in this EXACT format:
+  {
+    "weeklyPlan": {
+      "YYYY-MM-DD": {
+        "day": "monday",
+        "date": "YYYY-MM-DD",
+        "meals": {
+          "breakfast": { "name": "...", "calories": ..., "macros": {...}, "ingredients": [...], "prepTime": ... },
+          "lunch": { ... },
+          "dinner": { ... },
+          "snacks": [{ ... }]
+        },
+        "hydration": { "waterTarget": ..., "recommendations": [...] },
+        "workouts": [{ "name": "...", "category": "...", "duration": ..., "caloriesBurned": ... }]
+      },
+      "YYYY-MM-DD": { ... }
     }
-    
-    throw new Error('No models available');
+  }
+  
+  IMPORTANT: Use date keys (YYYY-MM-DD format) in weeklyPlan object, not day names.`;
 
-  } catch (error: any) {
-    logger.error('Error generating meal plan:', error);
+  return { prompt, dayToName, nameToDay, dates, activeDays, workoutDays };
+};
 
-    if (error.message?.includes('401') || error.message?.includes('403')) {
-      throw new Error('Invalid or unauthorized API key. Please check your GEMINI_API_KEY configuration.');
-    } else if (!process.env.GEMINI_API_KEY) {
-      throw new Error('GEMINI_API_KEY is not configured in environment variables');
+const generateMealPlanWithLlama2 = async (
+  userData: IUserData,
+  weekStartDate: Date,
+  planType: "daily" | "weekly" = "daily",
+  language: string = "en",
+  useMock: boolean = false
+): Promise<MealPlanResponse> => {
+  try {
+    if (useMock) {
+      const mockPlan = generateFullWeek();
+      return {
+        mealPlan: { weeklyPlan: mockPlan },
+        planType,
+        language,
+        generatedAt: new Date().toISOString(),
+        fallbackModel: "mock",
+      };
     }
 
-    throw new Error('Failed to generate personalized meal plan: ' + (error.message || 'Unknown error'));
+    const { prompt, dayToName, nameToDay, dates, activeDays, workoutDays } =
+      buildPrompt(userData, planType, language, weekStartDate);
+
+    const ollamaModel = process.env.OLLAMA_MODEL || "phi";
+    logger.info(`[Llama] Using model: ${ollamaModel}`);
+
+    const fullPrompt =
+      prompt +
+      "\n\nReturn ONLY valid JSON. No variable assignments, code, or explanations.";
+
+    const isWeeklyPlan = planType === "weekly";
+    const generatedText = await callOllama(
+      fullPrompt,
+      ollamaModel,
+      isWeeklyPlan
+    );
+
+    let cleanedJSON = extractAndCleanJSON(generatedText);
+
+    if (!cleanedJSON || cleanedJSON.trim().length === 0) {
+      throw new Error("Failed to extract JSON from Llama response");
+    }
+
+    let mealPlanData: IParsedWeeklyPlanResponse;
+    try {
+      mealPlanData = JSON.parse(cleanedJSON) as IParsedWeeklyPlanResponse;
+    } catch (parseError: unknown) {
+      throw new Error(
+        `Failed to parse Llama JSON: ${getErrorMessage(parseError)}`
+      );
+    }
+
+    // Use the same transformation as Gemini to ensure consistent format
+    const transformedPlan = await transformWeeklyPlan(
+      mealPlanData,
+      dayToName,
+      nameToDay,
+      dates,
+      activeDays,
+      workoutDays,
+      planType,
+      language,
+      weekStartDate
+    );
+
+    logger.info("[Llama] Meal plan generated successfully");
+
+    return transformedPlan;
+  } catch (error: unknown) {
+    logger.error("[Llama] Generation failed:", error);
+    throw new Error(`Llama failed: ${getErrorMessage(error)}`);
   }
 };
 
 const generateRecipeDetails = async (
   dishName: string,
-  servings: number,
+  category: string,
   targetCalories: number,
+  ingredients: MealIngredient[],
   dietaryRestrictions: string[] = [],
-  language: string = 'en'
-): Promise<any> => {
-  try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error('GEMINI_API_KEY is not configured in environment variables');
-    }
+  servings: number,
+  language: string = "en"
+): Promise<IRecipe> => {
+  // Convert meal ingredients directly to recipe format for the prompt
+  // MealIngredient: [name, "200 g", "Proteins"] -> RecipeIngredient: { name, amount: "200", unit: "g" }
+  const recipeIngredients = convertMealIngredientsToRecipeFormat(ingredients);
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
-    const prompt = `Recipe for "${dishName}" (${enumLanguage[language as keyof typeof enumLanguage]}):
-    ${servings} servings, ${Math.round(targetCalories / servings)} cal/serving
-    ${dietaryRestrictions.length > 0 ? `Restrictions: ${dietaryRestrictions.join(', ')}` : ''}
-    Return ONLY JSON with:
-    - name: recipe name
-    - ingredients: array of strings in format "ingredient_name|amount|unit" (e.g. "potato|200|g", "egg|2|unit")
-    - instructions: array of steps
-    - nutritional_info: {calories, protein, carbs, fat}
-    - timing: {prepTime, cookTime}
-    - metadata: {
-      category: [breakfast|lunch|dinner|snack],
-      difficulty: [easy|medium|hard],
-      servings,
-      dietaryInfo: {isVegetarian,isVegan,isGlutenFree,isDairyFree,isKeto,isLowCarb}
-    }
-    - tags: relevant keywords
+  // Create readable list for the prompt
+  const ingredientsList = recipeIngredients
+    .map((ing) => `${ing.name} (${ing.amount} ${ing.unit})`.trim())
+    .join(", ");
 
-    IMPORTANT: For ingredients, use base ingredient names (e.g. "potato" not "boiled potato", "chicken_breast" not "grilled chicken") and separate multi-word ingredients with underscores.`;
-    
-    const result = await model.generateContent([
-      { text: prompt + "\n\nIMPORTANT: Return ONLY the JSON object. No other text or formatting." }
-    ]);
-    const responseText = result.response.text();
-    
-    try {
-      // Clean up the response text
-      let cleanedResponse = responseText;
-      
-      // Remove markdown code blocks if present
-      const jsonMatch = responseText.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
-      if (jsonMatch) {
-        cleanedResponse = jsonMatch[1];
-      }
-      
-      // Remove any remaining markdown formatting and whitespace
-      cleanedResponse = cleanedResponse.replace(/```/g, '').trim();
-      
-      // Remove any text before or after the JSON object
-      const jsonStart = cleanedResponse.indexOf('{');
-      const jsonEnd = cleanedResponse.lastIndexOf('}') + 1;
-      if (jsonStart >= 0 && jsonEnd > jsonStart) {
-        cleanedResponse = cleanedResponse.slice(jsonStart, jsonEnd);
-      }
-      
-      // Try to parse as JSON
-      const recipeData = JSON.parse(cleanedResponse);
+  // Format ingredients as JSON for the recipe response
+  const ingredientsJson = JSON.stringify(recipeIngredients, null, 2);
+
+  const prompt = `Generate a detailed recipe for "${dishName}" in ${language}.
+
+## Input Parameters:
+- Dish Name: ${dishName}
+- Category: ${category}
+- Target Calories: approximately ${targetCalories} per serving
+- Servings: ${servings}
+- Available Ingredients: ${ingredientsList}
+${dietaryRestrictions.length ? `- Dietary Restrictions (MUST follow): ${dietaryRestrictions.join(", ")}` : ""}
+
+## Response Format:
+Return ONLY valid JSON matching this EXACT structure:
+{
+  "mealName": "${dishName}",
+  "mealId": "unique_meal_id_string",
+  "description": "A brief description of the dish (max 500 chars)",
+  "category": "${category}",
+  "servings": ${servings},
+  "prepTime": 15,
+  "cookTime": 30,
+  "difficulty": "easy|medium|hard",
+  "macros": {
+    "calories": ${targetCalories},
+    "protein": 30,
+    "carbs": 50,
+    "fat": 15
+  },
+  "ingredients": ${ingredientsJson},
+  "instructions": [
+    {
+      "step": 1,
+      "instruction": "Preheat oven to 180°C",
+      "time": 5,
+      "temperature": 180
+    },
+    {
+      "step": 2,
+      "instruction": "Mix ingredients in a bowl",
+      "time": 10,
+      "temperature": null
+    }
+  ],
+  "equipment": ["pan", "oven"],
+  "tags": ["healthy", "quick"],
+  "dietaryInfo": {
+    "isVegetarian": false,
+    "isVegan": false,
+    "isGlutenFree": false,
+    "isDairyFree": false,
+    "isKeto": false,
+    "isLowCarb": false
+  },
+  "language": "${language}",
+  "usageCount": 1,
+  "notes": "Additional notes about the recipe"
+}
+
+## Rules:
+1. "mealName" - use the dish name provided: "${dishName}"
+2. "mealId" - generate a unique lowercase snake_case identifier
+3. "description" - brief appetizing description (max 500 characters)
+4. "category" - must be exactly: "${category}"
+5. "servings" - must be: ${servings}
+6. "prepTime" - preparation time in minutes (integer, min 0)
+7. "cookTime" - cooking time in minutes (integer, min 0)
+8. "difficulty" - must be one of: "easy", "medium", "hard"
+9. "macros" - all values in integers, calories should be close to ${targetCalories}
+10. "ingredients" - array of objects with { "name": string, "amount": string, "unit": string }
+11. "instructions" - array of step objects: { "step": number, "instruction": string, "time": number (minutes), "temperature": number (degrees in °C) or null if no cooking required }
+12. "equipment" - array of required kitchen equipment
+13. "tags" - relevant recipe tags
+14. "dietaryInfo" - set boolean flags based on recipe characteristics${dietaryRestrictions.length ? ` and dietary restrictions: ${dietaryRestrictions.join(", ")}` : ""}
+15. "language" - must be: "${language}"
+16. "usageCount" - always 1 for new recipes
+17. "notes" - additional notes about the recipe (max 500 characters)`;
+
+  const parseResponse = (jsonText: string) => {
+    const recipeData = JSON.parse(jsonText);
     return {
-        _id: new mongoose.Types.ObjectId(),
-      name: recipeData.name,
-      ingredients: recipeData.ingredients,
-      instructions: recipeData.instructions,
-      calories: recipeData.calories,
-      protein: recipeData.protein,
-      carbs: recipeData.carbs,
-      fat: recipeData.fat,
-      category: recipeData.category,
-      prepTime: recipeData.prepTime,
-      cookTime: recipeData.cookTime,
-      difficulty: recipeData.difficulty,
-      servings: recipeData.servings,
-      dietaryInfo: recipeData.dietaryInfo,
-      tags: recipeData.tags,
-      generatedAt: new Date().toISOString()
+      _id: new mongoose.Types.ObjectId(),
+      ...recipeData,
+      generatedAt: new Date().toISOString(),
     };
-    } catch (error) {
-      logger.error('Failed to parse recipe response:', error);
-      throw new Error('Failed to parse recipe response as JSON');
-    }
-  } catch (error) {
-    logger.error('Error generating recipe details:', error);
-    throw new Error('Failed to generate recipe details');
-  }
+  };
+
+  return generateWithFallback(prompt, parseResponse, {
+    timeoutMs: 60000,
+    maxRetries: 3,
+    context: "RecipeDetails",
+  });
 };
 
 const generateMeal = async (
@@ -601,82 +1228,208 @@ const generateMeal = async (
   targetCalories: number,
   category: string,
   dietaryRestrictions: string[] = [],
-  language: string = 'en'
+  preferences: string[] = [],
+  dislikes: string[] = [],
+  language: string = "en",
+  aiRules?: string
 ): Promise<any> => {
-  try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error('GEMINI_API_KEY is not configured in environment variables');
-    }
+  const prompt = `Generate a ${category} meal "${mealName}" in ${language}.
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
-    const prompt = `${category} meal "${mealName}" (${enumLanguage[language as keyof typeof enumLanguage]}):
-    ${targetCalories} calories
-    ${dietaryRestrictions.length > 0 ? `Restrictions: ${dietaryRestrictions.join(', ')}` : ''}
-    Return ONLY JSON with:
-    - name: meal name
-    - calories: total calories
-    - macros: {protein, carbs, fat}
-    - category: meal type
-    - ingredients: array of strings in format "ingredient_name|amount|unit" (e.g. "potato|200|g", "egg|2|unit")
+## Requirements:
+- Target calories: ${targetCalories}
+- Category: ${category}
+${dietaryRestrictions.length ? `- Dietary restrictions: ${dietaryRestrictions.join(", ")}` : ""}
+${preferences.length ? `- Preferences (try to include): ${preferences.join(", ")}` : ""}
+${dislikes.length ? `- Dislikes (MUST avoid): ${dislikes.join(", ")}` : ""}
+${aiRules ? `- Additional rules: ${aiRules}` : ""}
 
-    IMPORTANT: For ingredients, use base ingredient names (e.g. "potato" not "boiled potato", "chicken_breast" not "grilled chicken") and separate multi-word ingredients with underscores.`;
-    
-    const result = await model.generateContent([
-      { text: prompt + "\n\nIMPORTANT: Return ONLY the JSON object. No other text or formatting." }
-    ]);
-    const responseText = result.response.text();
-    
-    try {
-      // Clean up the response text
-      let cleanedResponse = responseText;
-      
-      // Remove markdown code blocks if present
-      const jsonMatch = responseText.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
-      if (jsonMatch) {
-        cleanedResponse = jsonMatch[1];
-      }
-      
-      // Remove any remaining markdown formatting and whitespace
-      cleanedResponse = cleanedResponse.replace(/```/g, '').trim();
-      
-      // Remove any text before or after the JSON object
-      const jsonStart = cleanedResponse.indexOf('{');
-      const jsonEnd = cleanedResponse.lastIndexOf('}') + 1;
-      if (jsonStart >= 0 && jsonEnd > jsonStart) {
-        cleanedResponse = cleanedResponse.slice(jsonStart, jsonEnd);
-      }
-      
-      // Try to parse as JSON
-      const mealData = JSON.parse(cleanedResponse);
+## Response Format:
+{
+  "name": "Meal Name",
+  "calories": ${targetCalories},
+  "macros": {"protein": 30, "carbs": 50, "fat": 15},
+  "category": "${category}",
+  "ingredients": [["ingredient_name", "100 g"]],
+  "prepTime": 20
+}`;
+
+  const parseResponse = (jsonText: string) => {
+    const mealData = JSON.parse(jsonText);
     return {
-        _id: new mongoose.Types.ObjectId(),
-      name: mealData.name,
-      calories: mealData.calories,
-      protein: mealData.protein,
-      carbs: mealData.carbs,
-      fat: mealData.fat,
-      category: mealData.category,
-      ingredients: mealData.ingredients,
-        isCustom: true,
-      generatedAt: new Date().toISOString()
+      _id: new mongoose.Types.ObjectId(),
+      ...mealData,
+      isCustom: true,
+      generatedAt: new Date().toISOString(),
     };
-    } catch (error) {
-      logger.error('Failed to parse meal response:', error);
-      throw new Error('Failed to parse meal response as JSON');
+  };
+
+  return generateWithFallback(prompt, parseResponse, {
+    timeoutMs: 60000,
+    maxRetries: 3,
+    context: "GenerateMeal",
+  });
+};
+
+const generateMealSuggestions = async (
+  mealCriteria: {
+    category: "breakfast" | "lunch" | "dinner" | "snack";
+    targetCalories?: number;
+    dietaryRestrictions?: string[];
+    preferences?: string[];
+    dislikes?: string[];
+    numberOfSuggestions?: number;
+    aiRules?: string;
+  },
+  language: string = "en"
+): Promise<IMeal[]> => {
+  const numberOfSuggestions = mealCriteria.numberOfSuggestions || 3;
+  const targetCalories = mealCriteria.targetCalories || 500;
+
+  const prompt = `You are a professional nutritionist. Generate exactly ${numberOfSuggestions} unique ${mealCriteria.category} meal suggestions.
+
+## Requirements:
+- Category: ${mealCriteria.category}
+- Target calories per meal: approximately ${targetCalories} calories (±10%)
+- Language for meal names and ingredients: ${language}
+${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
+${mealCriteria.preferences?.length ? `- Preferences (try to include): ${mealCriteria.preferences.join(", ")}` : ""}
+${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
+${mealCriteria.aiRules ? `- Additional rules: ${mealCriteria.aiRules}` : ""}
+
+## Response Format:
+Return a JSON object with a "meals" array containing exactly ${numberOfSuggestions} meal objects.
+
+Each meal MUST have ALL these fields:
+{
+  "meals": [
+    {
+      "name": "Meal Name",
+      "calories": 500,
+      "macros": {
+        "protein": 30,
+        "carbs": 50,
+        "fat": 15
+      },
+      "category": "${mealCriteria.category}",
+      "ingredients": [
+        ["ingredient_name_with_underscores", "100 g"],
+        ["another_ingredient", "50 ml"]
+      ],
+      "prepTime": 20
     }
-  } catch (error) {
-    logger.error('Error generating meal:', error);
-    throw new Error('Failed to generate meal');
-  }
+  ]
+}
+
+## Rules:
+1. "name" - descriptive meal name in ${language}
+2. "calories" - integer, close to ${targetCalories}
+3. "macros" - protein, carbs, fat in grams (integers), must add up reasonably to calories
+4. "category" - must be "${mealCriteria.category}"
+5. "ingredients" - array of [name, amount] tuples
+   - name: lowercase with underscores (e.g., "chicken_breast", "olive_oil")
+   - amount: number followed by unit (e.g., "200 g", "50 ml", "2 pieces")
+6. "prepTime" - preparation time in minutes (integer)`;
+
+  const parseResponse = (jsonText: string): IMeal[] => {
+    const parsed = JSON.parse(jsonText);
+    const meals = parsed.meals || parsed;
+
+    return (Array.isArray(meals) ? meals : [meals])
+      .slice(0, numberOfSuggestions)
+      .map((meal: any) => ({
+        _id: new mongoose.Types.ObjectId().toString(),
+        name: meal.name || "Unnamed Meal",
+        calories: Math.round(meal.calories || targetCalories),
+        macros: {
+          protein: Math.round(meal.macros?.protein || 0),
+          carbs: Math.round(meal.macros?.carbs || 0),
+          fat: Math.round(meal.macros?.fat || 0),
+        },
+        category: mealCriteria.category,
+        ingredients: Array.isArray(meal.ingredients)
+          ? meal.ingredients.map((ing: any) => {
+              if (Array.isArray(ing)) {
+                return [String(ing[0] || ""), String(ing[1] || "")];
+              }
+              return [String(ing), ""];
+            })
+          : [],
+        prepTime: Math.round(meal.prepTime || 30),
+      }));
+  };
+
+  const meals = await generateWithFallback<IMeal[]>(prompt, parseResponse, {
+    timeoutMs: 60000,
+    maxRetries: 3,
+    context: "MealSuggestions",
+  });
+
+  logger.info(
+    `[generateMealSuggestions] Generated ${meals.length} meal suggestions for ${mealCriteria.category}`
+  );
+
+  return meals;
+};
+
+const generateSnack = async (
+  snackName: string,
+  dietaryRestrictions: string[] = [],
+  language: string = "en"
+): Promise<IMeal> => {
+  const prompt = `Generate a snack "${snackName}" in ${language}.
+
+## Requirements:
+- Dietary restrictions (MUST follow): ${dietaryRestrictions.join(", ")}
+
+## Response Format:
+Return ONLY valid JSON matching this EXACT structure:
+{
+  "name": "Snack Name",
+  "calories": 100,
+  "macros": {
+    "protein": 10,
+    "carbs": 10,
+    "fat": 10
+  },
+  "ingredients": [
+    ["ingredient_name_with_underscores", "100 g", "Proteins"],
+    ["another_ingredient", "50 ml", "Fruits"]
+  ]
+  "prepTime": 10
+}
+
+## Rules:
+1. "name" - descriptive snack name in ${language}
+2. "calories" - integer, close to 100
+3. "macros" - protein, carbs, fat in grams (integers), must add up reasonably to calories
+4. "ingredients" - array of [name, amount, category?] tuples
+   - name: lowercase with underscores (e.g., "chicken_breast", "olive_oil")
+   - amount: number followed by unit (e.g., "200 g", "50 ml", "2 pieces")
+   - category: optional shopping bag category (e.g., "Proteins", "Grains", "Fruits")
+5. "prepTime" - (integer, should be 0)`;
+
+  const parseResponse = (jsonText: string) => {
+    const snackData = JSON.parse(jsonText);
+    return {
+      _id: new mongoose.Types.ObjectId(),
+      ...snackData,
+    };
+  };
+
+  return generateWithFallback(prompt, parseResponse, {
+    timeoutMs: 60000,
+    maxRetries: 3,
+    context: "GenerateSnack",
+  });
 };
 
 const aiService = {
   generateMealPlanWithAI,
   generateRecipeDetails,
-  generateMeal
+  generateMeal,
+  generateMealPlanWithLlama2,
+  generateMealSuggestions,
+  generateSnack,
 };
 
 export default aiService;

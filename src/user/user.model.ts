@@ -1,57 +1,83 @@
-import { BaseSchema, model } from "../db";
 import { IUserData } from "../types/interfaces";
-import bcrypt from 'bcrypt';
-import mongoose, { CallbackError } from 'mongoose';
+import bcrypt from "bcrypt";
+import mongoose, { CallbackError, Schema } from "mongoose";
 
-// name
-const modelName = "User";
+// Model name constant
+export const User = { name: "User" };
 
-// project schema
-const userSchema = BaseSchema<IUserData>({
-  name: String,
-  email: String,
-  password: String, // Add password field for OAuth users
-  phone: String,
-  picture: String,
-  age: Number,
-  gender: String,
-  height: Number,
-  weight: Number,
-  activityLevel: String,
-  path: String,
-  targetWeight: Number,
-  allergies: [String],
-  dietaryRestrictions: [String],
-  favoriteMeals: [String],
-  preferences: { type: Map, of: String, default: {} },
+// project schema - All fields are optional for debugging
+const userSchemaDefinition = {
+  name: { type: String, required: false },
+  email: { type: String, required: false },
+  password: { type: String, required: false }, // Add password field for OAuth users
+  phone: { type: String, required: false },
+  picture: { type: String, required: false },
+  age: { type: Number, required: false },
+  gender: { type: String, required: false },
+  height: { type: Number, required: false },
+  weight: { type: Number, required: false },
+  path: { type: String, required: false },
+  targetWeight: { type: Number, required: false },
+  allergies: { type: [String], required: false, default: [] },
+  dietaryRestrictions: { type: [String], required: false, default: [] },
+  foodPreferences: { type: [String], required: false, default: [] }, // food preferences from KYC (e.g., "Italian", "Seafood")
+  favoriteMeals: { type: [String], required: false, default: [] }, // actual meal IDs that user has favorited
+  dislikes: { type: [String], required: false, default: [] }, // disliked meals/foods
+  fastingHours: { type: Number, required: false }, // For 8-16 fasting diet type
+  fastingStartTime: { type: String, required: false }, // Fasting start time
+  preferences: {
+    type: Map,
+    of: mongoose.Schema.Types.Mixed,
+    required: false,
+    default: new Map(),
+  },
+  // Health metrics
+  workoutFrequency: { type: Number, required: false }, // Number of workouts per week
+  bmr: { type: Number, required: false }, // Basal Metabolic Rate
+  tdee: { type: Number, required: false }, // Total Daily Energy Expenditure
+  idealWeight: { type: Number, required: false },
+  // Premium status
+  isPremium: { type: Boolean, default: false, required: false },
   // OAuth fields
-  oauthProvider: String, // 'google', 'facebook', or null
-  oauthId: String, // OAuth provider's user ID
+  oauthProvider: { type: String, required: false }, // 'google', 'facebook', or null
+  oauthId: { type: String, required: false }, // OAuth provider's user ID
+};
+
+// Export schema for NestJS - All fields optional for debugging
+export const UserSchema = new Schema(userSchemaDefinition, {
+  timestamps: true,
+  versionKey: false,
+  strict: false, // Allow fields not defined in schema
+  collection: "users",
 });
 
-// Hash password before saving (only if password is provided and not OAuth)
-userSchema.pre('save', async function(next) {
-  if (!this.isModified('password') || this.password?.startsWith('google_oauth_') || this.password?.startsWith('facebook_oauth_')) {
+// Apply the same pre-save hook and methods to the exported schema
+UserSchema.pre("save", async function (next) {
+  if (
+    !this.isModified("password") ||
+    (this as any).password?.startsWith("google_oauth_") ||
+    (this as any).password?.startsWith("facebook_oauth_")
+  ) {
     return next();
   }
-  
+
   try {
     const salt = await bcrypt.genSalt(10);
-    this.password = await bcrypt.hash(this.password, salt);
+    (this as any).password = await bcrypt.hash((this as any).password, salt);
     next();
   } catch (error) {
     next(error as CallbackError);
   }
 });
 
-// Method to compare passwords
-userSchema.methods.comparePassword = async function(candidatePassword: string) {
-  // Skip password comparison for OAuth users
-  if (this.password?.startsWith('google_oauth_') || this.password?.startsWith('facebook_oauth_')) {
-    return false; // OAuth users should not use password login
+UserSchema.methods.comparePassword = async function (
+  candidatePassword: string
+) {
+  if (
+    (this as any).password?.startsWith("google_oauth_") ||
+    (this as any).password?.startsWith("facebook_oauth_")
+  ) {
+    return false;
   }
-  return bcrypt.compare(candidatePassword, this.password);
+  return bcrypt.compare(candidatePassword, (this as any).password);
 };
-
-// model
-export const User = model<IUserData>(modelName, userSchema);

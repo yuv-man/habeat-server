@@ -1,11 +1,7 @@
 {
-  "watch": ["src/**/*.ts", "index.ts"],
+  "watch": ["src/**/*.ts"],
   "ignore": ["src/**/*.spec.ts", "node_modules", "dist"],
   "ext": "ts",
-  "exec": "ts-node index.ts",
-  "events": {
-    "restart": "kill-port 3000",
-    "crash": "kill-port 3000"
-  },
+  "exec": "nest start --watch",
   "delay": "1500"
 }
