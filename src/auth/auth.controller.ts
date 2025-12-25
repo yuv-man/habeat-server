@@ -157,7 +157,14 @@ export class AuthController {
     }
 
     // Set CORS headers
+    const isDevelopment = process.env.NODE_ENV !== "production";
+    const clientUrl = isDevelopment
+      ? process.env.DEV_CLIENT_SITE
+      : process.env.PROD_CLIENT_SITE;
     const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
+    if (clientUrl) {
+      allowedOrigins.push(clientUrl);
+    }
     const origin = req.headers.origin;
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
@@ -249,7 +256,14 @@ export class AuthController {
     const redirectUri = `${req.protocol}://${req.get("host") || "localhost:5000"}/api/auth/google/callback`;
 
     // Set CORS headers
+    const isDevelopment = process.env.NODE_ENV !== "production";
+    const clientUrl = isDevelopment
+      ? process.env.DEV_CLIENT_SITE
+      : process.env.PROD_CLIENT_SITE;
     const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
+    if (clientUrl) {
+      allowedOrigins.push(clientUrl);
+    }
     const origin = req.headers.origin;
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
@@ -301,7 +315,11 @@ export class AuthController {
     @Res() res: Response
   ) {
     // Set CORS headers before redirect
-    const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
+    const allowedOrigins = [
+      "http://localhost:8080",
+      "http://localhost:8081",
+      process.env.PROD_CLIENT_SITE,
+    ];
     const origin = req.headers.origin;
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);

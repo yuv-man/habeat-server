@@ -47,4 +47,16 @@ const mealSchema = new Schema(
   }
 );
 
+// Index for name lookups (case-insensitive search)
+mealSchema.index({ name: 1 });
+
+// Compound index for category + name lookups
+mealSchema.index({ category: 1, name: 1 });
+
+// Index for analytics signature (used for deduplication)
+mealSchema.index({ "analytics.signature": 1 });
+
+// Index for AI-generated meals lookup
+mealSchema.index({ aiGenerated: 1 });
+
 export const MealSchema = mealSchema;

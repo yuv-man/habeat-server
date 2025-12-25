@@ -280,8 +280,13 @@ export const convertRecipeIngredientsToMealFormat = (
 // Helper to get Meal model at runtime (after NestJS has registered it)
 const getMealModel = () => mongoose.model("Meal");
 
+// Helper to escape special regex characters to prevent regex injection attacks
+export const escapeRegex = (str: string): string => {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
+
 // Helper to get local date key in YYYY-MM-DD format (avoids timezone issues with toISOString which uses UTC)
-const getLocalDateKey = (date: Date): string => {
+export const getLocalDateKey = (date: Date): string => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
@@ -337,59 +342,35 @@ export const getValidObjectId = (id: any): mongoose.Types.ObjectId => {
 // - Morning (09:00-12:00): 1.25x
 // - Afternoon (12:00-17:00): 1.0x (base)
 // - Evening (17:00-21:00): 0.75x - less time remaining
-// - Night (after 21:00): 0.5x - don't want too much before bed
+// Calculate extra water glasses needed for a workout
+// Simple formula: 1 glass per 250 calories, max 2 glasses per workout
 export const calculateWorkoutWaterGlasses = (
   caloriesBurned: number,
   time?: string
 ): number => {
-  // Base calculation: 1 glass per 150 calories, minimum 1 for any workout
-  const baseGlasses = Math.max(1, Math.ceil(caloriesBurned / 150));
-
-  if (!time) {
-    // No time specified, use base calculation
-    return baseGlasses;
+  if (!caloriesBurned || caloriesBurned <= 0) {
+    return 0;
   }
 
-  // Parse time (HH:MM format)
-  const timeParts = time.split(":");
-  const hours = parseInt(timeParts[0], 10);
-
-  if (isNaN(hours)) {
-    return baseGlasses;
-  }
-
-  let multiplier = 1.0;
-  if (hours < 9) {
-    // Early morning - more time to hydrate throughout the day
-    multiplier = 1.5;
-  } else if (hours < 12) {
-    // Morning
-    multiplier = 1.25;
-  } else if (hours < 17) {
-    // Afternoon - base
-    multiplier = 1.0;
-  } else if (hours < 21) {
-    // Evening - less time remaining
-    multiplier = 0.75;
-  } else {
-    // Night - minimal extra water
-    multiplier = 0.5;
-  }
-
-  // Apply multiplier and round up, minimum 1 glass
-  return Math.max(1, Math.ceil(baseGlasses * multiplier));
+  // 1 glass per 250 calories, minimum 1 for any workout, maximum 2
+  const glasses = Math.ceil(caloriesBurned / 250);
+  return Math.min(2, Math.max(1, glasses));
 };
 
 // Calculate total extra water for all workouts in a day
+// Maximum 4 extra glasses per day from workouts
 export const calculateDayWorkoutWater = (
   workouts: Array<{ caloriesBurned?: number; time?: string }>
 ): number => {
   if (!workouts || workouts.length === 0) return 0;
 
-  return workouts.reduce((total, workout) => {
+  const totalWorkoutWater = workouts.reduce((total, workout) => {
     const calories = parseCalories(workout.caloriesBurned);
     return total + calculateWorkoutWaterGlasses(calories, workout.time);
   }, 0);
+
+  // Cap total workout water at 4 glasses per day
+  return Math.min(4, totalWorkoutWater);
 };
 
 // Calculate base water intake from AI response

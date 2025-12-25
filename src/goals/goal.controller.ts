@@ -19,6 +19,7 @@ import {
 } from "@nestjs/swagger";
 import { GoalService } from "./goal.service";
 import { AuthGuard } from "../auth/auth.guard";
+import { CreateGoalDto, UpdateGoalDto, GenerateGoalDto } from "./dto";
 
 @ApiTags("goals")
 @Controller("goals")
@@ -37,18 +38,6 @@ export class GoalController {
     return this.goalService.findAll(req.user._id.toString());
   }
 
-  @Get("user/:userId")
-  @ApiOperation({ summary: "Get goals by user ID" })
-  @ApiParam({ name: "userId", description: "User ID or 'me' for current user" })
-  @ApiResponse({
-    status: 200,
-    description: "Goals retrieved successfully",
-  })
-  async getGoalsByUserId(@Param("userId") userId: string, @Request() req) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
-    return this.goalService.findByUserId(resolvedUserId);
-  }
-
   @Get(":id")
   @ApiOperation({ summary: "Get goal by ID" })
   @ApiParam({ name: "id", description: "Goal ID" })
@@ -62,90 +51,26 @@ export class GoalController {
   }
 
   @Post()
-  @ApiOperation({ summary: "Create a new goal" })
-  @ApiBody({
-    schema: {
-      type: "object",
-      properties: {
-        goal: { type: "string", example: "Lose 10kg" },
-        description: {
-          type: "string",
-          example: "Lose weight through diet and exercise",
-        },
-        category: { type: "string", example: "weight_loss" },
-        targetDate: { type: "string", format: "date", example: "2024-12-31" },
-        startDate: { type: "string", format: "date", example: "2024-01-01" },
-        target: { type: "number", example: 10 },
-      },
-      required: [
-        "goal",
-        "description",
-        "category",
-        "targetDate",
-        "startDate",
-        "target",
-      ],
-    },
-  })
+  @ApiOperation({ summary: "Create a new goal manually" })
+  @ApiBody({ type: CreateGoalDto })
   @ApiResponse({
     status: 201,
     description: "Goal created successfully",
   })
-  async createGoal(
-    @Request() req,
-    @Body()
-    body: {
-      goal: string;
-      description: string;
-      category: string;
-      targetDate: Date;
-      startDate: Date;
-      target: number;
-    }
-  ) {
+  async createGoal(@Request() req, @Body() body: CreateGoalDto) {
     return this.goalService.create(req.user._id.toString(), body);
   }
 
   @Put(":id")
   @ApiOperation({ summary: "Update a goal" })
   @ApiParam({ name: "id", description: "Goal ID" })
-  @ApiBody({
-    schema: {
-      type: "object",
-      properties: {
-        goal: { type: "string" },
-        description: { type: "string" },
-        category: { type: "string" },
-        targetDate: { type: "string", format: "date" },
-        startDate: { type: "string", format: "date" },
-        target: { type: "number" },
-        progress: { type: "number" },
-        status: {
-          type: "string",
-          enum: ["active", "completed", "archived", "deleted"],
-        },
-      },
-    },
-  })
+  @ApiBody({ type: UpdateGoalDto })
   @ApiResponse({
     status: 200,
     description: "Goal updated successfully",
   })
   @ApiResponse({ status: 404, description: "Goal not found" })
-  async updateGoal(
-    @Param("id") id: string,
-    @Body()
-    body: {
-      goal?: string;
-      description?: string;
-      category?: string;
-      targetDate?: Date;
-      startDate?: Date;
-      target?: number;
-      progress?: number;
-      status?: string;
-    }
-  ) {
+  async updateGoal(@Param("id") id: string, @Body() body: UpdateGoalDto) {
     return this.goalService.update(id, body);
   }
 
@@ -162,43 +87,71 @@ export class GoalController {
   }
 
   @Post("generate")
-  @ApiOperation({ summary: "Generate a goal using AI" })
-  @ApiBody({
-    schema: {
-      type: "object",
-      properties: {
-        description: { type: "string", example: "I want to lose weight" },
-        category: { type: "string", example: "weight_loss" },
-        targetDate: { type: "string", format: "date", example: "2024-12-31" },
-        startDate: { type: "string", format: "date", example: "2024-01-01" },
-        language: { type: "string", example: "en", default: "en" },
-      },
-      required: ["description", "category", "targetDate", "startDate"],
-    },
+  @ApiOperation({
+    summary: "Generate a goal using AI based on rules, workouts, and diet type",
   })
+  @ApiBody({ type: GenerateGoalDto })
   @ApiResponse({
     status: 200,
     description: "Goal generated successfully",
   })
   @ApiResponse({ status: 400, description: "Failed to generate goal" })
-  async generateGoal(
-    @Request() req,
-    @Body()
-    body: {
-      description: string;
-      category: string;
-      targetDate: Date;
-      startDate: Date;
-      language?: string;
-    }
+  async generateGoal(@Request() req, @Body() body: GenerateGoalDto) {
+    return this.goalService.generateGoal(req.user._id.toString(), body);
+  }
+
+  @Post(":id/progress")
+  @ApiOperation({ summary: "Add a progress entry to a goal" })
+  @ApiParam({ name: "id", description: "Goal ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        value: { type: "number", example: 3.5 },
+        date: {
+          type: "string",
+          format: "date",
+          example: "2024-12-13",
+        },
+      },
+      required: ["value"],
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Progress entry added successfully",
+  })
+  @ApiResponse({ status: 404, description: "Goal not found" })
+  async addProgressEntry(
+    @Param("id") id: string,
+    @Body() body: { value: number; date?: string }
   ) {
-    return this.goalService.generateGoal(
-      req.user._id.toString(),
-      body.description,
-      body.category,
-      body.targetDate,
-      body.startDate,
-      body.language
-    );
+    return this.goalService.addProgressEntry(id, body.value, body.date);
+  }
+
+  @Put(":id/milestones/:milestoneId")
+  @ApiOperation({ summary: "Update a milestone completion status" })
+  @ApiParam({ name: "id", description: "Goal ID" })
+  @ApiParam({ name: "milestoneId", description: "Milestone ID" })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        completed: { type: "boolean", example: true },
+      },
+      required: ["completed"],
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Milestone updated successfully",
+  })
+  @ApiResponse({ status: 404, description: "Goal or milestone not found" })
+  async updateMilestone(
+    @Param("id") id: string,
+    @Param("milestoneId") milestoneId: string,
+    @Body() body: { completed: boolean }
+  ) {
+    return this.goalService.updateMilestone(id, milestoneId, body.completed);
   }
 }

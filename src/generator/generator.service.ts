@@ -479,38 +479,13 @@ export class GeneratorService {
     }
 
     // Generate goal using AI (if available) or create structured goal
-    let generatedGoal: any;
-
-    // Try to use AI service if available, otherwise create structured goal
-    if (typeof (aiService as any).generateGoal === "function") {
-      generatedGoal = await (aiService as any).generateGoal(
-        description,
-        category,
-        targetDate,
-        startDate,
-        user,
-        language
-      );
-    } else {
-      // Create structured goal based on user data and criteria
-      const daysDiff = Math.ceil(
-        (targetDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)
-      );
-
-      generatedGoal = {
-        goal: this.formatGoalName(description, category),
-        description: this.generateGoalDescription(
-          description,
-          category,
-          user,
-          daysDiff
-        ),
-        category,
-        targetDate,
-        startDate,
-        target: this.calculateGoalTarget(category, user, daysDiff),
-      };
-    }
+    const generatedGoal = await aiService.generateGoal(
+      description,
+      user.workoutFrequency,
+      user.path,
+      `${targetDate.getTime() - startDate.getTime()}`,
+      language
+    );
 
     return {
       status: "success",
@@ -578,50 +553,5 @@ export class GeneratorService {
         },
       },
     };
-  }
-
-  // Helper methods for goal generation
-  private formatGoalName(description: string, category: string): string {
-    const categoryMap: { [key: string]: string } = {
-      weight_loss: "Lose Weight",
-      muscle_gain: "Build Muscle",
-      fitness: "Improve Fitness",
-      nutrition: "Better Nutrition",
-      health: "Improve Health",
-    };
-
-    const categoryName = categoryMap[category] || category;
-    return `${categoryName}: ${description}`;
-  }
-
-  private generateGoalDescription(
-    description: string,
-    category: string,
-    user: IUserData,
-    daysDiff: number
-  ): string {
-    const weeks = Math.ceil(daysDiff / 7);
-    return `AI-generated goal for ${user.name || "user"}: ${description}. 
-    Category: ${category}. 
-    Timeline: ${weeks} week${weeks > 1 ? "s" : ""} (${daysDiff} days).
-    Personalized based on your profile: ${user.age} year old ${user.gender}, ${user.height}cm, ${user.weight}kg, following ${user.path} path.`;
-  }
-
-  private calculateGoalTarget(
-    category: string,
-    user: IUserData,
-    daysDiff: number
-  ): number {
-    // Calculate target based on category and user profile
-    switch (category) {
-      case "weight_loss":
-        return Math.round(user.weight * 0.02 * 10); // 2% of weight in kg * 10 for grams
-      case "muscle_gain":
-        return Math.round(user.weight * 0.01 * 10); // 1% of weight in kg * 10
-      case "fitness":
-        return daysDiff; // Number of workouts
-      default:
-        return 100; // Default target
-    }
   }
 }

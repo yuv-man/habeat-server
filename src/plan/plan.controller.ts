@@ -159,7 +159,7 @@ export class PlanController {
     );
   }
 
-  @Post(":planId/snack")
+  @Post(":planId/add-snack")
   @ApiOperation({ summary: "Add a snack to a specific day in the plan" })
   @ApiResponse({
     status: 201,
@@ -198,7 +198,7 @@ export class PlanController {
     );
   }
 
-  @Delete("snack")
+  @Delete(":planId/snack/:date/:snackId")
   @ApiOperation({ summary: "Delete a snack from a specific day in the plan" })
   @ApiResponse({
     status: 200,
@@ -207,12 +207,12 @@ export class PlanController {
   })
   @ApiResponse({ status: 404, description: "Plan, day, or snack not found" })
   @ApiResponse({ status: 400, description: "Invalid snack index" })
-  async deleteSnack(@Request() req, @Body() body: DeleteSnackDto) {
-    return this.planService.deleteSnack(
-      req.user._id.toString(),
-      body.day,
-      body.snackIndex
-    );
+  async deleteSnack(
+    @Param("planId") planId: string,
+    @Param("date") date: string,
+    @Param("snackId") snackId: string
+  ) {
+    return this.planService.deleteSnack(planId, date, snackId);
   }
 
   @Delete(":userId/workout/:date/:workoutName")

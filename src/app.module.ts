@@ -24,6 +24,15 @@ import { ShoppingModule } from "./shopping/shopping.module";
       {
         dbName: "habeat",
         authSource: "admin",
+        // Connection pool optimization
+        maxPoolSize: 10,
+        minPoolSize: 2,
+        // Timeouts
+        serverSelectionTimeoutMS: 5000,
+        socketTimeoutMS: 45000,
+        // Retry configuration
+        retryWrites: true,
+        retryReads: true,
       }
     ),
     AuthModule,

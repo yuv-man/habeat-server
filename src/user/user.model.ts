@@ -43,11 +43,11 @@ const userSchemaDefinition = {
   oauthId: { type: String, required: false }, // OAuth provider's user ID
 };
 
-// Export schema for NestJS - All fields optional for debugging
+// Export schema for NestJS
 export const UserSchema = new Schema(userSchemaDefinition, {
   timestamps: true,
   versionKey: false,
-  strict: false, // Allow fields not defined in schema
+  strict: true, // Prevent arbitrary data injection - only allow defined fields
   collection: "users",
 });
 
@@ -81,3 +81,9 @@ UserSchema.methods.comparePassword = async function (
   }
   return bcrypt.compare(candidatePassword, (this as any).password);
 };
+
+// Index for email lookups (unique)
+UserSchema.index({ email: 1 }, { unique: true, sparse: true });
+
+// Index for OAuth lookups
+UserSchema.index({ oauthProvider: 1, oauthId: 1 });

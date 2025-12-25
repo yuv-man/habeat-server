@@ -23,6 +23,8 @@ import {
   getValidObjectId,
   convertAIIngredientsToMealFormat,
   MealIngredient,
+  getLocalDateKey,
+  escapeRegex,
 } from "../utils/helpers";
 import {
   IDayPlan,
@@ -80,7 +82,7 @@ export class PlanService {
     if (!mealName) return null;
 
     const query: any = {
-      name: { $regex: new RegExp(`^${mealName}$`, "i") },
+      name: { $regex: new RegExp(`^${escapeRegex(mealName)}$`, "i") },
     };
 
     if (category) {
@@ -144,7 +146,7 @@ export class PlanService {
     );
 
     // Get user dietary restrictions
-    const user = await this.userModel.findById(userId).lean().exec();
+    const user = await this.userModel.findById(userId).select('dietaryRestrictions foodPreferences dislikes').lean().exec();
     const dietaryRestrictions = (user as any)?.dietaryRestrictions || [];
     const preferences = (user as any)?.foodPreferences || [];
     const dislikes = (user as any)?.dislikes || [];
@@ -310,14 +312,6 @@ export class PlanService {
     return monday;
   }
 
-  // Helper to get local date key in YYYY-MM-DD format (avoids timezone issues with toISOString which uses UTC)
-  private getLocalDateKey(date: Date): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  }
-
   // Helper to calculate meal signature for deduplication
   private calculateMealSignature(meal: any): string {
     const ingredientsStr = Array.isArray(meal.ingredients)
@@ -343,7 +337,7 @@ export class PlanService {
         $or: [
           { "analytics.signature": signature },
           {
-            name: { $regex: new RegExp(`^${mealData.name}$`, "i") },
+            name: { $regex: new RegExp(`^${escapeRegex(mealData.name)}$`, "i") },
             category: mealData.category,
             calories: {
               $gte: (mealData.calories || 0) - 50,
@@ -402,28 +396,30 @@ export class PlanService {
   }
 
   // Helper to process all meals in a day plan and ensure they're in DB
+  // Optimized: All DB operations run in parallel instead of sequentially
   private async processMealsForDayPlan(dayPlan: any): Promise<any> {
-    const breakfast = await this.ensureMealInDB(
-      dayPlan?.meals?.breakfast
-        ? { ...dayPlan.meals.breakfast, category: "breakfast" }
-        : null
-    );
-    const lunch = await this.ensureMealInDB(
-      dayPlan?.meals?.lunch
-        ? { ...dayPlan.meals.lunch, category: "lunch" }
-        : null
-    );
-    const dinner = await this.ensureMealInDB(
-      dayPlan?.meals?.dinner
-        ? { ...dayPlan.meals.dinner, category: "dinner" }
-        : null
-    );
+    // Prepare all meal data
+    const breakfastData = dayPlan?.meals?.breakfast
+      ? { ...dayPlan.meals.breakfast, category: "breakfast" }
+      : null;
+    const lunchData = dayPlan?.meals?.lunch
+      ? { ...dayPlan.meals.lunch, category: "lunch" }
+      : null;
+    const dinnerData = dayPlan?.meals?.dinner
+      ? { ...dayPlan.meals.dinner, category: "dinner" }
+      : null;
+    const snacksData = (dayPlan?.meals?.snacks || []).map((snack: any) => ({
+      ...snack,
+      category: "snack",
+    }));
 
-    const snacks = await Promise.all(
-      (dayPlan?.meals?.snacks || []).map((snack: any) =>
-        this.ensureMealInDB({ ...snack, category: "snack" })
-      )
-    );
+    // Run all DB operations in parallel
+    const [breakfast, lunch, dinner, ...snacks] = await Promise.all([
+      this.ensureMealInDB(breakfastData),
+      this.ensureMealInDB(lunchData),
+      this.ensureMealInDB(dinnerData),
+      ...snacksData.map((snack: any) => this.ensureMealInDB(snack)),
+    ]);
 
     return {
       breakfast,
@@ -734,14 +730,14 @@ export class PlanService {
   }
 
   async getCurrentWeeklyPlan(userId: string) {
-    const user = await this.userModel.findById(userId);
+    const user = await this.userModel.findById(userId).lean();
     if (!user) {
       throw new NotFoundException("User not found");
     }
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const todayKey = this.getLocalDateKey(today); // Use local date, not UTC
+    const todayKey = getLocalDateKey(today); // Use local date, not UTC
     const currentDay = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
 
     logger.info(
@@ -1225,15 +1221,18 @@ export class PlanService {
 
     Object.assign(dayPlan.workouts[workoutIndex], workoutData);
 
-    // Update day plan water intake if calories changed
+    // Update day plan water intake if calories changed (min 8, max 12)
     if (waterDiff !== 0) {
-      dayPlan.waterIntake = Math.max(8, (dayPlan.waterIntake || 8) + waterDiff);
+      dayPlan.waterIntake = Math.min(
+        12,
+        Math.max(8, (dayPlan.waterIntake || 8) + waterDiff)
+      );
     }
 
     await plan.save();
 
     // If the workout is for today, also update progress
-    const todayKey = this.getLocalDateKey(new Date());
+    const todayKey = getLocalDateKey(new Date());
     if (dateKey === todayKey) {
       const progress = await this.progressModel.findOne({
         userId,
@@ -1343,21 +1342,25 @@ export class PlanService {
 
     dayPlan.workouts.push(workout);
 
-    // Calculate extra water needed based on workout calories and time
+    // Calculate extra water needed based on workout calories
     const extraWaterGlasses = calculateWorkoutWaterGlasses(
       parsedCaloriesBurned,
       time
     );
 
-    // Update day plan water intake goal
-    dayPlan.waterIntake = (dayPlan.waterIntake || 8) + extraWaterGlasses;
+    // Update day plan water intake goal (cap at 12 glasses max)
+    const MAX_WATER_GLASSES = 12;
+    dayPlan.waterIntake = Math.min(
+      MAX_WATER_GLASSES,
+      (dayPlan.waterIntake || 8) + extraWaterGlasses
+    );
 
     // Mark weeklyPlan as modified so Mongoose saves the nested changes
     plan.markModified("weeklyPlan");
     await plan.save();
 
     // If the workout is for today, also add to progress
-    const todayKey = this.getLocalDateKey(new Date());
+    const todayKey = getLocalDateKey(new Date());
     if (dateKey === todayKey) {
       const progress = await this.progressModel.findOne({
         userId,
@@ -1380,8 +1383,11 @@ export class PlanService {
         // Add workout calories to daily calorie goal (you need to eat more to compensate)
         (progress as any).caloriesGoal += parsedCaloriesBurned;
 
-        // Add extra water to goal
-        (progress as any).water.goal += extraWaterGlasses;
+        // Add extra water to goal (cap at 12 glasses max)
+        (progress as any).water.goal = Math.min(
+          MAX_WATER_GLASSES,
+          (progress as any).water.goal + extraWaterGlasses
+        );
 
         await progress.save();
         logger.info(
@@ -1430,29 +1436,61 @@ export class PlanService {
       dayPlan.meals.snacks = [];
     }
 
-    const snackData = await aiService.generateSnack(
-      snackName,
-      dietaryRestrictions,
-      language
-    );
-
-    const snack: IMeal = {
-      _id: new mongoose.Types.ObjectId().toString(),
-      name: snackName,
+    // Check if snack already exists in meal database
+    const existingSnack = await this.mealModel.findOne({
+      name: { $regex: new RegExp(`^${escapeRegex(snackName)}$`, "i") },
       category: "snack",
-      calories: snackData.calories,
-      macros: {
-        protein: snackData.macros?.protein || 0,
-        carbs: snackData.macros?.carbs || 0,
-        fat: snackData.macros?.fat || 0,
-      },
-      ingredients: snackData.ingredients || [],
-      prepTime: 0,
-    };
+    });
+
+    let snack: IMeal;
+
+    if (existingSnack) {
+      // Use existing snack from database
+      snack = {
+        _id: existingSnack._id.toString(),
+        name: existingSnack.name,
+        category: "snack",
+        calories: existingSnack.calories,
+        macros: {
+          protein: existingSnack.macros?.protein || 0,
+          carbs: existingSnack.macros?.carbs || 0,
+          fat: existingSnack.macros?.fat || 0,
+        },
+        ingredients: existingSnack.ingredients || [],
+        prepTime: existingSnack.prepTime || 0,
+      };
+    } else {
+      // Generate new snack via AI
+      const snackData = await aiService.generateSnack(
+        snackName,
+        dietaryRestrictions,
+        language
+      );
+
+      snack = {
+        _id: new mongoose.Types.ObjectId().toString(),
+        name: snackName,
+        category: "snack",
+        calories: snackData.calories,
+        macros: {
+          protein: snackData.macros?.protein || 0,
+          carbs: snackData.macros?.carbs || 0,
+          fat: snackData.macros?.fat || 0,
+        },
+        ingredients: snackData.ingredients || [],
+        prepTime: 0,
+      };
+
+      // Save the new snack to database for future use
+      await this.mealModel.create({
+        ...snack,
+        _id: new mongoose.Types.ObjectId(snack._id),
+      });
+    }
 
     dayPlan.meals.snacks.push(snack);
 
-    const todayKey = this.getLocalDateKey(new Date());
+    const todayKey = getLocalDateKey(new Date());
     if (dateKey === todayKey) {
       const progress = await this.progressModel.findOne({
         userId: plan.userId,
@@ -1484,13 +1522,13 @@ export class PlanService {
     };
   }
 
-  async deleteSnack(userId: string, day: string, snackIndex: number) {
-    const plan = await this.planModel.findOne({ userId });
+  async deleteSnack(planId: string, date: string, snackId: string) {
+    const plan = await this.planModel.findById(planId);
     if (!plan) {
       throw new NotFoundException("Plan not found");
     }
 
-    const dateKey = this.getDateKey(day, plan);
+    const dateKey = this.getDateKey(date, plan);
     const weeklyPlan = plan.weeklyPlan || {};
     const dayPlan = weeklyPlan[dateKey];
 
@@ -1502,13 +1540,14 @@ export class PlanService {
       throw new NotFoundException("No snacks found for this day");
     }
 
-    if (snackIndex < 0 || snackIndex >= dayPlan.meals.snacks.length) {
-      throw new NotFoundException(
-        `Snack not found at index ${snackIndex}. Available indices: 0-${dayPlan.meals.snacks.length - 1}`
-      );
+    const snack = dayPlan.meals.snacks.find(
+      (s: any) => s._id.toString() === snackId
+    );
+    if (!snack) {
+      throw new NotFoundException(`Snack ${snackId} not found`);
     }
 
-    dayPlan.meals.snacks.splice(snackIndex, 1);
+    dayPlan.meals.snacks.splice(dayPlan.meals.snacks.indexOf(snack), 1);
 
     // Mark weeklyPlan as modified so Mongoose saves the nested changes
     plan.markModified("weeklyPlan");
@@ -1516,7 +1555,30 @@ export class PlanService {
 
     // Sync shopping list with updated plan
     await this.syncShoppingListWithPlan(
-      userId,
+      plan.userId.toString(),
+      plan._id as mongoose.Types.ObjectId,
+      weeklyPlan
+    );
+
+    // If the snack is for today, also remove from progress
+    const todayKey = getLocalDateKey(new Date());
+    if (dateKey === todayKey) {
+      const progress = await this.progressModel.findOne({
+        userId: plan.userId.toString(),
+        dateKey: todayKey,
+      });
+      if (progress) {
+        (progress as any).meals.snacks.splice(
+          (progress as any).meals.snacks.indexOf(snack),
+          1
+        );
+        await progress.save();
+      }
+    }
+
+    // Sync shopping list with updated plan
+    await this.syncShoppingListWithPlan(
+      plan.userId.toString(),
       plan._id as mongoose.Types.ObjectId,
       weeklyPlan
     );
@@ -1575,7 +1637,7 @@ export class PlanService {
     await plan.save();
 
     // If the workout is for today, also remove from progress
-    const todayKey = this.getLocalDateKey(new Date());
+    const todayKey = getLocalDateKey(new Date());
     if (dateKey === todayKey) {
       const progress = await this.progressModel.findOne({
         userId,
@@ -1630,7 +1692,7 @@ export class PlanService {
   }
 
   async getDayPlan(userId: string, day: string) {
-    const plan = await this.planModel.findOne({ userId });
+    const plan = await this.planModel.findOne({ userId }).lean();
     if (!plan) {
       throw new NotFoundException("Plan not found");
     }
@@ -1658,7 +1720,7 @@ export class PlanService {
   ) {
     // This method should not modify the plan - tracking is done in progress
     // But keeping for backward compatibility, it will just return the plan
-    const plan = await this.planModel.findOne({ userId });
+    const plan = await this.planModel.findOne({ userId }).lean();
     if (!plan) {
       throw new NotFoundException("Plan not found");
     }

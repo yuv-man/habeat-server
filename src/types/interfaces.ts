@@ -266,16 +266,31 @@ export interface IRecipe extends Document {
   usageCount: number; // Track how often this recipe is requested
 }
 
+export interface IMilestone {
+  id?: string;
+  title: string;
+  targetValue: number;
+  completed?: boolean;
+  completedDate?: string;
+}
+
+export interface IProgressHistory {
+  date: string;
+  value: number;
+}
+
 export interface IGoal extends Document {
   userId: mongoose.Types.ObjectId;
-  goal: string;
+  title: string;
   description: string;
-  category: string;
-  targetDate: Date;
-  startDate: Date;
-  progress: number;
-  status: string;
+  current: number;
   target: number;
+  unit: string;
+  icon?: string;
+  status: "active" | "achieved" | "in_progress" | "paused";
+  startDate: string;
+  milestones: IMilestone[];
+  progressHistory: IProgressHistory[];
   createdAt: Date;
   updatedAt: Date;
 }

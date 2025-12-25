@@ -434,7 +434,7 @@ const generateMealPlanWithGemini = async (
 ): Promise<MealPlanResponse> => {
   if (!apiKey.startsWith("AIza") || apiKey.length < 39) {
     logger.warn(
-      `GEMINI_API_KEY format may be invalid. Expected: "AIza..." (length 39+). Got: ${apiKey.substring(0, 4)}... (length: ${apiKey.length})`
+      `GEMINI_API_KEY format may be invalid. Expected format: "AIza..." with length 39+. Current length: ${apiKey.length}`
     );
   }
 
@@ -1423,6 +1423,95 @@ Return ONLY valid JSON matching this EXACT structure:
   });
 };
 
+const generateGoal = async (
+  aiRules: string,
+  numberOfWorkouts: number,
+  dietType: string,
+  timeframe: string = "3 months",
+  language: string = "en"
+): Promise<{
+  title: string;
+  description: string;
+  target: number;
+  unit: string;
+  icon: string;
+  milestones: Array<{
+    id: string;
+    title: string;
+    targetValue: number;
+    completed: boolean;
+  }>;
+  startDate: string;
+}> => {
+  const prompt = `You are a fitness and nutrition coach. Generate a structured goal based on the following criteria:
+
+## User Requirements:
+- Goal description: ${aiRules}
+- Number of workouts per week: ${numberOfWorkouts}
+- Diet type: ${dietType}
+- Timeframe: ${timeframe}
+- Language: ${language}
+
+## Response Format (JSON):
+Return ONLY valid JSON matching this EXACT structure:
+{
+  "title": "Goal title (e.g., 'Run 5K', 'Lose 10kg', 'Build Muscle')",
+  "description": "Detailed description of the goal",
+  "target": <number>,
+  "unit": "Unit of measurement (e.g., 'km', 'kg', 'lbs', 'reps', 'minutes')",
+  "icon": "Icon name (e.g., 'run', 'weight', 'muscle', 'heart')",
+  "milestones": [
+    {
+      "id": "m1",
+      "title": "First milestone description",
+      "targetValue": <number>,
+      "completed": false
+    },
+    {
+      "id": "m2",
+      "title": "Second milestone description",
+      "targetValue": <number>,
+      "completed": false
+    }
+  ]
+}
+
+## Guidelines:
+- Create 3-5 meaningful milestones that break down the main goal
+- Milestones should be progressive (each one harder than the previous)
+- Target value should be realistic based on the goal description
+- Unit should match the goal type (km for running, kg for weight, etc.)
+- Icon should be relevant to the goal type
+- All milestone IDs should be unique (m1, m2, m3, etc.)
+- All milestones should have completed: false initially
+
+Return ONLY valid JSON, no additional text.`;
+
+  const parseResponse = (jsonText: string) => {
+    const goalData = JSON.parse(jsonText);
+    return {
+      title: goalData.title,
+      description: goalData.description,
+      target: goalData.target,
+      unit: goalData.unit,
+      icon: goalData.icon || "target",
+      milestones: (goalData.milestones || []).map((m: any, index: number) => ({
+        id: m.id || `m${index + 1}`,
+        title: m.title,
+        targetValue: m.targetValue,
+        completed: false,
+      })),
+      startDate: new Date().toISOString().split("T")[0],
+    };
+  };
+
+  return generateWithFallback(prompt, parseResponse, {
+    timeoutMs: 60000,
+    maxRetries: 3,
+    context: "GenerateGoal",
+  });
+};
+
 const aiService = {
   generateMealPlanWithAI,
   generateRecipeDetails,
@@ -1430,6 +1519,7 @@ const aiService = {
   generateMealPlanWithLlama2,
   generateMealSuggestions,
   generateSnack,
+  generateGoal,
 };
 
 export default aiService;

@@ -79,10 +79,14 @@ export class AuthGuard implements CanActivate {
     }
 
     try {
+      const jwtSecret = this.configService.get<string>("JWT_SECRET");
+      if (!jwtSecret) {
+        logger.error("JWT_SECRET environment variable is not configured");
+        throw new UnauthorizedException("Server configuration error");
+      }
+
       const payload = await this.jwtService.verifyAsync<JwtPayload>(token, {
-        secret:
-          this.configService.get<string>("JWT_SECRET") ||
-          "default-secret-key-change-in-production",
+        secret: jwtSecret,
       });
 
       const user = await this.userModel

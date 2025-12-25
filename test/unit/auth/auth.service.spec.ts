@@ -246,7 +246,6 @@ describe("AuthService", () => {
         "http://localhost:5000/callback",
         "http://localhost:8080/auth"
       );
-
       expect(result).toBe("https://google.com/auth");
     });
   });

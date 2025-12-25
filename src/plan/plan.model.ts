@@ -130,4 +130,10 @@ const planSchema = new Schema<IPlan>(
   }
 );
 
+// Index for userId lookups (unique constraint already defined in schema)
+planSchema.index({ userId: 1 });
+
+// Index for timestamp-based queries
+planSchema.index({ createdAt: -1 });
+
 export const PlanSchema = planSchema;
