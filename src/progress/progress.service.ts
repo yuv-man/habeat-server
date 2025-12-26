@@ -730,6 +730,134 @@ export class ProgressService {
     };
   }
 
+  async getAnalytics(userId: string, period: "week" | "month" = "week") {
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+
+    let startDate: Date;
+    if (period === "week") {
+      // Last 7 days
+      startDate = new Date(today);
+      startDate.setDate(today.getDate() - 6);
+      startDate.setHours(0, 0, 0, 0);
+    } else {
+      // Last 30 days
+      startDate = new Date(today);
+      startDate.setDate(today.getDate() - 29);
+      startDate.setHours(0, 0, 0, 0);
+    }
+
+    // Get user's plan for target values
+    const plan = await this.planModel.findOne({ userId }).lean();
+    const targetCalories = Math.round(plan?.userMetrics?.tdee || 2000);
+    const targetProtein = Math.round(plan?.userMetrics?.dailyMacros?.protein || 150);
+    const targetCarbs = Math.round(plan?.userMetrics?.dailyMacros?.carbs || 250);
+    const targetFat = Math.round(plan?.userMetrics?.dailyMacros?.fat || 65);
+    const targetWater = 8;
+
+    // Get all progress records in range
+    const progressList = await this.progressModel
+      .find({
+        userId,
+        date: {
+          $gte: startDate,
+          $lte: today,
+        },
+      })
+      .lean()
+      .sort({ date: 1 });
+
+    // Calculate totals
+    const daysTracked = progressList.length;
+    const totalDays = period === "week" ? 7 : 30;
+
+    const totals = progressList.reduce(
+      (acc, p: any) => ({
+        calories: acc.calories + (p.caloriesConsumed || 0),
+        protein: acc.protein + (p.protein?.consumed || 0),
+        carbs: acc.carbs + (p.carbs?.consumed || 0),
+        fat: acc.fat + (p.fat?.consumed || 0),
+        water: acc.water + (p.water?.consumed || 0),
+        workoutsCompleted: acc.workoutsCompleted + (p.workouts?.filter((w: any) => w.done)?.length || 0),
+        workoutsTotal: acc.workoutsTotal + (p.workouts?.length || 0),
+        caloriesBurned: acc.caloriesBurned + (p.workouts?.reduce((sum: number, w: any) =>
+          sum + (w.done ? (w.caloriesBurned || 0) : 0), 0) || 0),
+      }),
+      { calories: 0, protein: 0, carbs: 0, fat: 0, water: 0, workoutsCompleted: 0, workoutsTotal: 0, caloriesBurned: 0 }
+    );
+
+    // Calculate averages
+    const avgCalories = daysTracked > 0 ? Math.round(totals.calories / daysTracked) : 0;
+    const avgProtein = daysTracked > 0 ? Math.round(totals.protein / daysTracked) : 0;
+    const avgCarbs = daysTracked > 0 ? Math.round(totals.carbs / daysTracked) : 0;
+    const avgFat = daysTracked > 0 ? Math.round(totals.fat / daysTracked) : 0;
+    const avgWater = daysTracked > 0 ? Math.round((totals.water / daysTracked) * 10) / 10 : 0;
+
+    // Calculate goal percentages
+    const caloriesGoalPercentage = targetCalories > 0 ? Math.round((avgCalories / targetCalories) * 100) : 0;
+    const proteinGoalPercentage = targetProtein > 0 ? Math.round((avgProtein / targetProtein) * 100) : 0;
+    const carbsGoalPercentage = targetCarbs > 0 ? Math.round((avgCarbs / targetCarbs) * 100) : 0;
+    const fatGoalPercentage = targetFat > 0 ? Math.round((avgFat / targetFat) * 100) : 0;
+    const waterGoalPercentage = targetWater > 0 ? Math.round((avgWater / targetWater) * 100) : 0;
+
+    // Daily breakdown for charts
+    const dailyData = progressList.map((p: any) => ({
+      date: p.date,
+      dateKey: p.dateKey || this.getLocalDateKey(new Date(p.date)),
+      calories: p.caloriesConsumed || 0,
+      caloriesGoal: p.caloriesGoal || targetCalories,
+      protein: p.protein?.consumed || 0,
+      carbs: p.carbs?.consumed || 0,
+      fat: p.fat?.consumed || 0,
+      water: p.water?.consumed || 0,
+      workoutsCompleted: p.workouts?.filter((w: any) => w.done)?.length || 0,
+      workoutsTotal: p.workouts?.length || 0,
+    }));
+
+    return {
+      success: true,
+      data: {
+        period,
+        startDate,
+        endDate: today,
+        daysTracked,
+        totalDays,
+        targets: {
+          calories: targetCalories,
+          protein: targetProtein,
+          carbs: targetCarbs,
+          fat: targetFat,
+          water: targetWater,
+        },
+        totals: {
+          calories: Math.round(totals.calories),
+          protein: Math.round(totals.protein),
+          carbs: Math.round(totals.carbs),
+          fat: Math.round(totals.fat),
+          water: totals.water,
+          workoutsCompleted: totals.workoutsCompleted,
+          workoutsTotal: totals.workoutsTotal,
+          caloriesBurned: Math.round(totals.caloriesBurned),
+        },
+        averages: {
+          calories: avgCalories,
+          protein: avgProtein,
+          carbs: avgCarbs,
+          fat: avgFat,
+          water: avgWater,
+        },
+        goalPercentages: {
+          calories: caloriesGoalPercentage,
+          protein: proteinGoalPercentage,
+          carbs: carbsGoalPercentage,
+          fat: fatGoalPercentage,
+          water: waterGoalPercentage,
+        },
+        dailyData,
+      },
+    };
+  }
+
   async createProgressFromPlan(
     userId: string,
     date: Date,

@@ -134,4 +134,14 @@ export class ProgressController {
     const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
     return this.progressService.getWeeklySummary(resolvedUserId);
   }
+
+  @Get("analytics/:userId")
+  async getAnalytics(
+    @Param("userId") userId: string,
+    @Query("period") period: "week" | "month" = "week",
+    @Request() req
+  ) {
+    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    return this.progressService.getAnalytics(resolvedUserId, period);
+  }
 }

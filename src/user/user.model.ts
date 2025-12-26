@@ -11,7 +11,7 @@ const userSchemaDefinition = {
   email: { type: String, required: false },
   password: { type: String, required: false }, // Add password field for OAuth users
   phone: { type: String, required: false },
-  picture: { type: String, required: false },
+  profilePicture: { type: String, required: false },
   age: { type: Number, required: false },
   gender: { type: String, required: false },
   height: { type: Number, required: false },
