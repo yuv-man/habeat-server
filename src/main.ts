@@ -39,12 +39,41 @@ async function bootstrap() {
     allowedOrigins.push(process.env.PROD_CLIENT_SITE);
   }
 
+  // Use function-based origin to properly handle preflight requests
   app.enableCors({
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      if (!origin) {
+        return callback(null, true);
+      }
+
+      // Check if origin is in allowed list
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      // For development, also allow any localhost origin
+      if (
+        origin.startsWith("http://localhost:") ||
+        origin.startsWith("https://localhost:")
+      ) {
+        return callback(null, true);
+      }
+
+      // Reject other origins
+      return callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "Accept"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "Accept",
+      "X-Requested-With",
+    ],
     exposedHeaders: ["Authorization"],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
   });
 
   // Global validation pipe
