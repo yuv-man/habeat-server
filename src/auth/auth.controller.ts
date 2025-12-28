@@ -154,13 +154,23 @@ export class AuthController {
     }
 
     // Set CORS headers
-    const isDevelopment = process.env.NODE_ENV !== "production";
-    const clientUrl = isDevelopment
-      ? process.env.DEV_CLIENT_SITE
-      : process.env.PROD_CLIENT_SITE;
-    const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
-    if (clientUrl) {
-      allowedOrigins.push(clientUrl);
+    // Always allow localhost for local development/testing
+    // Also allow both DEV and PROD client sites regardless of environment
+    const allowedOrigins = [
+      "http://localhost:8080",
+      "http://localhost:8081",
+      "http://localhost:3000",
+      "http://localhost:3001",
+    ];
+
+    // Add DEV_CLIENT_SITE if set
+    if (process.env.DEV_CLIENT_SITE) {
+      allowedOrigins.push(process.env.DEV_CLIENT_SITE);
+    }
+
+    // Add PROD_CLIENT_SITE if set
+    if (process.env.PROD_CLIENT_SITE) {
+      allowedOrigins.push(process.env.PROD_CLIENT_SITE);
     }
     const origin = req.headers.origin;
     if (origin && allowedOrigins.includes(origin)) {
@@ -251,13 +261,23 @@ export class AuthController {
     }
 
     // Set CORS headers
-    const isDevelopment = process.env.NODE_ENV !== "production";
-    const clientUrl = isDevelopment
-      ? process.env.DEV_CLIENT_SITE
-      : process.env.PROD_CLIENT_SITE;
-    const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
-    if (clientUrl) {
-      allowedOrigins.push(clientUrl);
+    // Always allow localhost for local development/testing
+    // Also allow both DEV and PROD client sites regardless of environment
+    const allowedOrigins = [
+      "http://localhost:8080",
+      "http://localhost:8081",
+      "http://localhost:3000",
+      "http://localhost:3001",
+    ];
+
+    // Add DEV_CLIENT_SITE if set
+    if (process.env.DEV_CLIENT_SITE) {
+      allowedOrigins.push(process.env.DEV_CLIENT_SITE);
+    }
+
+    // Add PROD_CLIENT_SITE if set
+    if (process.env.PROD_CLIENT_SITE) {
+      allowedOrigins.push(process.env.PROD_CLIENT_SITE);
     }
     const origin = req.headers.origin;
     if (origin && allowedOrigins.includes(origin)) {
@@ -344,13 +364,23 @@ export class AuthController {
     const { userId, accessToken } = body;
 
     // Set CORS headers
-    const isDevelopment = process.env.NODE_ENV !== "production";
-    const clientUrl = isDevelopment
-      ? process.env.DEV_CLIENT_SITE
-      : process.env.PROD_CLIENT_SITE;
-    const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
-    if (clientUrl) {
-      allowedOrigins.push(clientUrl);
+    // Always allow localhost for local development/testing
+    // Also allow both DEV and PROD client sites regardless of environment
+    const allowedOrigins = [
+      "http://localhost:8080",
+      "http://localhost:8081",
+      "http://localhost:3000",
+      "http://localhost:3001",
+    ];
+
+    // Add DEV_CLIENT_SITE if set
+    if (process.env.DEV_CLIENT_SITE) {
+      allowedOrigins.push(process.env.DEV_CLIENT_SITE);
+    }
+
+    // Add PROD_CLIENT_SITE if set
+    if (process.env.PROD_CLIENT_SITE) {
+      allowedOrigins.push(process.env.PROD_CLIENT_SITE);
     }
     const origin = req.headers.origin;
     if (origin && allowedOrigins.includes(origin)) {
@@ -403,13 +433,23 @@ export class AuthController {
     @Res() res: Response
   ) {
     // Set CORS headers before redirect
-    const isDevelopment = process.env.NODE_ENV !== "production";
-    const clientUrl = isDevelopment
-      ? process.env.DEV_CLIENT_SITE
-      : process.env.PROD_CLIENT_SITE;
-    const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
-    if (clientUrl) {
-      allowedOrigins.push(clientUrl);
+    // Always allow localhost for local development/testing
+    // Also allow both DEV and PROD client sites regardless of environment
+    const allowedOrigins = [
+      "http://localhost:8080",
+      "http://localhost:8081",
+      "http://localhost:3000",
+      "http://localhost:3001",
+    ];
+
+    // Add DEV_CLIENT_SITE if set
+    if (process.env.DEV_CLIENT_SITE) {
+      allowedOrigins.push(process.env.DEV_CLIENT_SITE);
+    }
+
+    // Add PROD_CLIENT_SITE if set
+    if (process.env.PROD_CLIENT_SITE) {
+      allowedOrigins.push(process.env.PROD_CLIENT_SITE);
     }
     const origin = req.headers.origin;
     if (origin && allowedOrigins.includes(origin)) {

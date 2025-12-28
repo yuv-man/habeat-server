@@ -20,15 +20,23 @@ async function bootstrap() {
   expressApp.use(express.urlencoded({ limit: "10mb", extended: true }));
 
   // Enable CORS
-  const isDevelopment = process.env.NODE_ENV !== "production";
-  const clientUrl = isDevelopment
-    ? process.env.DEV_CLIENT_SITE
-    : process.env.PROD_CLIENT_SITE;
+  // Always allow localhost for local development/testing
+  // Also allow both DEV and PROD client sites regardless of environment
+  const allowedOrigins = [
+    "http://localhost:8080",
+    "http://localhost:8081",
+    "http://localhost:3000",
+    "http://localhost:3001",
+  ];
 
-  const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
+  // Add DEV_CLIENT_SITE if set
+  if (process.env.DEV_CLIENT_SITE) {
+    allowedOrigins.push(process.env.DEV_CLIENT_SITE);
+  }
 
-  if (clientUrl) {
-    allowedOrigins.push(clientUrl);
+  // Add PROD_CLIENT_SITE if set
+  if (process.env.PROD_CLIENT_SITE) {
+    allowedOrigins.push(process.env.PROD_CLIENT_SITE);
   }
 
   app.enableCors({
