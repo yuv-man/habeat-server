@@ -62,7 +62,7 @@ const planSchema = new Schema<IPlan>(
       type: Schema.Types.ObjectId,
       ref: "User",
       required: false,
-      unique: true, // Each user can have only ONE plan
+      unique: true, // Each user can have only ONE plan (creates unique index)
     },
     title: {
       type: String,
@@ -130,8 +130,8 @@ const planSchema = new Schema<IPlan>(
   }
 );
 
-// Index for userId lookups (unique constraint already defined in schema)
-planSchema.index({ userId: 1 });
+// Note: userId already has a unique index from unique: true above
+// No need for additional index
 
 // Index for timestamp-based queries
 planSchema.index({ createdAt: -1 });
