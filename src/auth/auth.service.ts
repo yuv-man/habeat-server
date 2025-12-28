@@ -514,14 +514,12 @@ export class AuthService {
       throw new UnauthorizedException("Unauthorized");
     }
     const plan = await this.planModel.findOne({ userId: user._id });
-    if (!plan) {
-      throw new UnauthorizedException("Unauthorized");
-    }
+    // Plan may be null for OAuth users who haven't completed onboarding
     return {
       status: "success",
       data: {
         user: user,
-        plan: plan,
+        plan: plan || null,
         token: generateToken(userId),
       },
     };

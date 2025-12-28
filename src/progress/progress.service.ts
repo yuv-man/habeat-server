@@ -204,8 +204,23 @@ export class ProgressService {
         fat: { consumed: 0, goal: Math.round(dailyMacros?.fat || 0) },
       });
     } else {
-      // Progress exists but check if meals are null - populate from plan if so
+      // Progress exists - sync water goal from plan
       const progressDoc = progress as any;
+      const planWaterIntake = dayPlan?.waterIntake || 8;
+      
+      // Always sync water goal from plan (plan is source of truth)
+      if (progressDoc.water?.goal !== planWaterIntake) {
+        progressDoc.water = {
+          ...progressDoc.water,
+          goal: planWaterIntake,
+        };
+        await progressDoc.save();
+        logger.info(
+          `[getTodayProgress] Synced water goal from plan: ${planWaterIntake} glasses`
+        );
+      }
+
+      // Check if meals are null - populate from plan if so
       const needsUpdate =
         !progressDoc.meals?.breakfast &&
         !progressDoc.meals?.lunch &&
@@ -261,20 +276,35 @@ export class ProgressService {
   async getProgressByDate(userId: string, date: string) {
     const targetDate = new Date(date);
     targetDate.setHours(0, 0, 0, 0);
+    const dateKey = this.getLocalDateKey(targetDate);
 
     const progress = await this.progressModel
       .findOne({
         userId,
-        date: {
-          $gte: targetDate,
-          $lt: new Date(targetDate.getTime() + 24 * 60 * 60 * 1000),
-        },
+        dateKey, // Use dateKey for timezone-safe querying
       })
-      .populate("meals.breakfast meals.lunch meals.dinner meals.snacks")
-      .lean();
+      .populate("meals.breakfast meals.lunch meals.dinner meals.snacks");
 
     if (!progress) {
       throw new NotFoundException("Progress not found for this date");
+    }
+
+    // Sync water goal from plan
+    const plan = await this.planModel.findOne({ userId });
+    const weeklyPlan = (plan as any)?.weeklyPlan || {};
+    const dayPlan = weeklyPlan[dateKey];
+    const planWaterIntake = dayPlan?.waterIntake || 8;
+
+    const progressDoc = progress as any;
+    if (progressDoc.water?.goal !== planWaterIntake) {
+      progressDoc.water = {
+        ...progressDoc.water,
+        goal: planWaterIntake,
+      };
+      await progressDoc.save();
+      logger.info(
+        `[getProgressByDate] Synced water goal from plan: ${planWaterIntake} glasses for date ${dateKey}`
+      );
     }
 
     return {

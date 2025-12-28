@@ -146,7 +146,11 @@ export class PlanService {
     );
 
     // Get user dietary restrictions
-    const user = await this.userModel.findById(userId).select('dietaryRestrictions foodPreferences dislikes').lean().exec();
+    const user = await this.userModel
+      .findById(userId)
+      .select("dietaryRestrictions foodPreferences dislikes")
+      .lean()
+      .exec();
     const dietaryRestrictions = (user as any)?.dietaryRestrictions || [];
     const preferences = (user as any)?.foodPreferences || [];
     const dislikes = (user as any)?.dislikes || [];
@@ -337,7 +341,9 @@ export class PlanService {
         $or: [
           { "analytics.signature": signature },
           {
-            name: { $regex: new RegExp(`^${escapeRegex(mealData.name)}$`, "i") },
+            name: {
+              $regex: new RegExp(`^${escapeRegex(mealData.name)}$`, "i"),
+            },
             category: mealData.category,
             calories: {
               $gte: (mealData.calories || 0) - 50,
@@ -1271,19 +1277,14 @@ export class PlanService {
             );
           }
 
-          // Adjust water goal if water needs changed
-          if (waterDiff !== 0) {
-            (progress as any).water.goal = Math.max(
-              8,
-              (progress as any).water.goal + waterDiff
-            );
-          }
+          // Sync water goal from plan (plan is source of truth)
+          (progress as any).water.goal = dayPlan.waterIntake;
 
           await progress.save();
           logger.info(
             `[updateWorkoutInPlan] Updated workout in progress. ` +
               `Calories goal ${caloriesDiff >= 0 ? "+" : ""}${caloriesDiff}, ` +
-              `Water goal ${waterDiff >= 0 ? "+" : ""}${waterDiff} glasses`
+              `Water goal synced to ${dayPlan.waterIntake} glasses`
           );
         }
       }
@@ -1383,16 +1384,13 @@ export class PlanService {
         // Add workout calories to daily calorie goal (you need to eat more to compensate)
         (progress as any).caloriesGoal += parsedCaloriesBurned;
 
-        // Add extra water to goal (cap at 12 glasses max)
-        (progress as any).water.goal = Math.min(
-          MAX_WATER_GLASSES,
-          (progress as any).water.goal + extraWaterGlasses
-        );
+        // Sync water goal from plan (plan is source of truth)
+        (progress as any).water.goal = dayPlan.waterIntake;
 
         await progress.save();
         logger.info(
           `[addWorkout] Added workout to today's progress. ` +
-            `Calories goal +${parsedCaloriesBurned}, Water goal +${extraWaterGlasses} glasses`
+            `Calories goal +${parsedCaloriesBurned}, Water goal synced to ${dayPlan.waterIntake} glasses`
         );
       }
     }
@@ -1666,17 +1664,14 @@ export class PlanService {
             (progress as any).caloriesGoal - workoutCalories
           );
 
-          // Subtract water from goal (don't go below 8)
-          (progress as any).water.goal = Math.max(
-            8,
-            (progress as any).water.goal - waterGlassesToRemove
-          );
+          // Sync water goal from plan (plan is source of truth)
+          (progress as any).water.goal = dayPlan.waterIntake;
 
           (progress as any).workouts.splice(progressWorkoutIndex, 1);
           await progress.save();
           logger.info(
             `[deleteWorkout] Removed workout from progress. ` +
-              `Calories goal -${workoutCalories}, Water goal -${waterGlassesToRemove} glasses`
+              `Calories goal -${workoutCalories}, Water goal synced to ${dayPlan.waterIntake} glasses`
           );
         }
       }

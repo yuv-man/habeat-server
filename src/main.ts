@@ -3,11 +3,21 @@ import { ValidationPipe } from "@nestjs/common";
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 import * as dotenv from "dotenv";
+import * as express from "express";
 
 dotenv.config();
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    bodyParser: true,
+    rawBody: false,
+  });
+
+  // Increase body size limit to handle image uploads (compression will reduce size)
+  // Note: NestJS uses express under the hood, so we can access express app
+  const expressApp = app.getHttpAdapter().getInstance();
+  expressApp.use(express.json({ limit: "10mb" }));
+  expressApp.use(express.urlencoded({ limit: "10mb", extended: true }));
 
   // Enable CORS
   const isDevelopment = process.env.NODE_ENV !== "production";

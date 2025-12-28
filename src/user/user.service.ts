@@ -6,6 +6,7 @@ import { Meal } from "../meal/meal.model";
 import logger from "../utils/logger";
 import mongoose from "mongoose";
 import { IUserData, IMeal } from "../types/interfaces";
+import { compressImage, isBase64Image } from "../utils/imageCompression";
 
 @Injectable()
 export class UserService {
@@ -35,6 +36,28 @@ export class UserService {
   }
 
   async update(id: string, updateData: any) {
+    // Compress profile picture if provided
+    if (updateData.profilePicture && isBase64Image(updateData.profilePicture)) {
+      try {
+        logger.info(`[updateUser] Compressing profile picture for user ${id}`);
+        updateData.profilePicture = await compressImage(
+          updateData.profilePicture,
+          400, // maxWidth
+          400, // maxHeight
+          80,  // quality
+          100  // maxSizeKB
+        );
+        logger.info(
+          `[updateUser] Profile picture compressed successfully for user ${id}`
+        );
+      } catch (error: any) {
+        logger.error(
+          `[updateUser] Error compressing profile picture: ${error.message}`
+        );
+        // Continue with original image if compression fails
+      }
+    }
+
     const user = await this.userModel
       .findByIdAndUpdate(id, updateData, { new: true })
       .lean()

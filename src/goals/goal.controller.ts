@@ -28,17 +28,18 @@ import { CreateGoalDto, UpdateGoalDto, GenerateGoalDto } from "./dto";
 export class GoalController {
   constructor(private goalService: GoalService) {}
 
-  @Get()
+  @Get(":userId")
   @ApiOperation({ summary: "Get all goals for the authenticated user" })
+  @ApiParam({ name: "userId", description: "User ID" })
   @ApiResponse({
     status: 200,
     description: "Goals retrieved successfully",
   })
-  async getGoals(@Request() req) {
+  async getGoals(@Param("userId") userId: string, @Request() req) {
     return this.goalService.findAll(req.user._id.toString());
   }
 
-  @Get(":id")
+  @Get(":userId/goal/:id")
   @ApiOperation({ summary: "Get goal by ID" })
   @ApiParam({ name: "id", description: "Goal ID" })
   @ApiResponse({
@@ -46,7 +47,7 @@ export class GoalController {
     description: "Goal retrieved successfully",
   })
   @ApiResponse({ status: 404, description: "Goal not found" })
-  async getGoalById(@Param("id") id: string) {
+  async getGoalById(@Param("userId") userId: string, @Param("id") id: string) {
     return this.goalService.findById(id);
   }
 

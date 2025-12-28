@@ -102,6 +102,100 @@ export class AuthController {
     return this.authService.getUser(req.user._id.toString());
   }
 
+  @Get("google/signup")
+  @ApiOperation({
+    summary: "Initiate Google OAuth signup",
+    description:
+      "Returns Google OAuth URL for signup. If called via AJAX (Accept: application/json), returns JSON. Otherwise redirects. Requires redirectUri (backend callback) and frontendRedirectUri (where to redirect after auth). Optional prompt parameter: 'select_account' to show account picker, 'consent' to force consent screen (default).",
+  })
+  @ApiResponse({
+    status: 302,
+    description: "Redirects to Google OAuth (when accessed via browser)",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Returns OAuth URL as JSON (when called via AJAX)",
+    schema: {
+      type: "object",
+      properties: {
+        authUrl: { type: "string" },
+      },
+    },
+  })
+  async initiateGoogleSignup(
+    @Query("redirectUri") redirectUri: string,
+    @Query("frontendRedirectUri") frontendRedirectUri: string,
+    @Request() req: any,
+    @Res() res: Response,
+    @Query("format") format?: string,
+    @Query("prompt") prompt?: string
+  ) {
+    if (!redirectUri) {
+      throw new BadRequestException("redirectUri query parameter is required");
+    }
+
+    if (!frontendRedirectUri) {
+      throw new BadRequestException(
+        "frontendRedirectUri query parameter is required"
+      );
+    }
+
+    // Normalize redirectUri to ensure it includes /api prefix
+    try {
+      const redirectUrl = new URL(redirectUri);
+      if (!redirectUrl.pathname.includes("/api/auth/google/callback")) {
+        redirectUrl.pathname = "/api/auth/google/callback";
+        redirectUri = redirectUrl.toString();
+      }
+    } catch (e) {
+      const protocol = req.protocol || "http";
+      const host = req.get("host") || "localhost:5000";
+      redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+    }
+
+    // Set CORS headers
+    const isDevelopment = process.env.NODE_ENV !== "production";
+    const clientUrl = isDevelopment
+      ? process.env.DEV_CLIENT_SITE
+      : process.env.PROD_CLIENT_SITE;
+    const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
+    if (clientUrl) {
+      allowedOrigins.push(clientUrl);
+    }
+    const origin = req.headers.origin;
+    if (origin && allowedOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+      );
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, Accept"
+      );
+    }
+
+    const authUrl = await this.authService.getGoogleSigninUrl(
+      redirectUri,
+      frontendRedirectUri,
+      prompt
+    );
+
+    // Check if this is an AJAX request
+    const acceptHeader = req.headers.accept || "";
+    const isJsonRequest =
+      format === "json" ||
+      acceptHeader.includes("application/json") ||
+      req.headers["x-requested-with"] === "XMLHttpRequest";
+
+    if (isJsonRequest) {
+      res.json({ authUrl });
+    } else {
+      res.redirect(authUrl);
+    }
+  }
+
   @Get("google/signin")
   @ApiOperation({
     summary: "Initiate Google OAuth signin",
@@ -204,17 +298,25 @@ export class AuthController {
   @Post("google/signin")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: "Initiate Google OAuth signin (POST)",
+    summary: "Complete Google OAuth signin",
     description:
-      "Returns Google OAuth URL as JSON. Accepts parameters in request body. Requires redirectUri (backend callback) and frontendRedirectUri (where to redirect after auth). Optional prompt parameter: 'select_account' to show account picker, 'consent' to force consent screen (default).",
+      "Completes the Google OAuth signin flow by looking up the user and returning their data. Called by frontend after receiving token and userId from OAuth callback redirect.",
   })
   @ApiResponse({
     status: 200,
-    description: "Returns OAuth URL as JSON",
+    description: "Returns user data and token",
     schema: {
       type: "object",
       properties: {
-        authUrl: { type: "string" },
+        status: { type: "string", example: "success" },
+        data: {
+          type: "object",
+          properties: {
+            user: { type: "object" },
+            plan: { type: "object" },
+            token: { type: "string" },
+          },
+        },
       },
     },
   })
@@ -222,25 +324,14 @@ export class AuthController {
     schema: {
       type: "object",
       properties: {
-        redirectUri: {
-          type: "string",
-          example: "http://localhost:5000/api/auth/google/callback",
-        },
-        frontendRedirectUri: {
-          type: "string",
-          example:
-            "http://localhost:8080/auth/callback?provider=google&action=signin",
-        },
-        prompt: {
-          type: "string",
-          enum: ["consent", "select_account", "none"],
-          example: "select_account",
-        },
+        provider: { type: "string", example: "google" },
+        userId: { type: "string", example: "user_id_here" },
+        accessToken: { type: "string", example: "jwt_token_here" },
       },
-      required: ["redirectUri", "frontendRedirectUri"],
+      required: ["userId", "accessToken"],
     },
   })
-  async initiateGoogleSigninPost(
+  async completeGoogleSignin(
     @Body()
     body: {
       provider: string;
@@ -250,10 +341,7 @@ export class AuthController {
     @Request() req: any,
     @Res() res: Response
   ) {
-    const { provider, userId, accessToken } = body;
-
-    // Normalize redirectUri to ensure it includes /api prefix
-    const redirectUri = `${req.protocol}://${req.get("host") || "localhost:5000"}/api/auth/google/callback`;
+    const { userId, accessToken } = body;
 
     // Set CORS headers
     const isDevelopment = process.env.NODE_ENV !== "production";
@@ -278,19 +366,19 @@ export class AuthController {
       );
     }
 
-    // this is after i already have token and user id need to find the user in db and return the user
     if (!userId) {
       throw new BadRequestException("userId is required");
     }
+    if (!accessToken) {
+      throw new BadRequestException("accessToken is required");
+    }
+
     const data = await this.authService.getUser(userId);
-    const user = data.data.user;
-    // save the access token to the user
-    user.token = accessToken;
-    await user.save();
+
     res.json({
       status: "success",
       data: {
-        user,
+        user: data.data.user,
         plan: data.data.plan,
         token: accessToken,
       },
@@ -315,11 +403,14 @@ export class AuthController {
     @Res() res: Response
   ) {
     // Set CORS headers before redirect
-    const allowedOrigins = [
-      "http://localhost:8080",
-      "http://localhost:8081",
-      process.env.PROD_CLIENT_SITE,
-    ];
+    const isDevelopment = process.env.NODE_ENV !== "production";
+    const clientUrl = isDevelopment
+      ? process.env.DEV_CLIENT_SITE
+      : process.env.PROD_CLIENT_SITE;
+    const allowedOrigins = ["http://localhost:8080", "http://localhost:8081"];
+    if (clientUrl) {
+      allowedOrigins.push(clientUrl);
+    }
     const origin = req.headers.origin;
     if (origin && allowedOrigins.includes(origin)) {
       res.setHeader("Access-Control-Allow-Origin", origin);
