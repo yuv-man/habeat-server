@@ -4,8 +4,31 @@ import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 import * as dotenv from "dotenv";
 import * as express from "express";
+import mongoose from "mongoose";
+import { getConnectionToken } from "@nestjs/mongoose";
+import logger from "./utils/logger";
 
 dotenv.config();
+
+// Set up MongoDB connection event handlers BEFORE creating the app
+// This ensures we catch connection events from the start
+const mongooseConnection = mongoose.connection;
+mongooseConnection.on("connected", () => {
+  console.log("MongoDB connected successfully");
+  logger.info("MongoDB connected successfully");
+});
+mongooseConnection.on("error", (err) => {
+  console.log("MongoDB connection error:", err);
+  logger.error(`MongoDB connection error: ${err.message}`, err);
+});
+mongooseConnection.on("disconnected", () => {
+  console.log("MongoDB disconnected");
+  logger.warn("MongoDB disconnected");
+});
+mongooseConnection.on("connecting", () => {
+  console.log("MongoDB connecting...");
+  logger.info("MongoDB connecting...");
+});
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -118,6 +141,114 @@ async function bootstrap() {
   });
 
   await app.init();
+
+  // Force MongoDB connection during startup
+  // In serverless (Vercel), use shorter timeout to avoid hitting execution limits
+  const isServerless =
+    process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+  const connectionTimeout = isServerless ? 10000 : 30000; // 10s for serverless, 30s for regular
+
+  console.log("Establishing MongoDB connection...");
+  logger.info("Establishing MongoDB connection...");
+
+  try {
+    // Get the Mongoose connection from NestJS
+    const connection = app.get(getConnectionToken());
+
+    // Wait for connection to be established
+    const waitForConnection = async (maxWaitTime = connectionTimeout) => {
+      const startTime = Date.now();
+      const CONNECTED = 1;
+
+      while ((connection.readyState as number) !== CONNECTED) {
+        if (Date.now() - startTime > maxWaitTime) {
+          const states = [
+            "disconnected",
+            "connected",
+            "connecting",
+            "disconnecting",
+          ];
+          throw new Error(
+            `MongoDB connection timeout after ${maxWaitTime}ms. State: ${states[connection.readyState]} (${connection.readyState})`
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    };
+
+    // Check current state
+    const currentState = connection.readyState;
+    const states = ["disconnected", "connected", "connecting", "disconnecting"];
+    console.log(
+      `MongoDB connection state: ${states[currentState]} (${currentState})`
+    );
+    logger.info(
+      `MongoDB connection state: ${states[currentState]} (${currentState})`
+    );
+
+    if (currentState === 1) {
+      // Already connected
+      console.log("MongoDB already connected");
+      logger.info("MongoDB already connected");
+    } else {
+      // Trigger connection by using asPromise() if available, or by accessing db
+      if ((connection as any).asPromise) {
+        // Mongoose 6.4+ has asPromise()
+        await Promise.race([
+          (connection as any).asPromise(),
+          waitForConnection(),
+        ]);
+      } else {
+        // Fallback: trigger connection by accessing db and then wait
+        try {
+          // Access db to trigger connection
+          if (connection.db) {
+            await connection.db.admin().ping();
+          }
+        } catch (e) {
+          // Ping might fail, but connection will be triggered
+        }
+        await waitForConnection();
+      }
+
+      // Verify connection
+      if (connection.readyState === 1) {
+        console.log("MongoDB connected successfully during startup");
+        logger.info("MongoDB connected successfully during startup");
+      } else {
+        throw new Error(
+          `Connection established but state is ${connection.readyState}`
+        );
+      }
+    }
+  } catch (error) {
+    console.error(
+      "Failed to establish MongoDB connection during startup:",
+      error
+    );
+    logger.error(
+      `Failed to establish MongoDB connection during startup: ${error.message}`,
+      error
+    );
+
+    // In serverless, don't fail the bootstrap - connection will happen on first request
+    // In regular server, we might want to fail, but for now we'll let it continue
+    if (isServerless) {
+      console.warn(
+        "Serverless environment: App will start, MongoDB connection will be attempted on first database operation"
+      );
+      logger.warn(
+        "Serverless environment: App will start, MongoDB connection will be attempted on first database operation"
+      );
+    } else {
+      console.warn(
+        "App will start, but MongoDB connection will be attempted on first database operation"
+      );
+      logger.warn(
+        "App will start, but MongoDB connection will be attempted on first database operation"
+      );
+    }
+  }
 
   // Only listen on port if not in serverless environment
   if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {

@@ -37,23 +37,44 @@ import logger from "./utils/logger";
         const safeUrl = mongoUrl.replace(/\/\/[^:]+:[^@]+@/, "//***:***@");
         logger.info(`Connecting to MongoDB: ${safeUrl}`);
 
-        return {
+        // Check if running in serverless environment (Vercel, AWS Lambda, etc.)
+        const isServerless =
+          process.env.VERCEL ||
+          process.env.AWS_LAMBDA_FUNCTION_NAME ||
+          process.env.SERVERLESS;
+
+        const connectionOptions: any = {
           uri: mongoUrl,
           dbName: "habeat",
           authSource: "admin",
-          // Connection pool optimization
-          maxPoolSize: 10,
-          minPoolSize: 2,
-          // Timeouts - increased for better reliability
-          serverSelectionTimeoutMS: 10000,
-          socketTimeoutMS: 45000,
-          connectTimeoutMS: 10000,
           // Retry configuration
           retryWrites: true,
           retryReads: true,
           // Better error handling
           directConnection: false, // Use SRV records for Atlas
         };
+
+        if (isServerless) {
+          // Serverless-optimized settings
+          connectionOptions.maxPoolSize = 1; // Smaller pool for serverless
+          connectionOptions.minPoolSize = 0;
+          connectionOptions.serverSelectionTimeoutMS = 5000; // Shorter timeout
+          connectionOptions.socketTimeoutMS = 30000;
+          connectionOptions.connectTimeoutMS = 5000;
+          connectionOptions.bufferCommands = true; // Buffer commands while connecting
+          connectionOptions.bufferMaxEntries = 0; // Disable buffering limit
+          logger.info("Using serverless-optimized MongoDB connection settings");
+        } else {
+          // Regular server settings
+          connectionOptions.maxPoolSize = 10;
+          connectionOptions.minPoolSize = 2;
+          connectionOptions.serverSelectionTimeoutMS = 10000;
+          connectionOptions.socketTimeoutMS = 45000;
+          connectionOptions.connectTimeoutMS = 10000;
+          logger.info("Using standard MongoDB connection settings");
+        }
+
+        return connectionOptions;
       },
     }),
     AuthModule,
