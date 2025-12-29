@@ -14,6 +14,7 @@ import {
   parsePrepTime,
   parseDuration,
   parseCalories,
+  calculateDayWorkoutWater,
 } from "../utils/helpers";
 import {
   IPlan,
@@ -177,6 +178,12 @@ export class ProgressService {
       // Create new progress with meals from plan - ensure meals are saved to DB
       const dailyMacros = plan?.userMetrics?.dailyMacros;
       const meals = await this.processMealsForProgress(dayPlan);
+      
+      // Calculate initial consumed water based on workouts (capped at reasonable amount)
+      const workouts = dayPlan?.workouts || [];
+      const workoutWaterGlasses = calculateDayWorkoutWater(workouts);
+      // Cap initial consumed water from workouts at 2 glasses (not too many!)
+      const initialWaterConsumed = Math.min(2, workoutWaterGlasses);
 
       progress = await this.progressModel.create({
         userId,
@@ -186,19 +193,19 @@ export class ProgressService {
         caloriesConsumed: 0,
         caloriesGoal: Math.round(plan?.userMetrics?.tdee || 2000),
         water: {
-          consumed: 0,
+          consumed: initialWaterConsumed,
           goal: dayPlan?.waterIntake || 8,
         },
         meals: meals,
         workouts:
-          dayPlan?.workouts?.map((w: any) => ({
+          workouts.map((w: any) => ({
             name: w.name,
             duration: parseDuration(w.duration),
             category: w.category,
             caloriesBurned: parseCalories(w.caloriesBurned),
             time: w.time,
             done: false,
-          })) || [],
+          })),
         protein: { consumed: 0, goal: Math.round(dailyMacros?.protein || 0) },
         carbs: { consumed: 0, goal: Math.round(dailyMacros?.carbs || 0) },
         fat: { consumed: 0, goal: Math.round(dailyMacros?.fat || 0) },
@@ -468,6 +475,15 @@ export class ProgressService {
     if (!progress) {
       const plan = await this.planModel.findOne({ userId });
       const dailyMacros = plan?.userMetrics?.dailyMacros;
+      const weeklyPlan = (plan as any)?.weeklyPlan || {};
+      const dayPlan = weeklyPlan[todayDateKey];
+      const waterGoal = dayPlan?.waterIntake || 8;
+      
+      // Calculate initial consumed water based on workouts (capped at 2 glasses)
+      const workouts = dayPlan?.workouts || [];
+      const workoutWaterGlasses = calculateDayWorkoutWater(workouts);
+      const initialWaterConsumed = Math.min(2, workoutWaterGlasses);
+      
       progress = await this.progressModel.create({
         userId,
         planId: plan?._id || null,
@@ -475,7 +491,7 @@ export class ProgressService {
         dateKey: todayDateKey,
         caloriesConsumed: 0,
         caloriesGoal: Math.round(plan?.userMetrics?.tdee || 2000),
-        water: { consumed: 0, goal: 8 },
+        water: { consumed: initialWaterConsumed, goal: waterGoal },
         meals: { breakfast: null, lunch: null, dinner: null, snacks: [] },
         workouts: [],
         protein: { consumed: 0, goal: Math.round(dailyMacros?.protein || 0) },
@@ -585,6 +601,15 @@ export class ProgressService {
     if (!progress) {
       const plan = await this.planModel.findOne({ userId });
       const dailyMacros = plan?.userMetrics?.dailyMacros;
+      const weeklyPlan = (plan as any)?.weeklyPlan || {};
+      const dayPlan = weeklyPlan[todayDateKey];
+      const waterGoal = dayPlan?.waterIntake || 8;
+      
+      // Calculate initial consumed water based on workouts (capped at 2 glasses)
+      const workouts = dayPlan?.workouts || [];
+      const workoutWaterGlasses = calculateDayWorkoutWater(workouts);
+      const initialWaterConsumed = Math.min(2, workoutWaterGlasses);
+      
       progress = await this.progressModel.create({
         userId,
         planId: plan?._id || null,
@@ -592,7 +617,7 @@ export class ProgressService {
         dateKey: todayDateKey,
         caloriesConsumed: 0,
         caloriesGoal: Math.round(plan?.userMetrics?.tdee || 2000),
-        water: { consumed: 0, goal: 8 },
+        water: { consumed: initialWaterConsumed, goal: waterGoal },
         meals: { breakfast: null, lunch: null, dinner: null, snacks: [] },
         workouts: [],
         protein: { consumed: 0, goal: Math.round(dailyMacros?.protein || 0) },
@@ -643,6 +668,15 @@ export class ProgressService {
     if (!progress) {
       const plan = await this.planModel.findOne({ userId });
       const dailyMacros = plan?.userMetrics?.dailyMacros;
+      const weeklyPlan = (plan as any)?.weeklyPlan || {};
+      const dayPlan = weeklyPlan[todayDateKey];
+      const waterGoal = dayPlan?.waterIntake || 8;
+      
+      // Calculate initial consumed water based on workouts (capped at 2 glasses)
+      const workouts = dayPlan?.workouts || [];
+      const workoutWaterGlasses = calculateDayWorkoutWater(workouts);
+      const initialWaterConsumed = Math.min(2, workoutWaterGlasses);
+      
       progress = await this.progressModel.create({
         userId,
         planId: plan?._id || null,
@@ -650,7 +684,7 @@ export class ProgressService {
         dateKey: todayDateKey,
         caloriesConsumed: 0,
         caloriesGoal: Math.round(plan?.userMetrics?.tdee || 2000),
-        water: { consumed: 0, goal: 8 },
+        water: { consumed: initialWaterConsumed, goal: waterGoal },
         meals: { breakfast: null, lunch: null, dinner: null, snacks: [] },
         workouts: [],
         protein: { consumed: 0, goal: Math.round(dailyMacros?.protein || 0) },

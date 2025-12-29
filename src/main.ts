@@ -81,7 +81,7 @@ async function bootstrap() {
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup("api/docs", app, document, {
+  SwaggerModule.setup("docs", app, document, {
     swaggerOptions: { persistAuthorization: true },
   });
 
@@ -110,13 +110,14 @@ async function bootstrap() {
 // CACHING FOR VERCEL
 let cachedExpressApp: any;
 
-export default async function handler(req: any, res: any) {
+export default async (req: any, res: any) => {
   if (!cachedExpressApp) {
     const app = await bootstrap();
+    // Use the underlying Express instance
     cachedExpressApp = app.getHttpAdapter().getInstance();
   }
   return cachedExpressApp(req, res);
-}
+};
 
 // LOCAL EXECUTION
 if (!process.env.VERCEL && require.main === module) {

@@ -9,11 +9,8 @@
   "routes": [
     {
       "src": "/api/docs",
-      "dest": "src/main.ts"
-    },
-    {
-      "src": "/api/(.*)",
-      "dest": "src/main.ts"
+      "dest": "src/main.ts",
+      "continue": true
     },
     {
       "src": "/(.*)",
