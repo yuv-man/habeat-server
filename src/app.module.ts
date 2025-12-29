@@ -61,8 +61,8 @@ import logger from "./utils/logger";
           connectionOptions.serverSelectionTimeoutMS = 5000; // Shorter timeout
           connectionOptions.socketTimeoutMS = 30000;
           connectionOptions.connectTimeoutMS = 5000;
-          connectionOptions.bufferCommands = true; // Buffer commands while connecting
-          connectionOptions.bufferMaxEntries = 0; // Disable buffering limit
+          // Note: bufferCommands and bufferMaxEntries are Mongoose-specific options
+          // They should be set on the Mongoose connection, not MongoDB driver options
           logger.info("Using serverless-optimized MongoDB connection settings");
         } else {
           // Regular server settings
