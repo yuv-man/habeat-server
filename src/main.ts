@@ -10,7 +10,6 @@ import logger from "./utils/logger";
 
 dotenv.config();
 
-// MongoDB Event Handlers
 const mongooseConnection = mongoose.connection;
 mongooseConnection.on("connected", () => {
   console.log("MongoDB connected successfully");
@@ -27,12 +26,10 @@ async function bootstrap() {
     rawBody: false,
   });
 
-  // Body Parser Settings
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.use(express.json({ limit: "10mb" }));
   expressApp.use(express.urlencoded({ limit: "10mb", extended: true }));
 
-  // CORS Configuration
   const allowedOrigins = [
     "http://localhost:8080",
     "http://localhost:8081",
@@ -69,25 +66,26 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.setGlobalPrefix("api");
 
-  // Swagger Documentation
-  const config = new DocumentBuilder()
-    .setTitle("Habeat API")
-    .setDescription("Habeat Server API Documentation")
-    .setVersion("1.0")
-    .addBearerAuth(
-      { type: "http", scheme: "bearer", bearerFormat: "JWT" },
-      "JWT-auth"
-    )
-    .build();
+  // Only setup Swagger in non-production or local environments
+  if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+    const config = new DocumentBuilder()
+      .setTitle("Habeat API")
+      .setDescription("Habeat Server API Documentation")
+      .setVersion("1.0")
+      .addBearerAuth(
+        { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+        "JWT-auth"
+      )
+      .build();
 
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup("docs", app, document, {
-    swaggerOptions: { persistAuthorization: true },
-  });
+    const document = SwaggerModule.createDocument(app, config);
+    SwaggerModule.setup("api/docs", app, document, {
+      swaggerOptions: { persistAuthorization: true },
+    });
+  }
 
   await app.init();
 
-  // MongoDB Connection Logic for Serverless
   const isServerless = !!(
     process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
   );
@@ -95,7 +93,6 @@ async function bootstrap() {
     const connection = app.get(getConnectionToken());
     if (connection.readyState !== 1) {
       console.log("Triggering MongoDB connection...");
-      // Forcing connection in serverless context
       if (connection.db) {
         await connection.db.admin().ping();
       }
@@ -107,19 +104,21 @@ async function bootstrap() {
   return app;
 }
 
-// CACHING FOR VERCEL
-let cachedExpressApp: any;
+let cachedApp: any;
 
 export default async (req: any, res: any) => {
-  if (!cachedExpressApp) {
-    const app = await bootstrap();
-    // Use the underlying Express instance
-    cachedExpressApp = app.getHttpAdapter().getInstance();
+  try {
+    if (!cachedApp) {
+      const nestApp = await bootstrap();
+      cachedApp = nestApp.getHttpAdapter().getInstance();
+    }
+    return cachedApp(req, res);
+  } catch (error) {
+    console.error("Error handling request:", error);
+    res.status(500).json({ message: "Internal Server Error" });
   }
-  return cachedExpressApp(req, res);
 };
 
-// LOCAL EXECUTION
 if (!process.env.VERCEL && require.main === module) {
   bootstrap().then(async (app) => {
     const port = process.env.PORT || 5000;
