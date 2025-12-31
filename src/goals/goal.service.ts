@@ -7,16 +7,25 @@ import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import mongoose from "mongoose";
 import { Goal } from "./goal.model";
-import { IGoal, IMilestone, IProgressHistory } from "../types/interfaces";
+import {
+  IGoal,
+  IMilestone,
+  IProgressHistory,
+  IUserData,
+} from "../types/interfaces";
 import logger from "../utils/logger";
 import aiService from "../generator/generate.service";
 import { CreateGoalDto } from "./dto/create-goal.dto";
 import { UpdateGoalDto } from "./dto/update-goal.dto";
 import { GenerateGoalDto } from "./dto/generate-goal.dto";
+import { User } from "../user/user.model";
 
 @Injectable()
 export class GoalService {
-  constructor(@InjectModel(Goal.name) private goalModel: Model<IGoal>) {}
+  constructor(
+    @InjectModel(Goal.name) private goalModel: Model<IGoal>,
+    @InjectModel(User.name) private userModel: Model<IUserData>
+  ) {}
 
   async findAll(userId: string) {
     const goals = await this.goalModel
@@ -152,25 +161,56 @@ export class GoalService {
     };
   }
 
-  async generateGoal(userId: string, generateData: GenerateGoalDto) {
+  async generateGoal(
+    userId: string,
+    generateData: GenerateGoalDto
+  ): Promise<IGoal> {
     try {
       const {
-        aiRules,
-        numberOfWorkouts,
-        dietType,
+        userId,
+        title,
+        description,
         startDate,
         targetDate,
         language = "en",
       } = generateData;
 
       // Generate goal using AI
+      const user = await this.userModel.findById(userId).lean().exec();
+      if (!user) {
+        throw new NotFoundException("User not found");
+      }
+
+      // Calculate timeframe from startDate and targetDate if provided, otherwise use default
+      let timeframe = "3 months";
+      if (targetDate && startDate) {
+        const diffMs = targetDate.getTime() - startDate.getTime();
+        const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+        if (diffDays >= 30) {
+          const months = Math.round(diffDays / 30);
+          timeframe = `${months} months`;
+        } else if (diffDays >= 7) {
+          const weeks = Math.round(diffDays / 7);
+          timeframe = `${weeks} weeks`;
+        } else {
+          timeframe = `${diffDays} days`;
+        }
+      }
+
       const generatedGoal = await this.generateGoalWithAI(
-        aiRules,
-        numberOfWorkouts,
-        dietType,
-        `${targetDate.getTime() - startDate.getTime()}`,
-        language
+        title,
+        description,
+        user.workoutFrequency,
+        user.path,
+        timeframe,
+        language,
+        startDate
       );
+
+      // Use AI-generated targetDate if not provided, otherwise use the provided one
+      const finalTargetDate = targetDate
+        ? targetDate.toISOString().split("T")[0]
+        : generatedGoal.targetDate;
 
       // Create the goal in database
       const newGoal = await this.goalModel.create({
@@ -178,14 +218,12 @@ export class GoalService {
         userId: new mongoose.Types.ObjectId(userId),
         current: 0,
         status: "active",
+        targetDate: finalTargetDate,
         milestones: generatedGoal.milestones || [],
         progressHistory: [],
       });
 
-      return {
-        success: true,
-        data: newGoal,
-      };
+      return newGoal;
     } catch (error) {
       logger.error("Error generating goal:", error);
       throw new BadRequestException("Failed to generate goal");
@@ -193,19 +231,23 @@ export class GoalService {
   }
 
   private async generateGoalWithAI(
-    aiRules: string,
+    title: string,
+    description: string,
     numberOfWorkouts: number,
     dietType: string,
     timeframe: string,
-    language: string
-  ): Promise<Partial<IGoal>> {
+    language: string,
+    startDate: Date
+  ): Promise<Partial<IGoal> & { targetDate?: string }> {
     try {
       const generatedGoal = await aiService.generateGoal(
-        aiRules,
+        title,
+        description,
         numberOfWorkouts,
         dietType,
         timeframe,
-        language
+        language,
+        startDate
       );
 
       return {
@@ -216,13 +258,41 @@ export class GoalService {
         icon: generatedGoal.icon,
         milestones: generatedGoal.milestones,
         startDate: generatedGoal.startDate,
+        targetDate: generatedGoal.targetDate,
       };
     } catch (error) {
       logger.warn("AI goal generation failed, using fallback:", error);
+
+      // Calculate targetDate from timeframe for fallback
+      const actualStartDate = startDate || new Date();
+      const calculateTargetDate = (timeframe: string): Date => {
+        const start = new Date(actualStartDate);
+        const timeframeLower = timeframe.toLowerCase().trim();
+
+        const monthsMatch = timeframeLower.match(/(\d+)\s*(?:month|months|mo)/);
+        const weeksMatch = timeframeLower.match(/(\d+)\s*(?:week|weeks|w)/);
+        const daysMatch = timeframeLower.match(/(\d+)\s*(?:day|days|d)/);
+
+        if (monthsMatch) {
+          const months = parseInt(monthsMatch[1], 10);
+          start.setMonth(start.getMonth() + months);
+        } else if (weeksMatch) {
+          const weeks = parseInt(weeksMatch[1], 10);
+          start.setDate(start.getDate() + weeks * 7);
+        } else if (daysMatch) {
+          const days = parseInt(daysMatch[1], 10);
+          start.setDate(start.getDate() + days);
+        } else {
+          start.setMonth(start.getMonth() + 3); // Default to 3 months
+        }
+
+        return start;
+      };
+
       // Fallback: Create a basic goal structure
       return {
-        title: aiRules.substring(0, 50),
-        description: `Goal: ${aiRules}. Target: ${numberOfWorkouts} workouts per week with ${dietType} diet.`,
+        title: title.substring(0, 50),
+        description: `Goal: ${description}. Target: ${numberOfWorkouts} workouts per week with ${dietType} diet.`,
         target: 100,
         unit: "points",
         icon: "target",
@@ -246,7 +316,8 @@ export class GoalService {
             completed: false,
           },
         ],
-        startDate: new Date().toISOString().split("T")[0],
+        startDate: actualStartDate.toISOString().split("T")[0],
+        targetDate: calculateTargetDate(timeframe).toISOString().split("T")[0],
       };
     }
   }

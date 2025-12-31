@@ -152,6 +152,7 @@ Optional parameters that can be passed as query strings or in the request body. 
   async generateGoal(@Request() req, @Body() body: GenerateGoalDto) {
     return this.generatorService.generateGoal(
       req.user._id.toString(),
+      body.title,
       body.description,
       body.category,
       body.targetDate,

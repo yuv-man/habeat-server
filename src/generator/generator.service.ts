@@ -462,6 +462,7 @@ export class GeneratorService {
    */
   async generateGoal(
     userId: string,
+    title: string,
     description: string,
     category: string,
     targetDate: Date,
@@ -478,13 +479,29 @@ export class GeneratorService {
       throw new NotFoundException("User not found");
     }
 
+    // Calculate timeframe from startDate and targetDate
+    const diffMs = targetDate.getTime() - startDate.getTime();
+    const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+    let timeframe = "3 months";
+    if (diffDays >= 30) {
+      const months = Math.round(diffDays / 30);
+      timeframe = `${months} months`;
+    } else if (diffDays >= 7) {
+      const weeks = Math.round(diffDays / 7);
+      timeframe = `${weeks} weeks`;
+    } else {
+      timeframe = `${diffDays} days`;
+    }
+
     // Generate goal using AI (if available) or create structured goal
     const generatedGoal = await aiService.generateGoal(
+      title,
       description,
       user.workoutFrequency,
       user.path,
-      `${targetDate.getTime() - startDate.getTime()}`,
-      language
+      timeframe,
+      language,
+      startDate
     );
 
     return {

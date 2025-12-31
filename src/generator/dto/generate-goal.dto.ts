@@ -18,6 +18,14 @@ export enum GoalCategory {
 
 export class GenerateGoalDto {
   @ApiProperty({
+    example: "Run 5K",
+    description: "Goal title",
+  })
+  @IsNotEmpty()
+  @IsString()
+  title: string;
+
+  @ApiProperty({
     example: "I want to lose 10kg and improve my fitness",
   })
   @IsNotEmpty()

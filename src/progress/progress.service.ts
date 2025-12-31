@@ -17,6 +17,12 @@ import {
   calculateDayWorkoutWater,
 } from "../utils/helpers";
 import {
+  calculateBMR,
+  calculateTDEE,
+  calculateTargetCalories,
+  calculateMacros,
+} from "../utils/healthCalculations";
+import {
   IPlan,
   IDailyProgress,
   IDailyPlan,
@@ -33,6 +39,108 @@ export class ProgressService {
     @InjectModel(Plan.name) private planModel: Model<IPlan>,
     @InjectModel(Meal.name) private mealModel: Model<IMeal>
   ) {}
+
+  /**
+   * Get macro goals from plan, calculating them if dailyMacros is missing
+   * This ensures macro goals are always based on user's BMI, TDEE, and other calculations
+   */
+  private getMacroGoalsFromPlan(plan: any): {
+    protein: number;
+    carbs: number;
+    fat: number;
+  } {
+    // If dailyMacros exists, use it (this is the calculated value from plan generation)
+    if (plan?.userMetrics?.dailyMacros) {
+      return {
+        protein: Math.round(plan.userMetrics.dailyMacros.protein || 0),
+        carbs: Math.round(plan.userMetrics.dailyMacros.carbs || 0),
+        fat: Math.round(plan.userMetrics.dailyMacros.fat || 0),
+      };
+    }
+
+    // If dailyMacros is missing, calculate it from userData
+    // This ensures macro goals are always based on user's actual metrics
+    const userData = plan?.userData;
+    if (
+      userData?.weight &&
+      userData?.height &&
+      userData?.age &&
+      userData?.gender &&
+      userData?.path
+    ) {
+      const bmr = calculateBMR(
+        userData.weight,
+        userData.height,
+        userData.age,
+        userData.gender
+      );
+      const tdee = calculateTDEE(bmr, userData.workoutFrequency);
+      const targetCalories = calculateTargetCalories(tdee, userData.path);
+      const macros = calculateMacros(targetCalories, userData.path);
+
+      logger.info(
+        `[getMacroGoalsFromPlan] Calculated macros from userData: protein=${macros.protein}, carbs=${macros.carbs}, fat=${macros.fat}`
+      );
+
+      return {
+        protein: macros.protein,
+        carbs: macros.carbs,
+        fat: macros.fat,
+      };
+    }
+
+    // Last resort: return zeros (should not happen if plan is properly created)
+    logger.warn(
+      "[getMacroGoalsFromPlan] Could not calculate macros - plan missing required userData"
+    );
+    return { protein: 0, carbs: 0, fat: 0 };
+  }
+
+  /**
+   * Sync water goal from plan to progress
+   * Plan is always the source of truth for water intake goals
+   * Always updates and saves to ensure consistency
+   */
+  private async syncWaterGoalFromPlan(
+    progress: any,
+    plan: any,
+    dateKey: string
+  ): Promise<void> {
+    if (!progress) return;
+
+    // If no plan, can't sync - log warning but don't fail
+    if (!plan) {
+      logger.warn(
+        `[syncWaterGoalFromPlan] No plan found for date ${dateKey}, cannot sync water goal`
+      );
+      return;
+    }
+
+    const weeklyPlan = (plan as any)?.weeklyPlan || {};
+    const dayPlan = weeklyPlan[dateKey];
+    const planWaterIntake = dayPlan?.waterIntake || 8;
+
+    // Always sync water goal from plan (plan is source of truth)
+    // Always update to ensure consistency, even if value appears the same
+    const currentGoal = progress.water?.goal;
+    const currentConsumed = progress.water?.consumed || 0;
+
+    // Always update water goal from plan to ensure it matches
+    progress.water = {
+      consumed: currentConsumed,
+      goal: planWaterIntake,
+    };
+
+    // Mark as modified and save
+    progress.markModified("water");
+    await progress.save();
+
+    if (currentGoal !== planWaterIntake) {
+      logger.info(
+        `[syncWaterGoalFromPlan] Synced water goal from plan: ${currentGoal} -> ${planWaterIntake} glasses for date ${dateKey}`
+      );
+    }
+  }
 
   // Helper to get local date key in YYYY-MM-DD format (avoids timezone issues with toISOString which uses UTC)
   private getLocalDateKey(date: Date): string {
@@ -176,14 +284,16 @@ export class ProgressService {
 
     if (!progress) {
       // Create new progress with meals from plan - ensure meals are saved to DB
-      const dailyMacros = plan?.userMetrics?.dailyMacros;
       const meals = await this.processMealsForProgress(dayPlan);
-      
+
       // Calculate initial consumed water based on workouts (capped at reasonable amount)
       const workouts = dayPlan?.workouts || [];
       const workoutWaterGlasses = calculateDayWorkoutWater(workouts);
       // Cap initial consumed water from workouts at 2 glasses (not too many!)
       const initialWaterConsumed = Math.min(2, workoutWaterGlasses);
+
+      // Get macro goals from plan (calculated from user metrics - BMI, TDEE, etc.)
+      const macroGoals = this.getMacroGoalsFromPlan(plan);
 
       progress = await this.progressModel.create({
         userId,
@@ -197,35 +307,25 @@ export class ProgressService {
           goal: dayPlan?.waterIntake || 8,
         },
         meals: meals,
-        workouts:
-          workouts.map((w: any) => ({
-            name: w.name,
-            duration: parseDuration(w.duration),
-            category: w.category,
-            caloriesBurned: parseCalories(w.caloriesBurned),
-            time: w.time,
-            done: false,
-          })),
-        protein: { consumed: 0, goal: Math.round(dailyMacros?.protein || 0) },
-        carbs: { consumed: 0, goal: Math.round(dailyMacros?.carbs || 0) },
-        fat: { consumed: 0, goal: Math.round(dailyMacros?.fat || 0) },
+        workouts: workouts.map((w: any) => ({
+          name: w.name,
+          duration: parseDuration(w.duration),
+          category: w.category,
+          caloriesBurned: parseCalories(w.caloriesBurned),
+          time: w.time,
+          done: false,
+        })),
+        protein: { consumed: 0, goal: macroGoals.protein },
+        carbs: { consumed: 0, goal: macroGoals.carbs },
+        fat: { consumed: 0, goal: macroGoals.fat },
       });
+
+      // Always sync water goal from plan immediately after creation to ensure consistency
+      await this.syncWaterGoalFromPlan(progress as any, plan, todayDateKey);
     } else {
       // Progress exists - sync water goal from plan
       const progressDoc = progress as any;
-      const planWaterIntake = dayPlan?.waterIntake || 8;
-      
-      // Always sync water goal from plan (plan is source of truth)
-      if (progressDoc.water?.goal !== planWaterIntake) {
-        progressDoc.water = {
-          ...progressDoc.water,
-          goal: planWaterIntake,
-        };
-        await progressDoc.save();
-        logger.info(
-          `[getTodayProgress] Synced water goal from plan: ${planWaterIntake} glasses`
-        );
-      }
+      await this.syncWaterGoalFromPlan(progressDoc, plan, todayDateKey);
 
       // Check if meals are null - populate from plan if so
       const needsUpdate =
@@ -267,6 +367,18 @@ export class ProgressService {
       }
     }
 
+    // Always sync water goal from plan before returning (ensure it's up to date)
+    const progressDoc = progress as any;
+    await this.syncWaterGoalFromPlan(progressDoc, plan, todayDateKey);
+
+    // Re-fetch progress to get the synced version
+    progress = await this.progressModel
+      .findOne<IDailyProgress>({
+        userId,
+        dateKey: todayDateKey,
+      })
+      .populate("meals.breakfast meals.lunch meals.dinner meals.snacks");
+
     return {
       success: true,
       data: {
@@ -285,7 +397,7 @@ export class ProgressService {
     targetDate.setHours(0, 0, 0, 0);
     const dateKey = this.getLocalDateKey(targetDate);
 
-    const progress = await this.progressModel
+    let progress = await this.progressModel
       .findOne({
         userId,
         dateKey, // Use dateKey for timezone-safe querying
@@ -298,21 +410,16 @@ export class ProgressService {
 
     // Sync water goal from plan
     const plan = await this.planModel.findOne({ userId });
-    const weeklyPlan = (plan as any)?.weeklyPlan || {};
-    const dayPlan = weeklyPlan[dateKey];
-    const planWaterIntake = dayPlan?.waterIntake || 8;
-
     const progressDoc = progress as any;
-    if (progressDoc.water?.goal !== planWaterIntake) {
-      progressDoc.water = {
-        ...progressDoc.water,
-        goal: planWaterIntake,
-      };
-      await progressDoc.save();
-      logger.info(
-        `[getProgressByDate] Synced water goal from plan: ${planWaterIntake} glasses for date ${dateKey}`
-      );
-    }
+    await this.syncWaterGoalFromPlan(progressDoc, plan, dateKey);
+
+    // Re-fetch progress to get the synced version
+    progress = await this.progressModel
+      .findOne({
+        userId,
+        dateKey,
+      })
+      .populate("meals.breakfast meals.lunch meals.dinner meals.snacks");
 
     return {
       success: true,
@@ -451,6 +558,10 @@ export class ProgressService {
       await plan.save();
     }
 
+    // Always sync water goal from plan before returning
+    const planForSync = await this.planModel.findOne({ userId });
+    await this.syncWaterGoalFromPlan(progress, planForSync, todayDateKey);
+
     return {
       success: true,
       data: {
@@ -472,18 +583,22 @@ export class ProgressService {
       dateKey: todayDateKey,
     });
 
+    // Get plan for syncing water goal
+    const plan = await this.planModel.findOne({ userId });
+
     if (!progress) {
-      const plan = await this.planModel.findOne({ userId });
-      const dailyMacros = plan?.userMetrics?.dailyMacros;
       const weeklyPlan = (plan as any)?.weeklyPlan || {};
       const dayPlan = weeklyPlan[todayDateKey];
       const waterGoal = dayPlan?.waterIntake || 8;
-      
+
       // Calculate initial consumed water based on workouts (capped at 2 glasses)
       const workouts = dayPlan?.workouts || [];
       const workoutWaterGlasses = calculateDayWorkoutWater(workouts);
       const initialWaterConsumed = Math.min(2, workoutWaterGlasses);
-      
+
+      // Get macro goals from plan (calculated from user metrics - BMI, TDEE, etc.)
+      const macroGoals = this.getMacroGoalsFromPlan(plan);
+
       progress = await this.progressModel.create({
         userId,
         planId: plan?._id || null,
@@ -494,10 +609,16 @@ export class ProgressService {
         water: { consumed: initialWaterConsumed, goal: waterGoal },
         meals: { breakfast: null, lunch: null, dinner: null, snacks: [] },
         workouts: [],
-        protein: { consumed: 0, goal: Math.round(dailyMacros?.protein || 0) },
-        carbs: { consumed: 0, goal: Math.round(dailyMacros?.carbs || 0) },
-        fat: { consumed: 0, goal: Math.round(dailyMacros?.fat || 0) },
+        protein: { consumed: 0, goal: macroGoals.protein },
+        carbs: { consumed: 0, goal: macroGoals.carbs },
+        fat: { consumed: 0, goal: macroGoals.fat },
       });
+
+      // Always sync water goal from plan immediately after creation
+      await this.syncWaterGoalFromPlan(progress, plan, todayDateKey);
+    } else {
+      // Progress exists - sync water goal from plan first
+      await this.syncWaterGoalFromPlan(progress, plan, todayDateKey);
     }
 
     (progress as any).water.consumed += 1;
@@ -598,18 +719,22 @@ export class ProgressService {
       dateKey: todayDateKey,
     });
 
+    // Get plan for syncing water goal and updating weekly macros
+    const plan = await this.planModel.findOne({ userId });
+
     if (!progress) {
-      const plan = await this.planModel.findOne({ userId });
-      const dailyMacros = plan?.userMetrics?.dailyMacros;
       const weeklyPlan = (plan as any)?.weeklyPlan || {};
       const dayPlan = weeklyPlan[todayDateKey];
       const waterGoal = dayPlan?.waterIntake || 8;
-      
+
       // Calculate initial consumed water based on workouts (capped at 2 glasses)
       const workouts = dayPlan?.workouts || [];
       const workoutWaterGlasses = calculateDayWorkoutWater(workouts);
       const initialWaterConsumed = Math.min(2, workoutWaterGlasses);
-      
+
+      // Get macro goals from plan (calculated from user metrics - BMI, TDEE, etc.)
+      const macroGoals = this.getMacroGoalsFromPlan(plan);
+
       progress = await this.progressModel.create({
         userId,
         planId: plan?._id || null,
@@ -620,10 +745,16 @@ export class ProgressService {
         water: { consumed: initialWaterConsumed, goal: waterGoal },
         meals: { breakfast: null, lunch: null, dinner: null, snacks: [] },
         workouts: [],
-        protein: { consumed: 0, goal: Math.round(dailyMacros?.protein || 0) },
-        carbs: { consumed: 0, goal: Math.round(dailyMacros?.carbs || 0) },
-        fat: { consumed: 0, goal: Math.round(dailyMacros?.fat || 0) },
+        protein: { consumed: 0, goal: macroGoals.protein },
+        carbs: { consumed: 0, goal: macroGoals.carbs },
+        fat: { consumed: 0, goal: macroGoals.fat },
       });
+
+      // Always sync water goal from plan immediately after creation
+      await this.syncWaterGoalFromPlan(progress, plan, todayDateKey);
+    } else {
+      // Progress exists - sync water goal from plan first
+      await this.syncWaterGoalFromPlan(progress, plan, todayDateKey);
     }
 
     (progress as any).caloriesConsumed += Math.round(calories);
@@ -632,10 +763,10 @@ export class ProgressService {
       (progress as any).carbs.consumed += Math.round(macros.carbs || 0);
       (progress as any).fat.consumed += Math.round(macros.fat || 0);
     }
+
     await progress.save();
 
     // Update plan's weekly macros
-    const plan = await this.planModel.findOne({ userId });
     if (plan && (plan as any).weeklyMacros) {
       (plan as any).weeklyMacros.calories.consumed += Math.round(calories);
       if (macros) {
@@ -665,18 +796,22 @@ export class ProgressService {
       dateKey: todayDateKey,
     });
 
+    // Get plan for syncing water goal
+    const plan = await this.planModel.findOne({ userId });
+
     if (!progress) {
-      const plan = await this.planModel.findOne({ userId });
-      const dailyMacros = plan?.userMetrics?.dailyMacros;
       const weeklyPlan = (plan as any)?.weeklyPlan || {};
       const dayPlan = weeklyPlan[todayDateKey];
       const waterGoal = dayPlan?.waterIntake || 8;
-      
+
       // Calculate initial consumed water based on workouts (capped at 2 glasses)
       const workouts = dayPlan?.workouts || [];
       const workoutWaterGlasses = calculateDayWorkoutWater(workouts);
       const initialWaterConsumed = Math.min(2, workoutWaterGlasses);
-      
+
+      // Get macro goals from plan (calculated from user metrics - BMI, TDEE, etc.)
+      const macroGoals = this.getMacroGoalsFromPlan(plan);
+
       progress = await this.progressModel.create({
         userId,
         planId: plan?._id || null,
@@ -687,10 +822,16 @@ export class ProgressService {
         water: { consumed: initialWaterConsumed, goal: waterGoal },
         meals: { breakfast: null, lunch: null, dinner: null, snacks: [] },
         workouts: [],
-        protein: { consumed: 0, goal: Math.round(dailyMacros?.protein || 0) },
-        carbs: { consumed: 0, goal: Math.round(dailyMacros?.carbs || 0) },
-        fat: { consumed: 0, goal: Math.round(dailyMacros?.fat || 0) },
+        protein: { consumed: 0, goal: macroGoals.protein },
+        carbs: { consumed: 0, goal: macroGoals.carbs },
+        fat: { consumed: 0, goal: macroGoals.fat },
       });
+
+      // Always sync water goal from plan immediately after creation
+      await this.syncWaterGoalFromPlan(progress, plan, todayDateKey);
+    } else {
+      // Progress exists - sync water goal from plan first
+      await this.syncWaterGoalFromPlan(progress, plan, todayDateKey);
     }
 
     (progress as any).water.consumed = glasses;
@@ -814,8 +955,12 @@ export class ProgressService {
     // Get user's plan for target values
     const plan = await this.planModel.findOne({ userId }).lean();
     const targetCalories = Math.round(plan?.userMetrics?.tdee || 2000);
-    const targetProtein = Math.round(plan?.userMetrics?.dailyMacros?.protein || 150);
-    const targetCarbs = Math.round(plan?.userMetrics?.dailyMacros?.carbs || 250);
+    const targetProtein = Math.round(
+      plan?.userMetrics?.dailyMacros?.protein || 150
+    );
+    const targetCarbs = Math.round(
+      plan?.userMetrics?.dailyMacros?.carbs || 250
+    );
     const targetFat = Math.round(plan?.userMetrics?.dailyMacros?.fat || 65);
     const targetWater = 8;
 
@@ -842,27 +987,51 @@ export class ProgressService {
         carbs: acc.carbs + (p.carbs?.consumed || 0),
         fat: acc.fat + (p.fat?.consumed || 0),
         water: acc.water + (p.water?.consumed || 0),
-        workoutsCompleted: acc.workoutsCompleted + (p.workouts?.filter((w: any) => w.done)?.length || 0),
+        workoutsCompleted:
+          acc.workoutsCompleted +
+          (p.workouts?.filter((w: any) => w.done)?.length || 0),
         workoutsTotal: acc.workoutsTotal + (p.workouts?.length || 0),
-        caloriesBurned: acc.caloriesBurned + (p.workouts?.reduce((sum: number, w: any) =>
-          sum + (w.done ? (w.caloriesBurned || 0) : 0), 0) || 0),
+        caloriesBurned:
+          acc.caloriesBurned +
+          (p.workouts?.reduce(
+            (sum: number, w: any) => sum + (w.done ? w.caloriesBurned || 0 : 0),
+            0
+          ) || 0),
       }),
-      { calories: 0, protein: 0, carbs: 0, fat: 0, water: 0, workoutsCompleted: 0, workoutsTotal: 0, caloriesBurned: 0 }
+      {
+        calories: 0,
+        protein: 0,
+        carbs: 0,
+        fat: 0,
+        water: 0,
+        workoutsCompleted: 0,
+        workoutsTotal: 0,
+        caloriesBurned: 0,
+      }
     );
 
     // Calculate averages
-    const avgCalories = daysTracked > 0 ? Math.round(totals.calories / daysTracked) : 0;
-    const avgProtein = daysTracked > 0 ? Math.round(totals.protein / daysTracked) : 0;
-    const avgCarbs = daysTracked > 0 ? Math.round(totals.carbs / daysTracked) : 0;
+    const avgCalories =
+      daysTracked > 0 ? Math.round(totals.calories / daysTracked) : 0;
+    const avgProtein =
+      daysTracked > 0 ? Math.round(totals.protein / daysTracked) : 0;
+    const avgCarbs =
+      daysTracked > 0 ? Math.round(totals.carbs / daysTracked) : 0;
     const avgFat = daysTracked > 0 ? Math.round(totals.fat / daysTracked) : 0;
-    const avgWater = daysTracked > 0 ? Math.round((totals.water / daysTracked) * 10) / 10 : 0;
+    const avgWater =
+      daysTracked > 0 ? Math.round((totals.water / daysTracked) * 10) / 10 : 0;
 
     // Calculate goal percentages
-    const caloriesGoalPercentage = targetCalories > 0 ? Math.round((avgCalories / targetCalories) * 100) : 0;
-    const proteinGoalPercentage = targetProtein > 0 ? Math.round((avgProtein / targetProtein) * 100) : 0;
-    const carbsGoalPercentage = targetCarbs > 0 ? Math.round((avgCarbs / targetCarbs) * 100) : 0;
-    const fatGoalPercentage = targetFat > 0 ? Math.round((avgFat / targetFat) * 100) : 0;
-    const waterGoalPercentage = targetWater > 0 ? Math.round((avgWater / targetWater) * 100) : 0;
+    const caloriesGoalPercentage =
+      targetCalories > 0 ? Math.round((avgCalories / targetCalories) * 100) : 0;
+    const proteinGoalPercentage =
+      targetProtein > 0 ? Math.round((avgProtein / targetProtein) * 100) : 0;
+    const carbsGoalPercentage =
+      targetCarbs > 0 ? Math.round((avgCarbs / targetCarbs) * 100) : 0;
+    const fatGoalPercentage =
+      targetFat > 0 ? Math.round((avgFat / targetFat) * 100) : 0;
+    const waterGoalPercentage =
+      targetWater > 0 ? Math.round((avgWater / targetWater) * 100) : 0;
 
     // Daily breakdown for charts
     const dailyData = progressList.map((p: any) => ({

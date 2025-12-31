@@ -87,7 +87,7 @@ export class GoalController {
     return this.goalService.delete(id);
   }
 
-  @Post("generate")
+  @Post(":userId/generate")
   @ApiOperation({
     summary: "Generate a goal using AI based on rules, workouts, and diet type",
   })
@@ -97,8 +97,11 @@ export class GoalController {
     description: "Goal generated successfully",
   })
   @ApiResponse({ status: 400, description: "Failed to generate goal" })
-  async generateGoal(@Request() req, @Body() body: GenerateGoalDto) {
-    return this.goalService.generateGoal(req.user._id.toString(), body);
+  async generateGoal(
+    @Param("userId") userId: string,
+    @Body() body: GenerateGoalDto
+  ) {
+    return this.goalService.generateGoal(userId, body);
   }
 
   @Post(":id/progress")

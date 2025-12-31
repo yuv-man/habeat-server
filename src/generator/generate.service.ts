@@ -1424,11 +1424,13 @@ Return ONLY valid JSON matching this EXACT structure:
 };
 
 const generateGoal = async (
-  aiRules: string,
+  title: string,
+  description: string,
   numberOfWorkouts: number,
   dietType: string,
   timeframe: string = "3 months",
-  language: string = "en"
+  language: string = "en",
+  startDate?: Date
 ): Promise<{
   title: string;
   description: string;
@@ -1442,11 +1444,13 @@ const generateGoal = async (
     completed: boolean;
   }>;
   startDate: string;
+  targetDate: string;
 }> => {
   const prompt = `You are a fitness and nutrition coach. Generate a structured goal based on the following criteria:
 
 ## User Requirements:
-- Goal description: ${aiRules}
+- Goal title: ${title}
+- Goal description: ${description}
 - Number of workouts per week: ${numberOfWorkouts}
 - Diet type: ${dietType}
 - Timeframe: ${timeframe}
@@ -1487,8 +1491,38 @@ Return ONLY valid JSON matching this EXACT structure:
 
 Return ONLY valid JSON, no additional text.`;
 
+  // Helper function to parse timeframe and calculate target date
+  const calculateTargetDate = (timeframe: string, startDate: Date): Date => {
+    const start = new Date(startDate);
+    const timeframeLower = timeframe.toLowerCase().trim();
+
+    // Parse timeframe string (e.g., "3 months", "6 weeks", "30 days")
+    const monthsMatch = timeframeLower.match(/(\d+)\s*(?:month|months|mo)/);
+    const weeksMatch = timeframeLower.match(/(\d+)\s*(?:week|weeks|w)/);
+    const daysMatch = timeframeLower.match(/(\d+)\s*(?:day|days|d)/);
+
+    if (monthsMatch) {
+      const months = parseInt(monthsMatch[1], 10);
+      start.setMonth(start.getMonth() + months);
+    } else if (weeksMatch) {
+      const weeks = parseInt(weeksMatch[1], 10);
+      start.setDate(start.getDate() + weeks * 7);
+    } else if (daysMatch) {
+      const days = parseInt(daysMatch[1], 10);
+      start.setDate(start.getDate() + days);
+    } else {
+      // Default to 3 months if can't parse
+      start.setMonth(start.getMonth() + 3);
+    }
+
+    return start;
+  };
+
   const parseResponse = (jsonText: string) => {
     const goalData = JSON.parse(jsonText);
+    const actualStartDate = startDate || new Date();
+    const targetDate = calculateTargetDate(timeframe, actualStartDate);
+
     return {
       title: goalData.title,
       description: goalData.description,
@@ -1501,7 +1535,8 @@ Return ONLY valid JSON, no additional text.`;
         targetValue: m.targetValue,
         completed: false,
       })),
-      startDate: new Date().toISOString().split("T")[0],
+      startDate: actualStartDate.toISOString().split("T")[0],
+      targetDate: targetDate.toISOString().split("T")[0],
     };
   };
 
