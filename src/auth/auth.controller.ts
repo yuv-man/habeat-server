@@ -142,16 +142,30 @@ export class AuthController {
     }
 
     // Normalize redirectUri to ensure it includes /api prefix
+    const originalRedirectUri = redirectUri;
     try {
       const redirectUrl = new URL(redirectUri);
       if (!redirectUrl.pathname.includes("/api/auth/google/callback")) {
         redirectUrl.pathname = "/api/auth/google/callback";
         redirectUri = redirectUrl.toString();
+        logger.info("Normalized redirectUri in initiateGoogleSignup", {
+          original: originalRedirectUri,
+          normalized: redirectUri,
+        });
       }
     } catch (e) {
-      const protocol = req.protocol || "http";
+      const protocol = req.protocol || "https"; // Default to https for production
       const host = req.get("host") || "localhost:5000";
       redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+      logger.info(
+        "Constructed redirectUri from request in initiateGoogleSignup",
+        {
+          original: originalRedirectUri,
+          constructed: redirectUri,
+          protocol,
+          host,
+        }
+      );
     }
 
     // Set CORS headers
@@ -247,18 +261,32 @@ export class AuthController {
 
     // Normalize redirectUri to ensure it includes /api prefix
     // This prevents issues where frontend passes redirectUri without /api
+    const originalRedirectUri = redirectUri;
     try {
       const redirectUrl = new URL(redirectUri);
       if (!redirectUrl.pathname.includes("/api/auth/google/callback")) {
         // Replace the pathname to ensure it includes /api
         redirectUrl.pathname = "/api/auth/google/callback";
         redirectUri = redirectUrl.toString();
+        logger.info("Normalized redirectUri in initiateGoogleSignin", {
+          original: originalRedirectUri,
+          normalized: redirectUri,
+        });
       }
     } catch (e) {
       // If redirectUri is not a valid URL, construct it from the request
-      const protocol = req.protocol || "http";
+      const protocol = req.protocol || "https"; // Default to https for production
       const host = req.get("host") || "localhost:5000";
       redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+      logger.info(
+        "Constructed redirectUri from request in initiateGoogleSignin",
+        {
+          original: originalRedirectUri,
+          constructed: redirectUri,
+          protocol,
+          host,
+        }
+      );
     }
 
     // Set CORS headers
@@ -524,7 +552,16 @@ export class AuthController {
         process.env.FRONTEND_REDIRECT_URI || "http://localhost:3000";
       if (state) {
         try {
-          frontendRedirectUri = Buffer.from(state, "base64").toString("utf-8");
+          const decodedState = Buffer.from(state, "base64").toString("utf-8");
+          try {
+            // Try to parse as JSON (new format)
+            const stateData = JSON.parse(decodedState);
+            frontendRedirectUri =
+              stateData.frontendRedirectUri || frontendRedirectUri;
+          } catch (jsonError) {
+            // Fallback to old format (just string)
+            frontendRedirectUri = decodedState;
+          }
         } catch (e) {
           logger.warn("Failed to decode state for error redirect:", e);
           // Use default if decoding fails

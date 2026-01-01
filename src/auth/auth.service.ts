@@ -241,8 +241,20 @@ export class AuthService {
     frontendRedirectUri: string,
     prompt?: string
   ): Promise<string> {
-    // Encode frontendRedirectUri in state parameter to pass through OAuth flow
-    const state = Buffer.from(frontendRedirectUri).toString("base64");
+    // Encode both frontendRedirectUri and backend redirectUri in state parameter
+    // This ensures we can retrieve the exact redirectUri used when exchanging the code
+    const stateData = {
+      frontendRedirectUri,
+      backendRedirectUri: redirectUri,
+    };
+    const state = Buffer.from(JSON.stringify(stateData)).toString("base64");
+
+    logger.info("Generating Google OAuth URL", {
+      redirectUri,
+      frontendRedirectUri,
+      stateLength: state.length,
+    });
+
     const authUrl = getGoogleAuthUrl(redirectUri, state, prompt);
     if (!authUrl) {
       throw new BadRequestException(
@@ -257,24 +269,51 @@ export class AuthService {
     redirectUri: string,
     state?: string
   ): Promise<string> {
-    // Decode frontendRedirectUri from state parameter
+    // Decode state parameter to get both frontendRedirectUri and backend redirectUri
     let frontendRedirectUri =
       process.env.FRONTEND_REDIRECT_URI || "http://localhost:3000";
+    let backendRedirectUri = redirectUri; // Use provided redirectUri as fallback
+
     if (state) {
       try {
-        frontendRedirectUri = Buffer.from(state, "base64").toString("utf-8");
+        const decodedState = Buffer.from(state, "base64").toString("utf-8");
+        try {
+          // Try to parse as JSON (new format with both URIs)
+          const stateData = JSON.parse(decodedState);
+          frontendRedirectUri =
+            stateData.frontendRedirectUri || frontendRedirectUri;
+          backendRedirectUri =
+            stateData.backendRedirectUri || backendRedirectUri;
+          logger.info("Decoded state parameter (new format)", {
+            frontendRedirectUri,
+            backendRedirectUri,
+          });
+        } catch (jsonError) {
+          // Fallback to old format (just frontendRedirectUri as string)
+          frontendRedirectUri = decodedState;
+          logger.info("Decoded state parameter (old format)", {
+            frontendRedirectUri,
+          });
+        }
       } catch (error) {
-        logger.warn(
-          "Failed to decode state parameter, using default redirect URI"
-        );
+        logger.warn("Failed to decode state parameter, using defaults", {
+          error: error?.message,
+        });
       }
     }
-    // Exchange authorization code for tokens
+
+    // Use the backendRedirectUri from state (or fallback to provided redirectUri)
+    // This ensures we use the EXACT same redirectUri that was used when generating the auth URL
+    const actualRedirectUri = backendRedirectUri || redirectUri;
+
     logger.info("Exchanging Google code for tokens", {
-      redirectUri,
+      redirectUri: actualRedirectUri,
+      originalRedirectUri: redirectUri,
       codeLength: code?.length,
+      usingStateRedirectUri: backendRedirectUri !== redirectUri,
     });
-    const tokens = await exchangeGoogleCodeForTokens(code, redirectUri);
+
+    const tokens = await exchangeGoogleCodeForTokens(code, actualRedirectUri);
 
     if (!tokens || !tokens.idToken) {
       logger.error("Failed to exchange Google code for tokens", {
