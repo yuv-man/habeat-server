@@ -69,7 +69,11 @@ export const exchangeGoogleCodeForTokens = async (
     const { tokens } = await client.getToken(code);
 
     if (!tokens.id_token) {
-      logger.error("No ID token received from Google");
+      logger.error("No ID token received from Google", {
+        redirectUri,
+        hasAccessToken: !!tokens.access_token,
+        tokenKeys: Object.keys(tokens || {}),
+      });
       return null;
     }
 
@@ -78,7 +82,12 @@ export const exchangeGoogleCodeForTokens = async (
       accessToken: tokens.access_token || "",
     };
   } catch (error: any) {
-    logger.error("Error exchanging Google code for tokens:", error.message);
+    logger.error("Error exchanging Google code for tokens:", {
+      message: error?.message,
+      code: error?.code,
+      redirectUri,
+      errorDetails: error,
+    });
     return null;
   }
 };

@@ -24,6 +24,7 @@ import {
 import { AuthService } from "./auth.service";
 import { AuthGuard } from "./auth.guard";
 import { SignupDto } from "./dto/signup.dto";
+import logger from "../utils/logger";
 
 @ApiTags("auth")
 @Controller("auth")
@@ -472,16 +473,32 @@ export class AuthController {
     // Construct redirectUri from request if not provided (Google doesn't send it back)
     // This ensures it always includes the /api prefix
     if (!redirectUri) {
-      const protocol = req.protocol || "http";
+      const protocol = req.protocol || "https"; // Default to https for production
       const host = req.get("host") || "localhost:5000";
       redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+      logger.info("Constructed redirectUri from request", {
+        redirectUri,
+        protocol,
+        host,
+      });
     } else {
       // Ensure redirectUri includes /api prefix if it's missing
       if (!redirectUri.includes("/api/auth/google/callback")) {
         const url = new URL(redirectUri);
         redirectUri = `${url.protocol}//${url.host}/api/auth/google/callback`;
+        logger.info("Normalized redirectUri to include /api prefix", {
+          redirectUri,
+        });
       }
     }
+
+    logger.info("Google OAuth callback received", {
+      hasCode: !!code,
+      redirectUri,
+      hasState: !!state,
+      origin: req.headers.origin,
+      host: req.get("host"),
+    });
 
     try {
       const redirectUrl = await this.authService.handleGoogleCallback(
@@ -490,7 +507,18 @@ export class AuthController {
         state
       );
       res.redirect(redirectUrl);
-    } catch (error) {
+    } catch (error: any) {
+      // Log the full error for debugging
+      logger.error("Google OAuth callback error:", {
+        message: error?.message,
+        stack: error?.stack,
+        code,
+        redirectUri,
+        state,
+        errorDetails: error,
+      });
+      console.error("Google OAuth callback error:", error);
+
       // Decode frontendRedirectUri from state for error redirect
       let frontendRedirectUri =
         process.env.FRONTEND_REDIRECT_URI || "http://localhost:3000";
@@ -498,12 +526,17 @@ export class AuthController {
         try {
           frontendRedirectUri = Buffer.from(state, "base64").toString("utf-8");
         } catch (e) {
+          logger.warn("Failed to decode state for error redirect:", e);
           // Use default if decoding fails
         }
       }
       // Redirect to frontend with error
       const errorUrl = new URL(frontendRedirectUri);
       errorUrl.searchParams.set("error", "authentication_failed");
+      errorUrl.searchParams.set(
+        "error_description",
+        error?.message || "OAuth authentication failed"
+      );
       res.redirect(errorUrl.toString());
     }
   }

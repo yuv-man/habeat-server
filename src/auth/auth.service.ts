@@ -270,9 +270,18 @@ export class AuthService {
       }
     }
     // Exchange authorization code for tokens
+    logger.info("Exchanging Google code for tokens", {
+      redirectUri,
+      codeLength: code?.length,
+    });
     const tokens = await exchangeGoogleCodeForTokens(code, redirectUri);
 
     if (!tokens || !tokens.idToken) {
+      logger.error("Failed to exchange Google code for tokens", {
+        redirectUri,
+        hasTokens: !!tokens,
+        hasIdToken: !!tokens?.idToken,
+      });
       throw new UnauthorizedException(
         "Failed to exchange authorization code for tokens"
       );
