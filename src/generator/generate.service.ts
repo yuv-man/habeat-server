@@ -1322,13 +1322,30 @@ Each meal MUST have ALL these fields:
 
 ## Rules:
 1. "name" - descriptive meal name in ${language}
+   - MUST use spaces between words (e.g., "Stuffed Bell Peppers", "Grilled Chicken Salad")
+   - MUST use proper capitalization (Title Case, e.g., "Stuffed Bell Peppers" NOT "stuffed_bell_peppers")
+   - DO NOT use underscores in meal names
 2. "calories" - integer, close to ${targetCalories}
 3. "macros" - protein, carbs, fat in grams (integers), must add up reasonably to calories
 4. "category" - must be "${mealCriteria.category}"
 5. "ingredients" - array of [name, amount] tuples
    - name: lowercase with underscores (e.g., "chicken_breast", "olive_oil")
    - amount: number followed by unit (e.g., "200 g", "50 ml", "2 pieces")
+   - NOTE: Ingredient names use underscores, but meal names use spaces!
 6. "prepTime" - preparation time in minutes (integer)`;
+
+  // Helper function to normalize meal names (convert underscores to spaces and proper capitalization)
+  const normalizeMealName = (name: string): string => {
+    if (!name) return "Unnamed Meal";
+    // Replace underscores with spaces
+    let normalized = name.replace(/_/g, " ");
+    // Convert to Title Case (capitalize first letter of each word)
+    normalized = normalized
+      .split(" ")
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+      .join(" ");
+    return normalized;
+  };
 
   const parseResponse = (jsonText: string): IMeal[] => {
     const parsed = JSON.parse(jsonText);
@@ -1338,7 +1355,7 @@ Each meal MUST have ALL these fields:
       .slice(0, numberOfSuggestions)
       .map((meal: any) => ({
         _id: new mongoose.Types.ObjectId().toString(),
-        name: meal.name || "Unnamed Meal",
+        name: normalizeMealName(meal.name),
         calories: Math.round(meal.calories || targetCalories),
         macros: {
           protein: Math.round(meal.macros?.protein || 0),

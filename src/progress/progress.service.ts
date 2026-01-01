@@ -118,7 +118,16 @@ export class ProgressService {
 
     const weeklyPlan = (plan as any)?.weeklyPlan || {};
     const dayPlan = weeklyPlan[dateKey];
-    const planWaterIntake = dayPlan?.waterIntake || 8;
+
+    // Get water intake goal from weekly plan - this is the source of truth
+    // Only use default if plan doesn't exist or dayPlan is missing
+    let planWaterIntake = dayPlan?.waterIntake;
+    if (planWaterIntake === undefined) {
+      logger.warn(
+        `[syncWaterGoalFromPlan] No waterIntake found in weekly plan for ${dateKey}, using default 8`
+      );
+      planWaterIntake = 8;
+    }
 
     // Always sync water goal from plan (plan is source of truth)
     // Always update to ensure consistency, even if value appears the same
@@ -295,6 +304,22 @@ export class ProgressService {
       // Get macro goals from plan (calculated from user metrics - BMI, TDEE, etc.)
       const macroGoals = this.getMacroGoalsFromPlan(plan);
 
+      // Get water intake goal from weekly plan (dayPlan) - this is the source of truth
+      // If dayPlan doesn't exist, try to get it from plan's weeklyPlan
+      let waterGoal = dayPlan?.waterIntake;
+      if (waterGoal === undefined && plan) {
+        // Try to get from weeklyPlan if dayPlan is not available
+        const weeklyPlan = (plan as any)?.weeklyPlan || {};
+        waterGoal = weeklyPlan[todayDateKey]?.waterIntake;
+      }
+      // Only use default if plan doesn't exist at all
+      if (waterGoal === undefined) {
+        logger.warn(
+          `[getTodayProgress] No waterIntake found in weekly plan for ${todayDateKey}, using default 8`
+        );
+        waterGoal = 8;
+      }
+
       progress = await this.progressModel.create({
         userId,
         planId: plan?._id,
@@ -304,7 +329,7 @@ export class ProgressService {
         caloriesGoal: Math.round(plan?.userMetrics?.tdee || 2000),
         water: {
           consumed: initialWaterConsumed,
-          goal: dayPlan?.waterIntake || 8,
+          goal: waterGoal,
         },
         meals: meals,
         workouts: workouts.map((w: any) => ({
@@ -589,7 +614,15 @@ export class ProgressService {
     if (!progress) {
       const weeklyPlan = (plan as any)?.weeklyPlan || {};
       const dayPlan = weeklyPlan[todayDateKey];
-      const waterGoal = dayPlan?.waterIntake || 8;
+
+      // Get water intake goal from weekly plan - this is the source of truth
+      let waterGoal = dayPlan?.waterIntake;
+      if (waterGoal === undefined) {
+        logger.warn(
+          `[addWaterGlass] No waterIntake found in weekly plan for ${todayDateKey}, using default 8`
+        );
+        waterGoal = 8;
+      }
 
       // Calculate initial consumed water based on workouts (capped at 2 glasses)
       const workouts = dayPlan?.workouts || [];
@@ -725,7 +758,15 @@ export class ProgressService {
     if (!progress) {
       const weeklyPlan = (plan as any)?.weeklyPlan || {};
       const dayPlan = weeklyPlan[todayDateKey];
-      const waterGoal = dayPlan?.waterIntake || 8;
+
+      // Get water intake goal from weekly plan - this is the source of truth
+      let waterGoal = dayPlan?.waterIntake;
+      if (waterGoal === undefined) {
+        logger.warn(
+          `[addCustomCalories] No waterIntake found in weekly plan for ${todayDateKey}, using default 8`
+        );
+        waterGoal = 8;
+      }
 
       // Calculate initial consumed water based on workouts (capped at 2 glasses)
       const workouts = dayPlan?.workouts || [];
@@ -802,7 +843,15 @@ export class ProgressService {
     if (!progress) {
       const weeklyPlan = (plan as any)?.weeklyPlan || {};
       const dayPlan = weeklyPlan[todayDateKey];
-      const waterGoal = dayPlan?.waterIntake || 8;
+
+      // Get water intake goal from weekly plan - this is the source of truth
+      let waterGoal = dayPlan?.waterIntake;
+      if (waterGoal === undefined) {
+        logger.warn(
+          `[updateWaterIntake] No waterIntake found in weekly plan for ${todayDateKey}, using default 8`
+        );
+        waterGoal = 8;
+      }
 
       // Calculate initial consumed water based on workouts (capped at 2 glasses)
       const workouts = dayPlan?.workouts || [];
