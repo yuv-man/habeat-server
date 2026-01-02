@@ -69,33 +69,30 @@ export class UserDataDto {
   @ApiProperty({
     example: "gain-muscle",
     enum: [
-      "healthy",
-      "lose",
-      "muscle",
       "keto",
-      "fasting",
-      "custom",
+      "healthy",
       "gain-muscle",
+      "running",
+      "lose-weight",
+      "fasting",
     ],
   })
   @IsNotEmpty()
   @IsEnum([
-    "healthy",
-    "lose",
-    "muscle",
     "keto",
-    "fasting",
-    "custom",
+    "healthy",
     "gain-muscle",
+    "running",
+    "lose-weight",
+    "fasting",
   ])
   path:
-    | "healthy"
-    | "lose"
-    | "muscle"
     | "keto"
-    | "fasting"
-    | "custom"
-    | "gain-muscle";
+    | "healthy"
+    | "gain-muscle"
+    | "running"
+    | "lose-weight"
+    | "fasting";
 
   @ApiProperty({ example: 1576, required: false })
   @IsOptional()

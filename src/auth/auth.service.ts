@@ -30,45 +30,6 @@ export class AuthService {
     private planService: PlanService
   ) {}
 
-  // Helper function to normalize path values
-  private normalizePath(
-    path: string
-  ): "healthy" | "lose" | "muscle" | "keto" | "fasting" | "custom" {
-    const pathMap: {
-      [key: string]:
-        | "healthy"
-        | "lose"
-        | "muscle"
-        | "keto"
-        | "fasting"
-        | "custom";
-    } = {
-      "gain-muscle": "muscle",
-      gain_muscle: "muscle",
-      "build-muscle": "muscle",
-      build_muscle: "muscle",
-    };
-    const normalized = pathMap[path] || path;
-    // Ensure the result is a valid path type
-    const validPaths: (
-      | "healthy"
-      | "lose"
-      | "muscle"
-      | "keto"
-      | "fasting"
-      | "custom"
-    )[] = ["healthy", "lose", "muscle", "keto", "fasting", "custom"];
-    return validPaths.includes(normalized as any)
-      ? (normalized as
-          | "healthy"
-          | "lose"
-          | "muscle"
-          | "keto"
-          | "fasting"
-          | "custom")
-      : "healthy";
-  }
-
   async register(data: {
     email: string;
     password: string;
@@ -80,14 +41,11 @@ export class AuthService {
       throw new ConflictException("User already exists");
     }
 
-    // Normalize path value
-    const normalizedPath = this.normalizePath(data.userData.path);
-
     const user = await this.userModel.create({
       ...data.userData,
       email: data.email,
       password: data.password,
-      path: normalizedPath,
+      path: data.userData.path,
       foodPreferences: data.userData.foodPreferences || [],
       favoriteMeals: [],
       preferences: data.userData.preferences || {},
@@ -95,7 +53,7 @@ export class AuthService {
 
     const initialPlan = await this.planService.createInitialPlanFunction(
       user._id.toString(),
-      { ...data.userData, path: normalizedPath },
+      data.userData,
       "en"
     );
 
@@ -168,10 +126,6 @@ export class AuthService {
     }
 
     // Normalize path value
-    const normalizedPath = userData?.path
-      ? this.normalizePath(userData.path)
-      : "healthy";
-
     const user = await this.userModel.create({
       email: email,
       name:
@@ -183,7 +137,7 @@ export class AuthService {
       gender: userData?.gender || "male",
       height: userData?.height || 170,
       weight: userData?.weight || 70,
-      path: normalizedPath,
+      path: userData?.path || "healthy",
       targetWeight: userData?.targetWeight,
       allergies: userData?.allergies || [],
       dietaryRestrictions: userData?.dietaryRestrictions || [],
@@ -452,10 +406,6 @@ export class AuthService {
     }
 
     // Normalize path value
-    const normalizedPath = userData?.path
-      ? this.normalizePath(userData.path)
-      : "healthy";
-
     const user = await this.userModel.create({
       email: userData?.email || facebookUser.email,
       name:
@@ -468,7 +418,7 @@ export class AuthService {
       height: userData?.height || 170,
       weight: userData?.weight || 70,
 
-      path: normalizedPath,
+      path: userData?.path || "healthy",
       targetWeight: userData?.targetWeight,
       allergies: userData?.allergies || [],
       dietaryRestrictions: userData?.dietaryRestrictions || [],

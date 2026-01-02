@@ -11,13 +11,12 @@ export interface IUserData {
   height: number; // in cm
   weight: number; // in kg
   path:
-    | "healthy"
-    | "lose"
-    | "muscle"
     | "keto"
-    | "fasting"
-    | "custom"
-    | "gain-muscle";
+    | "healthy"
+    | "gain-muscle"
+    | "running"
+    | "lose-weight"
+    | "fasting";
   targetWeight?: number; // optional target weight
   allergies?: string[]; // food allergies
   dietaryRestrictions?: string[]; // dietary restrictions
