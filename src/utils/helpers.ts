@@ -379,7 +379,7 @@ export const calculateDayWorkoutWater = (
 export const calculateBaseWaterGlasses = (waterTarget: any): number => {
   const DEFAULT_GLASSES = 8; // Default: 8 glasses = 2L
   const MIN_GLASSES = 6;
-  const MAX_GLASSES = 12; // Maximum reasonable base intake
+  const MAX_GLASSES = 8; // Maximum base intake: 8 glasses (workout water is added separately)
 
   if (waterTarget === undefined || waterTarget === null) {
     return DEFAULT_GLASSES;
@@ -412,7 +412,8 @@ export const calculateBaseWaterGlasses = (waterTarget: any): number => {
     glasses = Math.round(numericValue / 250);
   }
 
-  // Apply reasonable bounds
+  // Apply reasonable bounds - cap base at 8 glasses
+  // Workout water will be added separately
   return Math.min(MAX_GLASSES, Math.max(MIN_GLASSES, glasses));
 };
 
@@ -1420,9 +1421,10 @@ export const transformWeeklyPlan = async (
             (sum: number, s: IMealWithStatus) => sum + s.macros.fat,
             0
           ),
-        // Base water intake + extra water for workouts (capped at reasonable max)
+        // Base water intake (8 glasses) + extra water for workouts (capped at 4 glasses)
+        // Total maximum: 12 glasses per day
         waterIntake: Math.min(
-          16, // Maximum 16 glasses (4L) per day including workout water
+          12, // Maximum 12 glasses (3L) per day including workout water
           calculateBaseWaterGlasses(day.hydration?.waterTarget) +
             calculateDayWorkoutWater(day.workouts || [])
         ),

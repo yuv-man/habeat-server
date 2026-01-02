@@ -1032,6 +1032,12 @@ const buildPrompt = (
     }
   }
   
+  WATER INTAKE GUIDELINES:
+  - Base daily water intake: 8 glasses (2000ml) per day
+  - If there are workouts scheduled for that day, add 1-2 extra glasses per workout
+  - waterTarget should be in glasses (e.g., 8 for base, 9-10 if there's a workout)
+  - Maximum reasonable daily intake: 12 glasses (3000ml) including workout water
+  
   IMPORTANT: Use date keys (YYYY-MM-DD format) in weeklyPlan object, not day names.`;
 
   return { prompt, dayToName, nameToDay, dates, activeDays, workoutDays };

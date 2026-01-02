@@ -278,10 +278,8 @@ export class GeneratorService {
         time: w.time,
       }));
 
-      // Calculate extra water needed for workouts
-      const workoutWater = calculateDayWorkoutWater(workouts);
-
       // Preserve day name and formatted date from the transformed plan
+      // Note: day.waterIntake already includes base (8 glasses) + workout water from transformWeeklyPlan
       const dayPlan = {
         day: day.day, // e.g., "monday"
         date: day.date, // e.g., "Dec 4"
@@ -292,8 +290,9 @@ export class GeneratorService {
           snacks: (day.meals?.snacks || []).map(convertMeal).filter(Boolean), // Filter out nulls
         },
         workouts,
-        // Base water intake + extra water for workouts
-        waterIntake: (day.waterIntake || 8) + workoutWater,
+        // Use waterIntake from transformed plan (already includes base + workout water, capped at 12)
+        // Fallback to 8 if not set (shouldn't happen, but safety check)
+        waterIntake: day.waterIntake || 8,
       };
 
       weeklyPlanObject[dateKey] = dayPlan;
