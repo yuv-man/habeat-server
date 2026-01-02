@@ -67,7 +67,7 @@ async function bootstrap() {
   app.setGlobalPrefix("api");
 
   // Only setup Swagger in non-production or local environments
-  if (process.env.NODE_ENV !== "production" || !process.env.VERCEL) {
+  if (process.env.NODE_ENV !== "production") {
     const config = new DocumentBuilder()
       .setTitle("Habeat API")
       .setDescription("Habeat Server API Documentation")
@@ -86,9 +86,6 @@ async function bootstrap() {
 
   await app.init();
 
-  const isServerless = !!(
-    process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
-  );
   try {
     const connection = app.get(getConnectionToken());
     if (connection.readyState !== 1) {
@@ -119,7 +116,7 @@ export default async (req: any, res: any) => {
   }
 };
 
-if (!process.env.VERCEL && require.main === module) {
+if (require.main === module) {
   bootstrap().then(async (app) => {
     const port = process.env.PORT || 5000;
     await app.listen(port);

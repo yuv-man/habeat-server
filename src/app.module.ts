@@ -1,6 +1,6 @@
 import { Module } from "@nestjs/common";
 import { MongooseModule } from "@nestjs/mongoose";
-import { ConfigModule } from "@nestjs/config";
+import { ConfigModule, ConfigService } from "@nestjs/config";
 import { AuthModule } from "./auth/auth.module";
 import { UserModule } from "./user/user.module";
 import { GeneratorModule } from "./generator/generator.module";
@@ -37,12 +37,6 @@ import logger from "./utils/logger";
         const safeUrl = mongoUrl.replace(/\/\/[^:]+:[^@]+@/, "//***:***@");
         logger.info(`Connecting to MongoDB: ${safeUrl}`);
 
-        // Check if running in serverless environment (Vercel, AWS Lambda, etc.)
-        const isServerless =
-          process.env.VERCEL ||
-          process.env.AWS_LAMBDA_FUNCTION_NAME ||
-          process.env.SERVERLESS;
-
         const connectionOptions: any = {
           uri: mongoUrl,
           dbName: "habeat",
@@ -54,28 +48,17 @@ import logger from "./utils/logger";
           directConnection: false, // Use SRV records for Atlas
         };
 
-        if (isServerless) {
-          // Serverless-optimized settings
-          connectionOptions.maxPoolSize = 1; // Smaller pool for serverless
-          connectionOptions.minPoolSize = 0;
-          connectionOptions.serverSelectionTimeoutMS = 5000; // Shorter timeout
-          connectionOptions.socketTimeoutMS = 30000;
-          connectionOptions.connectTimeoutMS = 5000;
-          // Note: bufferCommands and bufferMaxEntries are Mongoose-specific options
-          // They should be set on the Mongoose connection, not MongoDB driver options
-          logger.info("Using serverless-optimized MongoDB connection settings");
-        } else {
-          // Regular server settings
-          connectionOptions.maxPoolSize = 10;
-          connectionOptions.minPoolSize = 2;
-          connectionOptions.serverSelectionTimeoutMS = 10000;
-          connectionOptions.socketTimeoutMS = 45000;
-          connectionOptions.connectTimeoutMS = 10000;
-          logger.info("Using standard MongoDB connection settings");
-        }
+        // Regular server settings
+        connectionOptions.maxPoolSize = 10;
+        connectionOptions.minPoolSize = 2;
+        connectionOptions.serverSelectionTimeoutMS = 10000;
+        connectionOptions.socketTimeoutMS = 45000;
+        connectionOptions.connectTimeoutMS = 10000;
+        logger.info("Using standard MongoDB connection settings");
 
         return connectionOptions;
       },
+      inject: [ConfigService],
     }),
     AuthModule,
     UserModule,
