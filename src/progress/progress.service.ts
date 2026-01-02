@@ -306,7 +306,7 @@ export class ProgressService {
 
       // Get water intake goal from weekly plan (dayPlan) - this is the source of truth
       // If dayPlan doesn't exist, try to get it from plan's weeklyPlan
-      let waterGoal = dayPlan?.waterIntake;
+      let waterGoal: number | undefined = dayPlan?.waterIntake;
       if (waterGoal === undefined && plan) {
         // Try to get from weeklyPlan if dayPlan is not available
         const weeklyPlan = (plan as any)?.weeklyPlan || {};
