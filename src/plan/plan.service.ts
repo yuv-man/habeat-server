@@ -1385,14 +1385,30 @@ export class PlanService {
         (progress as any).caloriesGoal += parsedCaloriesBurned;
 
         // Sync water goal from plan (plan is source of truth)
+        // dayPlan.waterIntake was just updated above, so use that value
         (progress as any).water.goal = dayPlan.waterIntake;
-
+        (progress as any).markModified("water");
         await progress.save();
+        
         logger.info(
           `[addWorkout] Added workout to today's progress. ` +
-            `Calories goal +${parsedCaloriesBurned}, Water goal synced to ${dayPlan.waterIntake} glasses`
+            `Calories goal +${parsedCaloriesBurned}, Water goal synced to ${dayPlan.waterIntake} glasses (plan updated)`
+        );
+      } else {
+        // Progress doesn't exist yet - it will be created with correct water goal when user accesses progress
+        // But we should still log that plan was updated
+        logger.info(
+          `[addWorkout] Added workout to plan for ${dateKey}. ` +
+            `Plan water intake updated to ${dayPlan.waterIntake} glasses. ` +
+            `Progress will sync when created.`
         );
       }
+    } else {
+      // Workout added for future date - plan is updated, progress will sync when that day arrives
+      logger.info(
+        `[addWorkout] Added workout to plan for ${dateKey}. ` +
+          `Plan water intake updated to ${dayPlan.waterIntake} glasses.`
+      );
     }
 
     return {

@@ -204,7 +204,8 @@ export class AuthController {
     const authUrl = await this.authService.getGoogleSigninUrl(
       redirectUri,
       frontendRedirectUri,
-      prompt
+      prompt,
+      "signup" // This is the signup endpoint
     );
 
     // Check if this is an AJAX request
@@ -325,7 +326,8 @@ export class AuthController {
     const authUrl = await this.authService.getGoogleSigninUrl(
       redirectUri,
       frontendRedirectUri,
-      prompt
+      prompt,
+      "signin" // This is the signin endpoint
     );
 
     // Check if this is an AJAX request (via Accept header or format query param)

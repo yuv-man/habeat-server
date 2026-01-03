@@ -7,6 +7,7 @@ import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import { Plan } from "../plan/plan.model";
 import { User } from "../user/user.model";
+import { Goal } from "../goals/goal.model";
 import aiService from "./generate.service";
 import logger from "../utils/logger";
 import {
@@ -16,6 +17,7 @@ import {
   IDayPlanWithMetadata,
   IWeeklyPlanObject,
   IWorkout,
+  IGoal,
 } from "../types/interfaces";
 import {
   calculateBMR,
@@ -38,7 +40,8 @@ export class GeneratorService {
   constructor(
     @InjectModel(Plan.name) private planModel: Model<IPlan>,
     @InjectModel(User.name) private userModel: Model<IUserData>,
-    @InjectModel(Meal.name) private mealModel: Model<IMeal>
+    @InjectModel(Meal.name) private mealModel: Model<IMeal>,
+    @InjectModel(Goal.name) private goalModel: Model<IGoal>
   ) {}
 
   /**
@@ -75,6 +78,19 @@ export class GeneratorService {
       `Generating meal plan starting from: ${finalStartDate.toISOString().split("T")[0]} (today is ${today.toISOString().split("T")[0]})`
     );
 
+    // Fetch active goals for the user
+    const activeGoals = await this.goalModel
+      .find({
+        userId: new mongoose.Types.ObjectId(userId),
+        status: { $in: ["active", "in_progress"] },
+      })
+      .lean()
+      .exec();
+
+    logger.info(
+      `[generateWeeklyMealPlan] Found ${activeGoals.length} active goals for user ${userId}`
+    );
+
     const {
       mealPlan,
       language: generatedLanguage,
@@ -84,7 +100,8 @@ export class GeneratorService {
       finalStartDate,
       "weekly", // Force weekly
       language,
-      useMock
+      useMock,
+      activeGoals // Pass goals to AI service
     );
 
     // Validate that meal plan was generated

@@ -7,6 +7,7 @@ import {
   IParsedWeeklyPlanResponse,
   IMeal,
   IRecipe,
+  IGoal,
 } from "../types/interfaces";
 import mongoose from "mongoose";
 import { generateFullWeek } from "../mocks/mockWeeklyPlan";
@@ -430,7 +431,8 @@ const generateMealPlanWithGemini = async (
   weekStartDate: Date,
   planType: "daily" | "weekly",
   language: string,
-  apiKey: string
+  apiKey: string,
+  goals: IGoal[] = []
 ): Promise<MealPlanResponse> => {
   if (!apiKey.startsWith("AIza") || apiKey.length < 39) {
     logger.warn(
@@ -470,7 +472,7 @@ const generateMealPlanWithGemini = async (
   logger.info(`[Gemini] Will try models in order: ${modelsToTry.join(", ")}`);
 
   const { prompt, dayToName, nameToDay, dates, activeDays, workoutDays } =
-    buildPrompt(userData, planType, language, weekStartDate);
+    buildPrompt(userData, planType, language, weekStartDate, goals);
 
   // Helper to get day name from date string
   const getDayNameFromDate = (dateStr: string): string => {
@@ -793,7 +795,8 @@ const generateMealPlanWithAI = async (
   weekStartDate: Date,
   planType: "daily" | "weekly" = "daily",
   language: string = "en",
-  useMock: boolean = false
+  useMock: boolean = false,
+  goals: IGoal[] = []
 ): Promise<MealPlanResponse> => {
   try {
     if (useMock) {
@@ -822,7 +825,8 @@ const generateMealPlanWithAI = async (
           weekStartDate,
           planType,
           language,
-          apiKey
+          apiKey,
+          goals
         );
       } catch (geminiError: unknown) {
         logger.warn(
@@ -841,7 +845,8 @@ const generateMealPlanWithAI = async (
         weekStartDate,
         planType,
         language,
-        false
+        false,
+        goals
       );
     } catch (llamaError: unknown) {
       throw new Error(
@@ -854,11 +859,113 @@ const generateMealPlanWithAI = async (
   }
 };
 
+// Helper function to determine goal-based adjustments
+const getGoalBasedAdjustments = (
+  goals: IGoal[]
+): {
+  workoutTypes: string[];
+  calorieAdjustment: number;
+  macroAdjustments?: { protein?: number; carbs?: number; fat?: number };
+  workoutFrequency?: number;
+  goalDescription: string;
+} => {
+  if (!goals || goals.length === 0) {
+    return {
+      workoutTypes: [],
+      calorieAdjustment: 0,
+      goalDescription: "",
+    };
+  }
+
+  // Analyze goals to determine adjustments
+  const goalKeywords = goals.map((g) => ({
+    title: g.title.toLowerCase(),
+    description: g.description.toLowerCase(),
+    unit: g.unit.toLowerCase(),
+  }));
+
+  let workoutTypes: string[] = [];
+  let calorieAdjustment = 0;
+  let macroAdjustments: { protein?: number; carbs?: number; fat?: number } = {};
+  let workoutFrequency: number | undefined;
+  const goalDescriptions: string[] = [];
+
+  goalKeywords.forEach((goal, index) => {
+    const fullText = `${goal.title} ${goal.description}`;
+    goalDescriptions.push(
+      `${goals[index].title}: ${goals[index].description} (Target: ${goals[index].target} ${goals[index].unit})`
+    );
+
+    // Marathon/Running goals
+    if (
+      fullText.includes("marathon") ||
+      fullText.includes("run") ||
+      goal.unit.includes("km") ||
+      goal.unit.includes("mile")
+    ) {
+      workoutTypes.push("running", "endurance", "cardio");
+      calorieAdjustment += 400; // Extra calories for endurance training (marathon training is very demanding)
+      macroAdjustments.carbs = (macroAdjustments.carbs || 0) + 15; // Increase carbs significantly for endurance (carbs are primary fuel)
+      macroAdjustments.protein = (macroAdjustments.protein || 0) + 5; // Slight protein increase for recovery
+      workoutFrequency = Math.max(workoutFrequency || 0, 5); // More frequent training (5-6x/week for marathon prep)
+    }
+
+    // Strength/Muscle goals
+    if (
+      fullText.includes("muscle") ||
+      fullText.includes("strength") ||
+      fullText.includes("lift") ||
+      fullText.includes("weight")
+    ) {
+      workoutTypes.push("strength", "weights", "bodyweight");
+      calorieAdjustment += 500; // Extra calories for muscle building (need surplus)
+      macroAdjustments.protein = (macroAdjustments.protein || 0) + 20; // Significant protein increase (1.6-2.2g per kg bodyweight)
+      macroAdjustments.carbs = (macroAdjustments.carbs || 0) + 10; // Increase carbs for training energy
+      workoutFrequency = Math.max(workoutFrequency || 0, 4); // 4-6x/week for muscle building
+    }
+
+    // Weight loss goals
+    if (
+      fullText.includes("lose") ||
+      fullText.includes("weight") ||
+      fullText.includes("fat")
+    ) {
+      workoutTypes.push("cardio", "hiit", "strength");
+      calorieAdjustment -= 300; // Moderate deficit for weight loss
+      macroAdjustments.protein = (macroAdjustments.protein || 0) + 15; // Higher protein for satiety and muscle preservation
+      workoutFrequency = Math.max(workoutFrequency || 0, 5); // 5-6x/week for weight loss
+    }
+
+    // Flexibility/Yoga goals
+    if (
+      fullText.includes("flexibility") ||
+      fullText.includes("yoga") ||
+      fullText.includes("stretch")
+    ) {
+      workoutTypes.push("yoga", "flexibility", "stretching");
+      workoutFrequency = Math.max(workoutFrequency || 0, 3);
+    }
+  });
+
+  // Remove duplicates
+  workoutTypes = [...new Set(workoutTypes)];
+
+  return {
+    workoutTypes,
+    calorieAdjustment,
+    macroAdjustments:
+      Object.keys(macroAdjustments).length > 0 ? macroAdjustments : undefined,
+    workoutFrequency,
+    goalDescription: goalDescriptions.join("; "),
+  };
+};
+
 const buildPrompt = (
   userData: IUserData,
   planType: "daily" | "weekly",
   language: string,
-  weekStartDate: Date
+  weekStartDate: Date,
+  goals: IGoal[] = []
 ): {
   prompt: string;
   dayToName: Record<number, string>;
@@ -867,15 +974,55 @@ const buildPrompt = (
   activeDays: number[];
   workoutDays: number[];
 } => {
+  // Get goal-based adjustments
+  const goalAdjustments = getGoalBasedAdjustments(goals);
+
   const bmr = calculateBMR(
     userData.weight,
     userData.height,
     userData.age,
     userData.gender
   );
-  const tdee = calculateTDEE(bmr, userData.workoutFrequency);
-  const targetCalories = calculateTargetCalories(tdee, userData.path);
-  const macros = calculateMacros(targetCalories, userData.path);
+
+  // Balance workout frequency: use the higher of user preference or goal requirement
+  // This ensures goals enhance training but respects user's current capacity
+  const userWorkoutFrequency = userData.workoutFrequency;
+  const goalWorkoutFrequency = goalAdjustments.workoutFrequency;
+
+  // If both exist, use the higher value (goals can increase but not decrease user preference)
+  // If only one exists, use that. If neither exists, will fall back to path default later
+  const effectiveWorkoutFrequency =
+    goalWorkoutFrequency && userWorkoutFrequency
+      ? Math.max(goalWorkoutFrequency, userWorkoutFrequency)
+      : goalWorkoutFrequency || userWorkoutFrequency;
+
+  const tdee = calculateTDEE(bmr, effectiveWorkoutFrequency);
+
+  // Apply goal-based calorie adjustment
+  const baseTargetCalories = calculateTargetCalories(tdee, userData.path);
+  const targetCalories = Math.max(
+    1200,
+    baseTargetCalories + goalAdjustments.calorieAdjustment
+  );
+
+  // Calculate macros with goal-based adjustments
+  let macros = calculateMacros(targetCalories, userData.path);
+  if (goalAdjustments.macroAdjustments) {
+    macros = {
+      protein: Math.max(
+        0,
+        macros.protein + (goalAdjustments.macroAdjustments.protein || 0)
+      ),
+      carbs: Math.max(
+        0,
+        macros.carbs + (goalAdjustments.macroAdjustments.carbs || 0)
+      ),
+      fat: Math.max(
+        0,
+        macros.fat + (goalAdjustments.macroAdjustments.fat || 0)
+      ),
+    };
+  }
 
   // Always use today's date as the start date
   const today = new Date();
@@ -957,11 +1104,30 @@ const buildPrompt = (
     sunday: 0,
   };
 
-  // Use workoutFrequency from userData if provided, otherwise fall back to path-based default
+  // Determine final workout frequency: balance user preference with goal requirements
   const defaultWorkoutsPerWeek =
     PATH_WORKOUTS_GOAL[userData.path as keyof typeof PATH_WORKOUTS_GOAL];
+
+  // Priority: use effectiveWorkoutFrequency (already balanced), then user preference, then path default
   const totalWorkoutsPerWeek =
-    userData.workoutFrequency ?? defaultWorkoutsPerWeek;
+    effectiveWorkoutFrequency ??
+    userData.workoutFrequency ??
+    defaultWorkoutsPerWeek;
+
+  // Log workout frequency decision for debugging
+  if (goalWorkoutFrequency && userWorkoutFrequency) {
+    logger.info(
+      `[buildPrompt] Workout frequency balancing: User preference=${userWorkoutFrequency}/week, Goal requirement=${goalWorkoutFrequency}/week, Final=${totalWorkoutsPerWeek}/week (using higher value)`
+    );
+  } else if (userWorkoutFrequency) {
+    logger.info(
+      `[buildPrompt] Using user's workout frequency preference: ${userWorkoutFrequency}/week`
+    );
+  } else if (goalWorkoutFrequency) {
+    logger.info(
+      `[buildPrompt] Using goal-based workout frequency: ${goalWorkoutFrequency}/week`
+    );
+  }
   const daysLeft = daysToGenerate.length;
   const workoutsToInclude = Math.min(totalWorkoutsPerWeek, daysLeft);
   const workoutDays = Array.from(
@@ -974,6 +1140,28 @@ const buildPrompt = (
     pathGuidelines.custom;
   const validWorkoutCategories = Object.keys(workoutCategories).join(",");
 
+  // Build goal-specific workout instructions
+  // Balance goal-oriented workouts with user's workout frequency preference
+  const workoutTypeInstructions =
+    goalAdjustments.workoutTypes.length > 0
+      ? `\n  WORKOUT REQUIREMENTS (Based on user goals - enhance but respect user preferences):\n  - Prioritize these workout types when possible: ${goalAdjustments.workoutTypes.join(", ")}\n  - Workouts should support the user's goals while respecting their preferred workout frequency (${totalWorkoutsPerWeek} workouts/week)\n  - Adjust workout intensity and duration based on goal requirements\n  - Balance goal-oriented training with user's current fitness level`
+      : "";
+
+  const goalInstructions = goalAdjustments.goalDescription
+    ? `\n  ACTIVE GOALS:\n  ${goalAdjustments.goalDescription}\n  - Meal plan and workouts SHOULD be optimized to support these goals\n  - Adjust calorie intake and macro distribution accordingly\n  - Ensure workouts align with goal requirements\n  - IMPORTANT: Goals should enhance the plan, but user preferences (food preferences, workout frequency) take priority`
+    : "";
+
+  // Build food preferences section
+  const foodPreferencesSection =
+    userData.foodPreferences && userData.foodPreferences.length > 0
+      ? `\n  FOOD PREFERENCES (HIGH PRIORITY - User's preferred cuisines/styles):\n  - ${userData.foodPreferences.join(", ")}\n  - Incorporate these preferences into meals whenever possible\n  - Balance preferences with nutritional goals and dietary restrictions`
+      : "";
+
+  const dislikesSection =
+    userData.dislikes && userData.dislikes.length > 0
+      ? `\n  DISLIKES (MUST AVOID):\n  - ${userData.dislikes.join(", ")}\n  - Never include these foods/ingredients in the meal plan`
+      : "";
+
   const prompt = `As a certified nutritionist, create a personalized ${planType} meal plan optimized for ${
     userData.path
   }.
@@ -982,16 +1170,19 @@ const buildPrompt = (
   - ${userData.age} year old ${userData.gender}, ${userData.height}cm, ${
     userData.weight
   }kg
-  - Daily targets: ${targetCalories} calories
-  - Macro Distribution: Protein: ${macros.protein}g, Carbs: ${macros.carbs}g, Fat: ${macros.fat}g
+  - Daily targets: ${targetCalories} calories${goalAdjustments.calorieAdjustment !== 0 ? ` (adjusted ${goalAdjustments.calorieAdjustment > 0 ? "+" : ""}${goalAdjustments.calorieAdjustment} for goals)` : ""}
+  - Macro Distribution: Protein: ${macros.protein}g, Carbs: ${macros.carbs}g, Fat: ${macros.fat}g${goalAdjustments.macroAdjustments ? " (adjusted for goals)" : ""}
   ${userData.allergies ? `- Allergies: ${userData.allergies.join(", ")}` : ""}
-  ${userData.dietaryRestrictions ? `- Dietary: ${userData.dietaryRestrictions.join(", ")}` : ""}
+  ${userData.dietaryRestrictions ? `- Dietary Restrictions: ${userData.dietaryRestrictions.join(", ")}` : ""}
+  ${foodPreferencesSection}
+  ${dislikesSection}
   
   Path Guidelines for ${userData.path}: ${pathGuideline}
+  ${goalInstructions}
   
   Exercise: ${totalWorkoutsPerWeek} workouts/week on ${workoutDays
     .map((d) => dayToName[d])
-    .join(", ")}
+    .join(", ")}${workoutTypeInstructions}
   
   Meal Plan Days: ${daysToGenerate
     .map((d, i) => {
@@ -1007,11 +1198,18 @@ const buildPrompt = (
     })
     .join(", ")}
   
+  MEAL GENERATION PRIORITIES:
+  1. FOOD PREFERENCES: ${userData.foodPreferences && userData.foodPreferences.length > 0 ? `Incorporate user's preferred cuisines/styles (${userData.foodPreferences.join(", ")}) into meals whenever possible.` : "No specific food preferences provided."}
+  2. GOALS: ${goalAdjustments.goalDescription ? `Optimize meals to support user goals (${goalAdjustments.goalDescription.split(";")[0]}).` : "No active goals - use standard nutrition guidelines."}
+  3. DIETARY RESTRICTIONS: ${userData.dietaryRestrictions && userData.dietaryRestrictions.length > 0 ? `Respect dietary restrictions: ${userData.dietaryRestrictions.join(", ")}.` : "No dietary restrictions."}
+  4. DISLIKES: ${userData.dislikes && userData.dislikes.length > 0 ? `Never include: ${userData.dislikes.join(", ")}.` : "No dislikes specified."}
+  
   CRITICAL INGREDIENT RULES:
   1. Use raw ingredients only (e.g., "egg" not "poached egg")
   2. NEVER use "mixed_vegetables" - list each vegetable separately
   3. Format: "ingredient|amount|unit|category" (e.g., "chicken_breast|200|g|Proteins")
   4. Valid categories: Proteins, Vegetables, Fruits, Grains, Dairy, Pantry, Spices
+  5. When selecting ingredients and meal names, prioritize user's food preferences while meeting nutritional goals
   
   Return ONLY valid JSON in this EXACT format:
   {
@@ -1032,6 +1230,20 @@ const buildPrompt = (
     }
   }
   
+  WORKOUT GUIDELINES:${
+    goalAdjustments.workoutTypes.length > 0
+      ? `
+  - CRITICAL: Workouts MUST prioritize these categories: ${goalAdjustments.workoutTypes.join(", ")}
+  - Workout names should reflect goal-oriented training (e.g., "Long Distance Run" for marathon goals, "Strength Training" for muscle goals)
+  - Adjust workout duration and intensity based on goal requirements
+  - For endurance goals (marathon, running): Include longer duration cardio workouts (45-90 min)
+  - For strength goals: Include weight training and resistance exercises (30-60 min)
+  - For weight loss goals: Mix HIIT and cardio workouts (20-45 min)`
+      : `
+  - Use appropriate workout categories from: ${validWorkoutCategories}
+  - Workout duration should be reasonable (20-60 minutes typically)`
+  }
+  
   WATER INTAKE GUIDELINES:
   - Base daily water intake: 8 glasses (2000ml) per day
   - If there are workouts scheduled for that day, add 1-2 extra glasses per workout
@@ -1048,7 +1260,8 @@ const generateMealPlanWithLlama2 = async (
   weekStartDate: Date,
   planType: "daily" | "weekly" = "daily",
   language: string = "en",
-  useMock: boolean = false
+  useMock: boolean = false,
+  goals: IGoal[] = []
 ): Promise<MealPlanResponse> => {
   try {
     if (useMock) {
@@ -1063,7 +1276,7 @@ const generateMealPlanWithLlama2 = async (
     }
 
     const { prompt, dayToName, nameToDay, dates, activeDays, workoutDays } =
-      buildPrompt(userData, planType, language, weekStartDate);
+      buildPrompt(userData, planType, language, weekStartDate, goals);
 
     const ollamaModel = process.env.OLLAMA_MODEL || "phi";
     logger.info(`[Llama] Using model: ${ollamaModel}`);

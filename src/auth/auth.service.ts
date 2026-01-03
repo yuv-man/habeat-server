@@ -193,13 +193,15 @@ export class AuthService {
   async getGoogleSigninUrl(
     redirectUri: string,
     frontendRedirectUri: string,
-    prompt?: string
+    prompt?: string,
+    mode: "signup" | "signin" = "signin"
   ): Promise<string> {
-    // Encode both frontendRedirectUri and backend redirectUri in state parameter
-    // This ensures we can retrieve the exact redirectUri used when exchanging the code
+    // Encode frontendRedirectUri, backend redirectUri, and mode in state parameter
+    // This ensures we can retrieve the exact redirectUri and know if it's signup or signin
     const stateData = {
       frontendRedirectUri,
       backendRedirectUri: redirectUri,
+      mode, // "signup" or "signin"
     };
     const state = Buffer.from(JSON.stringify(stateData)).toString("base64");
 
@@ -223,24 +225,27 @@ export class AuthService {
     redirectUri: string,
     state?: string
   ): Promise<string> {
-    // Decode state parameter to get both frontendRedirectUri and backend redirectUri
+    // Decode state parameter to get frontendRedirectUri, backend redirectUri, and mode
     let frontendRedirectUri =
       process.env.FRONTEND_REDIRECT_URI || "http://localhost:3000";
     let backendRedirectUri = redirectUri; // Use provided redirectUri as fallback
+    let mode: "signup" | "signin" = "signin"; // Default to signin for backward compatibility
 
     if (state) {
       try {
         const decodedState = Buffer.from(state, "base64").toString("utf-8");
         try {
-          // Try to parse as JSON (new format with both URIs)
+          // Try to parse as JSON (new format with URIs and mode)
           const stateData = JSON.parse(decodedState);
           frontendRedirectUri =
             stateData.frontendRedirectUri || frontendRedirectUri;
           backendRedirectUri =
             stateData.backendRedirectUri || backendRedirectUri;
+          mode = stateData.mode || "signin"; // Default to signin if not specified
           logger.info("Decoded state parameter (new format)", {
             frontendRedirectUri,
             backendRedirectUri,
+            mode,
           });
         } catch (jsonError) {
           // Fallback to old format (just frontendRedirectUri as string)
@@ -287,12 +292,18 @@ export class AuthService {
       throw new UnauthorizedException("Invalid Google token");
     }
 
-    // Find or create user
+    // Handle signup vs signin based on mode
     let user = await this.userModel.findOne({ email: googleUser.email });
 
-    if (!user) {
-      // Auto-signup: create user if they don't exist
-      const normalizedPath = "healthy"; // Default path
+    if (mode === "signup") {
+      // For signup: user should NOT exist
+      if (user) {
+        throw new ConflictException(
+          "User already exists. Please use sign in instead."
+        );
+      }
+
+      // Create new user for signup
       user = await this.userModel.create({
         email: googleUser.email,
         name:
@@ -304,7 +315,7 @@ export class AuthService {
         gender: "male",
         height: 170,
         weight: 70,
-        path: normalizedPath,
+        path: "healthy",
         picture: googleUser.picture,
         oauthProvider: "google",
         oauthId: googleUser.sub,
@@ -334,7 +345,14 @@ export class AuthService {
         "en"
       );
     } else {
-      // Update existing user
+      // For signin: user MUST exist
+      if (!user) {
+        throw new UnauthorizedException(
+          "User not found. Please sign up first."
+        );
+      }
+
+      // Update existing user with OAuth info
       (user as any).oauthProvider = "google";
       (user as any).oauthId = googleUser.sub;
       if (googleUser.picture && !(user as any).picture) {

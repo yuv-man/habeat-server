@@ -242,23 +242,28 @@ export class ProgressService {
   }
 
   // Helper to process meals and ensure they're in DB
+  // Optimized: Process breakfast, lunch, dinner in parallel for better performance
   private async processMealsForProgress(dayPlan: any): Promise<any> {
-    const breakfast = await this.ensureMealInDB(
-      dayPlan?.meals?.breakfast
-        ? { ...dayPlan.meals.breakfast, category: "breakfast" }
-        : null
-    );
-    const lunch = await this.ensureMealInDB(
-      dayPlan?.meals?.lunch
-        ? { ...dayPlan.meals.lunch, category: "lunch" }
-        : null
-    );
-    const dinner = await this.ensureMealInDB(
-      dayPlan?.meals?.dinner
-        ? { ...dayPlan.meals.dinner, category: "dinner" }
-        : null
-    );
+    // Process breakfast, lunch, dinner in parallel
+    const [breakfast, lunch, dinner] = await Promise.all([
+      this.ensureMealInDB(
+        dayPlan?.meals?.breakfast
+          ? { ...dayPlan.meals.breakfast, category: "breakfast" }
+          : null
+      ),
+      this.ensureMealInDB(
+        dayPlan?.meals?.lunch
+          ? { ...dayPlan.meals.lunch, category: "lunch" }
+          : null
+      ),
+      this.ensureMealInDB(
+        dayPlan?.meals?.dinner
+          ? { ...dayPlan.meals.dinner, category: "dinner" }
+          : null
+      ),
+    ]);
 
+    // Process snacks in parallel
     const snacks = await Promise.all(
       (dayPlan?.meals?.snacks || []).map((snack: any) =>
         this.ensureMealInDB({ ...snack, category: "snack" })
@@ -280,16 +285,21 @@ export class ProgressService {
     // Use dateKey (YYYY-MM-DD) for timezone-safe querying
     const todayDateKey = this.getLocalDateKey(today);
 
-    let progress = await this.progressModel
-      .findOne<IDailyProgress>({
-        userId,
-        dateKey: todayDateKey, // Query by dateKey instead of date range
-      })
-      .populate("meals.breakfast meals.lunch meals.dinner meals.snacks");
+    // Fetch progress and plan in parallel for better performance
+    const [progress, plan] = await Promise.all([
+      this.progressModel
+        .findOne<IDailyProgress>({
+          userId,
+          dateKey: todayDateKey,
+        })
+        .populate("meals.breakfast meals.lunch meals.dinner meals.snacks"),
+      this.planModel.findOne({ userId }).lean(), // Use lean() for plan since we only read from it
+    ]);
 
-    const plan = await this.planModel.findOne({ userId });
     const weeklyPlan = (plan as any)?.weeklyPlan || {};
     const dayPlan = weeklyPlan[todayDateKey];
+
+    let progressDoc: any = progress;
 
     if (!progress) {
       // Create new progress with meals from plan - ensure meals are saved to DB
@@ -297,22 +307,12 @@ export class ProgressService {
 
       // Calculate initial consumed water based on workouts (capped at reasonable amount)
       const workouts = dayPlan?.workouts || [];
-      const workoutWaterGlasses = calculateDayWorkoutWater(workouts);
-      // Cap initial consumed water from workouts at 2 glasses (not too many!)
-      const initialWaterConsumed = Math.min(2, workoutWaterGlasses);
 
       // Get macro goals from plan (calculated from user metrics - BMI, TDEE, etc.)
       const macroGoals = this.getMacroGoalsFromPlan(plan);
 
       // Get water intake goal from weekly plan (dayPlan) - this is the source of truth
-      // If dayPlan doesn't exist, try to get it from plan's weeklyPlan
-      let waterGoal: number | undefined = dayPlan?.waterIntake;
-      if (waterGoal === undefined && plan) {
-        // Try to get from weeklyPlan if dayPlan is not available
-        const weeklyPlan = (plan as any)?.weeklyPlan || {};
-        waterGoal = weeklyPlan[todayDateKey]?.waterIntake;
-      }
-      // Only use default if plan doesn't exist at all
+      let waterGoal: number = dayPlan?.waterIntake ?? 8;
       if (waterGoal === undefined) {
         logger.warn(
           `[getTodayProgress] No waterIntake found in weekly plan for ${todayDateKey}, using default 8`
@@ -320,15 +320,15 @@ export class ProgressService {
         waterGoal = 8;
       }
 
-      progress = await this.progressModel.create({
+      progressDoc = await this.progressModel.create({
         userId,
         planId: plan?._id,
         date: today,
-        dateKey: todayDateKey, // Store dateKey for timezone-safe querying
+        dateKey: todayDateKey,
         caloriesConsumed: 0,
         caloriesGoal: Math.round(plan?.userMetrics?.tdee || 2000),
         water: {
-          consumed: initialWaterConsumed,
+          consumed: 0,
           goal: waterGoal,
         },
         meals: meals,
@@ -345,14 +345,12 @@ export class ProgressService {
         fat: { consumed: 0, goal: macroGoals.fat },
       });
 
-      // Always sync water goal from plan immediately after creation to ensure consistency
-      await this.syncWaterGoalFromPlan(progress as any, plan, todayDateKey);
+      // Populate meals after creation
+      await progressDoc.populate(
+        "meals.breakfast meals.lunch meals.dinner meals.snacks"
+      );
     } else {
-      // Progress exists - sync water goal from plan
-      const progressDoc = progress as any;
-      await this.syncWaterGoalFromPlan(progressDoc, plan, todayDateKey);
-
-      // Check if meals are null - populate from plan if so
+      // Progress exists - check if meals need to be populated from plan
       const needsUpdate =
         !progressDoc.meals?.breakfast &&
         !progressDoc.meals?.lunch &&
@@ -363,56 +361,54 @@ export class ProgressService {
         // Ensure meals are saved to DB
         const meals = await this.processMealsForProgress(dayPlan);
 
-        const updatedProgress = await this.progressModel.findByIdAndUpdate(
-          progressDoc._id,
-          {
-            $set: {
-              "meals.breakfast": meals.breakfast,
-              "meals.lunch": meals.lunch,
-              "meals.dinner": meals.dinner,
-              "meals.snacks": meals.snacks,
-              workouts:
-                dayPlan?.workouts?.map((w: any) => ({
-                  name: w.name,
-                  duration: parseDuration(w.duration),
-                  category: w.category,
-                  caloriesBurned: parseCalories(w.caloriesBurned),
-                  time: w.time,
-                  done: false,
-                })) ||
-                progressDoc.workouts ||
-                [],
+        progressDoc = await this.progressModel
+          .findByIdAndUpdate(
+            progressDoc._id,
+            {
+              $set: {
+                "meals.breakfast": meals.breakfast,
+                "meals.lunch": meals.lunch,
+                "meals.dinner": meals.dinner,
+                "meals.snacks": meals.snacks,
+                workouts:
+                  dayPlan?.workouts?.map((w: any) => ({
+                    name: w.name,
+                    duration: parseDuration(w.duration),
+                    category: w.category,
+                    caloriesBurned: parseCalories(w.caloriesBurned),
+                    time: w.time,
+                    done: false,
+                  })) ||
+                  progressDoc.workouts ||
+                  [],
+              },
             },
-          },
-          { new: true }
-        );
-        if (updatedProgress) {
-          progress = updatedProgress as unknown as IDailyProgress;
-        }
+            { new: true }
+          )
+          .populate("meals.breakfast meals.lunch meals.dinner meals.snacks");
+      }
+
+      // Sync water goal from plan (only if it changed, avoid unnecessary saves)
+      const planWaterIntake = dayPlan?.waterIntake ?? 8;
+      if (progressDoc.water?.goal !== planWaterIntake) {
+        progressDoc.water = {
+          consumed: progressDoc.water?.consumed || 0,
+          goal: planWaterIntake,
+        };
+        progressDoc.markModified("water");
+        await progressDoc.save();
       }
     }
-
-    // Always sync water goal from plan before returning (ensure it's up to date)
-    const progressDoc = progress as any;
-    await this.syncWaterGoalFromPlan(progressDoc, plan, todayDateKey);
-
-    // Re-fetch progress to get the synced version
-    progress = await this.progressModel
-      .findOne<IDailyProgress>({
-        userId,
-        dateKey: todayDateKey,
-      })
-      .populate("meals.breakfast meals.lunch meals.dinner meals.snacks");
 
     return {
       success: true,
       data: {
-        progress,
-        stats: formatProgressStats(progress),
+        progress: progressDoc,
+        stats: formatProgressStats(progressDoc),
         message:
-          (progress as unknown as IDailyProgress).caloriesConsumed === 0
+          progressDoc.caloriesConsumed === 0
             ? "Day started! Complete meals from your plan to track calories."
-            : `Current progress: ${(progress as unknown as IDailyProgress).caloriesConsumed}/${(progress as unknown as IDailyProgress).caloriesGoal} calories`,
+            : `Current progress: ${progressDoc.caloriesConsumed}/${progressDoc.caloriesGoal} calories`,
       },
     };
   }
