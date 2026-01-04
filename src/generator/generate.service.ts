@@ -974,7 +974,7 @@ const buildPrompt = (
   activeDays: number[];
   workoutDays: number[];
 } => {
-  // Get goal-based adjustments
+  // --- 1. CALCULATIONS & SETUP ---
   const goalAdjustments = getGoalBasedAdjustments(goals);
 
   const bmr = calculateBMR(
@@ -984,13 +984,9 @@ const buildPrompt = (
     userData.gender
   );
 
-  // Balance workout frequency: use the higher of user preference or goal requirement
-  // This ensures goals enhance training but respects user's current capacity
+  // Balance workout frequency
   const userWorkoutFrequency = userData.workoutFrequency;
   const goalWorkoutFrequency = goalAdjustments.workoutFrequency;
-
-  // If both exist, use the higher value (goals can increase but not decrease user preference)
-  // If only one exists, use that. If neither exists, will fall back to path default later
   const effectiveWorkoutFrequency =
     goalWorkoutFrequency && userWorkoutFrequency
       ? Math.max(goalWorkoutFrequency, userWorkoutFrequency)
@@ -998,14 +994,13 @@ const buildPrompt = (
 
   const tdee = calculateTDEE(bmr, effectiveWorkoutFrequency);
 
-  // Apply goal-based calorie adjustment
+  // Calorie & Macro Math
   const baseTargetCalories = calculateTargetCalories(tdee, userData.path);
   const targetCalories = Math.max(
     1200,
     baseTargetCalories + goalAdjustments.calorieAdjustment
   );
 
-  // Calculate macros with goal-based adjustments
   let macros = calculateMacros(targetCalories, userData.path);
   if (goalAdjustments.macroAdjustments) {
     macros = {
@@ -1024,66 +1019,33 @@ const buildPrompt = (
     };
   }
 
-  // Always use today's date as the start date
+  // --- 2. DATE & DAY GENERATION ---
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-
-  // Use today regardless of what weekStartDate was passed
   const actualStartDate = today;
-  const currentDay = actualStartDate.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-
-  const todayLocalKey = getLocalDateKey(actualStartDate);
-  logger.info(
-    `[buildPrompt] Using today as start date: ${todayLocalKey} (day: ${currentDay}, ${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][currentDay]})`
-  );
+  const currentDay = actualStartDate.getDay();
 
   const daysToGenerate: number[] = [];
   const dates: Date[] = [];
 
-  // Generate from today until end of current week (Sunday)
-  // Week is Monday(1) to Sunday(0)
+  // Generate logic (Monday-Sunday logic)
   if (currentDay === 0) {
-    // Today is Sunday - only generate Sunday (last day of week)
     daysToGenerate.push(0);
     dates.push(new Date(actualStartDate));
   } else {
-    // Generate from today (currentDay) through Saturday (6), then Sunday (0)
     for (let day = currentDay; day <= 6; day++) {
       daysToGenerate.push(day);
       const date = new Date(actualStartDate);
       date.setDate(actualStartDate.getDate() + (day - currentDay));
       dates.push(date);
     }
-    // Add Sunday (end of week)
     daysToGenerate.push(0);
     const sundayDate = new Date(actualStartDate);
     sundayDate.setDate(actualStartDate.getDate() + (7 - currentDay));
     dates.push(sundayDate);
   }
 
-  // Validate: should never have more than 7 days
-  if (dates.length > 7) {
-    logger.error(`[buildPrompt] Generated ${dates.length} days, max is 7!`);
-    throw new Error("Cannot generate more than 7 days");
-  }
-
-  logger.info(
-    `[buildPrompt] Generating ${dates.length} days: ${dates.map((d) => getLocalDateKey(d)).join(", ")}`
-  );
-
-  // Validate all dates are valid
-  const invalidDates = dates.filter(
-    (date) => !(date instanceof Date) || isNaN(date.getTime())
-  );
-  if (invalidDates.length > 0) {
-    logger.error(
-      `[buildPrompt] Found ${invalidDates.length} invalid dates in dates array`
-    );
-    throw new Error("Invalid dates generated in buildPrompt");
-  }
-
-  const activeDays = daysToGenerate;
-
+  // --- 3. WORKOUT DISTRIBUTION LOGIC (FIXED) ---
   const dayToName: Record<number, string> = {
     1: "monday",
     2: "tuesday",
@@ -1093,7 +1055,6 @@ const buildPrompt = (
     6: "saturday",
     0: "sunday",
   };
-
   const nameToDay: Record<string, number> = {
     monday: 1,
     tuesday: 2,
@@ -1104,153 +1065,113 @@ const buildPrompt = (
     sunday: 0,
   };
 
-  // Determine final workout frequency: balance user preference with goal requirements
   const defaultWorkoutsPerWeek =
     PATH_WORKOUTS_GOAL[userData.path as keyof typeof PATH_WORKOUTS_GOAL];
-
-  // Priority: use effectiveWorkoutFrequency (already balanced), then user preference, then path default
   const totalWorkoutsPerWeek =
     effectiveWorkoutFrequency ??
     userData.workoutFrequency ??
     defaultWorkoutsPerWeek;
 
-  // Log workout frequency decision for debugging
-  if (goalWorkoutFrequency && userWorkoutFrequency) {
-    logger.info(
-      `[buildPrompt] Workout frequency balancing: User preference=${userWorkoutFrequency}/week, Goal requirement=${goalWorkoutFrequency}/week, Final=${totalWorkoutsPerWeek}/week (using higher value)`
-    );
-  } else if (userWorkoutFrequency) {
-    logger.info(
-      `[buildPrompt] Using user's workout frequency preference: ${userWorkoutFrequency}/week`
-    );
-  } else if (goalWorkoutFrequency) {
-    logger.info(
-      `[buildPrompt] Using goal-based workout frequency: ${goalWorkoutFrequency}/week`
-    );
-  }
   const daysLeft = daysToGenerate.length;
   const workoutsToInclude = Math.min(totalWorkoutsPerWeek, daysLeft);
-  const workoutDays = Array.from(
-    { length: workoutsToInclude },
-    (_, i) => daysToGenerate[Math.floor((i * daysLeft) / workoutsToInclude)]
+
+  // Calculate specific INDICES for workouts to distribute them evenly
+  const workoutIndices = Array.from({ length: workoutsToInclude }, (_, i) =>
+    Math.floor((i * daysLeft) / workoutsToInclude)
   );
+
+  // Map indices to actual Day Numbers
+  const workoutDays = workoutIndices.map((i) => daysToGenerate[i]);
+
+  // activeDays represents all days that will have meal plans
+  const activeDays = daysToGenerate;
+
+  // Create a Set of Date Strings that MUST have workouts
+  // This explicitly binds the workout to a specific YYYY-MM-DD
+  const workoutDatesSet = new Set(
+    workoutIndices.map((i) => getLocalDateKey(dates[i]))
+  );
+
+  // --- 4. PROMPT CONSTRUCTION ---
+
+  // Generate a rigid schedule map for the prompt to follow
+  const dailyScheduleManifest = dates
+    .map((date) => {
+      const dateKey = getLocalDateKey(date);
+      const dayName = dayToName[date.getDay()];
+      const hasWorkout = workoutDatesSet.has(dateKey);
+      return `- ${dateKey} (${dayName}): ${hasWorkout ? "MUST INCLUDE WORKOUT" : "Rest Day (No Workout)"}`;
+    })
+    .join("\n  ");
 
   const pathGuideline =
     pathGuidelines[userData.path as keyof typeof pathGuidelines] ||
     pathGuidelines.custom;
-  const validWorkoutCategories = Object.keys(workoutCategories).join(",");
 
-  // Build goal-specific workout instructions
-  // Balance goal-oriented workouts with user's workout frequency preference
-  const workoutTypeInstructions =
+  // Goal & Preference Sections
+  const goalContext = goalAdjustments.goalDescription
+    ? `ACTIVE GOAL: ${goalAdjustments.goalDescription}\n  (Adjust meals/macros/workouts to achieve this)`
+    : "GOAL: Maintain healthy lifestyle";
+
+  const foodPrefs = userData.foodPreferences?.length
+    ? `PREFERENCES: ${userData.foodPreferences.join(", ")}`
+    : "No specific preferences";
+
+  const dislikes = userData.dislikes?.length
+    ? `AVOID: ${userData.dislikes.join(", ")}`
+    : "No specific dislikes";
+
+  const workoutFocus =
     goalAdjustments.workoutTypes.length > 0
-      ? `\n  WORKOUT REQUIREMENTS (Based on user goals - enhance but respect user preferences):\n  - Prioritize these workout types when possible: ${goalAdjustments.workoutTypes.join(", ")}\n  - Workouts should support the user's goals while respecting their preferred workout frequency (${totalWorkoutsPerWeek} workouts/week)\n  - Adjust workout intensity and duration based on goal requirements\n  - Balance goal-oriented training with user's current fitness level`
-      : "";
+      ? `FOCUS: ${goalAdjustments.workoutTypes.join(", ")}`
+      : `FOCUS: ${Object.keys(workoutCategories).join(", ")}`;
 
-  const goalInstructions = goalAdjustments.goalDescription
-    ? `\n  ACTIVE GOALS:\n  ${goalAdjustments.goalDescription}\n  - Meal plan and workouts SHOULD be optimized to support these goals\n  - Adjust calorie intake and macro distribution accordingly\n  - Ensure workouts align with goal requirements\n  - IMPORTANT: Goals should enhance the plan, but user preferences (food preferences, workout frequency) take priority`
-    : "";
+  // THE OPTIMIZED PROMPT
+  const prompt = `As a nutritionist, create a ${planType} plan for a ${userData.age}y ${userData.gender} (${userData.height}cm/${userData.weight}kg).
+  
+  CONTEXT & RULES:
+  1. ${goalContext}
+  2. ${foodPrefs}
+  3. ${dislikes}
+  4. ${userData.dietaryRestrictions ? `RESTRICTIONS: ${userData.dietaryRestrictions.join(", ")}` : ""}
+  5. TARGETS: ${targetCalories} kcal (P:${macros.protein}g, C:${macros.carbs}g, F:${macros.fat}g)
+  6. PATH: ${userData.path} (${pathGuideline})
 
-  // Build food preferences section
-  const foodPreferencesSection =
-    userData.foodPreferences && userData.foodPreferences.length > 0
-      ? `\n  FOOD PREFERENCES (HIGH PRIORITY - User's preferred cuisines/styles):\n  - ${userData.foodPreferences.join(", ")}\n  - Incorporate these preferences into meals whenever possible\n  - Balance preferences with nutritional goals and dietary restrictions`
-      : "";
+  MANDATORY DAILY SCHEDULE:
+  You must follow this schedule exactly for the JSON keys:
+  ${dailyScheduleManifest}
 
-  const dislikesSection =
-    userData.dislikes && userData.dislikes.length > 0
-      ? `\n  DISLIKES (MUST AVOID):\n  - ${userData.dislikes.join(", ")}\n  - Never include these foods/ingredients in the meal plan`
-      : "";
+  WORKOUT INSTRUCTIONS:
+  - If the schedule above says "MUST INCLUDE WORKOUT", generate a workout array with 1 entry.
+  - If it says "Rest Day", the workout array must be empty [].
+  - Workout Focus: ${workoutFocus}
+  - Intensity: Adaptive to goal.
 
-  const prompt = `As a certified nutritionist, create a personalized ${planType} meal plan optimized for ${
-    userData.path
-  }.
-      
-  Client Profile:
-  - ${userData.age} year old ${userData.gender}, ${userData.height}cm, ${
-    userData.weight
-  }kg
-  - Daily targets: ${targetCalories} calories${goalAdjustments.calorieAdjustment !== 0 ? ` (adjusted ${goalAdjustments.calorieAdjustment > 0 ? "+" : ""}${goalAdjustments.calorieAdjustment} for goals)` : ""}
-  - Macro Distribution: Protein: ${macros.protein}g, Carbs: ${macros.carbs}g, Fat: ${macros.fat}g${goalAdjustments.macroAdjustments ? " (adjusted for goals)" : ""}
-  ${userData.allergies ? `- Allergies: ${userData.allergies.join(", ")}` : ""}
-  ${userData.dietaryRestrictions ? `- Dietary Restrictions: ${userData.dietaryRestrictions.join(", ")}` : ""}
-  ${foodPreferencesSection}
-  ${dislikesSection}
-  
-  Path Guidelines for ${userData.path}: ${pathGuideline}
-  ${goalInstructions}
-  
-  Exercise: ${totalWorkoutsPerWeek} workouts/week on ${workoutDays
-    .map((d) => dayToName[d])
-    .join(", ")}${workoutTypeInstructions}
-  
-  Meal Plan Days: ${daysToGenerate
-    .map((d, i) => {
-      const date = dates[i];
-      if (date && date instanceof Date && !isNaN(date.getTime())) {
-        return `${dayToName[d]} (${getLocalDateKey(date)})`;
-      } else {
-        logger.warn(
-          `[buildPrompt] Invalid date at index ${i} for day ${d}, using fallback`
-        );
-        return `${dayToName[d]} (invalid-date)`;
-      }
-    })
-    .join(", ")}
-  
-  MEAL GENERATION PRIORITIES:
-  1. FOOD PREFERENCES: ${userData.foodPreferences && userData.foodPreferences.length > 0 ? `Incorporate user's preferred cuisines/styles (${userData.foodPreferences.join(", ")}) into meals whenever possible.` : "No specific food preferences provided."}
-  2. GOALS: ${goalAdjustments.goalDescription ? `Optimize meals to support user goals (${goalAdjustments.goalDescription.split(";")[0]}).` : "No active goals - use standard nutrition guidelines."}
-  3. DIETARY RESTRICTIONS: ${userData.dietaryRestrictions && userData.dietaryRestrictions.length > 0 ? `Respect dietary restrictions: ${userData.dietaryRestrictions.join(", ")}.` : "No dietary restrictions."}
-  4. DISLIKES: ${userData.dislikes && userData.dislikes.length > 0 ? `Never include: ${userData.dislikes.join(", ")}.` : "No dislikes specified."}
-  
-  CRITICAL INGREDIENT RULES:
-  1. Use raw ingredients only (e.g., "egg" not "poached egg")
-  2. NEVER use "mixed_vegetables" - list each vegetable separately
-  3. Format: "ingredient|amount|unit|category" (e.g., "chicken_breast|200|g|Proteins")
-  4. Valid categories: Proteins, Vegetables, Fruits, Grains, Dairy, Pantry, Spices
-  5. When selecting ingredients and meal names, prioritize user's food preferences while meeting nutritional goals
-  
-  Return ONLY valid JSON in this EXACT format:
+  INGREDIENT RULES:
+  - Format: "ingredient|amount|unit|category" (e.g. "chicken|100|g|Proteins")
+  - Use RAW ingredients. No "mixed veggies".
+  - Categories: Proteins, Vegetables, Fruits, Grains, Dairy, Pantry, Spices.
+
+  OUTPUT FORMAT:
+  Return ONLY valid JSON. No text. Matches this schema exactly:
   {
     "weeklyPlan": {
       "YYYY-MM-DD": {
         "day": "monday",
         "date": "YYYY-MM-DD",
         "meals": {
-          "breakfast": { "name": "...", "calories": ..., "macros": {...}, "ingredients": [...], "prepTime": ... },
+          "breakfast": { "name": "...", "calories": 0, "macros": {"protein":0,"carbs":0,"fat":0}, "ingredients": ["name|0|unit|Category"], "prepTime": 0 },
           "lunch": { ... },
           "dinner": { ... },
           "snacks": [{ ... }]
         },
-        "hydration": { "waterTarget": ..., "recommendations": [...] },
-        "workouts": [{ "name": "...", "category": "...", "duration": ..., "caloriesBurned": ... }]
-      },
-      "YYYY-MM-DD": { ... }
+        "hydration": { "waterTarget": 8, "recommendations": ["..."] },
+        "workouts": [{ "name": "...", "category": "...", "duration": 0, "caloriesBurned": 0 }]
+      }
     }
   }
   
-  WORKOUT GUIDELINES:${
-    goalAdjustments.workoutTypes.length > 0
-      ? `
-  - CRITICAL: Workouts MUST prioritize these categories: ${goalAdjustments.workoutTypes.join(", ")}
-  - Workout names should reflect goal-oriented training (e.g., "Long Distance Run" for marathon goals, "Strength Training" for muscle goals)
-  - Adjust workout duration and intensity based on goal requirements
-  - For endurance goals (marathon, running): Include longer duration cardio workouts (45-90 min)
-  - For strength goals: Include weight training and resistance exercises (30-60 min)
-  - For weight loss goals: Mix HIIT and cardio workouts (20-45 min)`
-      : `
-  - Use appropriate workout categories from: ${validWorkoutCategories}
-  - Workout duration should be reasonable (20-60 minutes typically)`
-  }
-  
-  WATER INTAKE GUIDELINES:
-  - Base daily water intake: 8 glasses (2000ml) per day
-  - If there are workouts scheduled for that day, add 1-2 extra glasses per workout
-  - waterTarget should be in glasses (e.g., 8 for base, 9-10 if there's a workout)
-  - Maximum reasonable daily intake: 12 glasses (3000ml) including workout water
-  
-  IMPORTANT: Use date keys (YYYY-MM-DD format) in weeklyPlan object, not day names.`;
+  Ensure keys in "weeklyPlan" match the dates in the Mandatory Daily Schedule.`;
 
   return { prompt, dayToName, nameToDay, dates, activeDays, workoutDays };
 };
