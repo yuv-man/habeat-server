@@ -6,6 +6,8 @@ import { Plan, PlanSchema } from "../plan/plan.model";
 import { User, UserSchema } from "../user/user.model";
 import { Meal, MealSchema } from "src/meal/meal.model";
 import { Goal, GoalSchema } from "../goals/goal.model";
+import { DailyProgress, DailyProgressSchema } from "../progress/progress.model";
+import { ShoppingList, ShoppingListSchema } from "../shopping/shopping-list.model";
 
 @Module({
   imports: [
@@ -14,6 +16,8 @@ import { Goal, GoalSchema } from "../goals/goal.model";
       { name: User.name, schema: UserSchema },
       { name: Meal.name, schema: MealSchema },
       { name: Goal.name, schema: GoalSchema },
+      { name: DailyProgress.name, schema: DailyProgressSchema },
+      { name: ShoppingList.name, schema: ShoppingListSchema },
     ]),
   ],
   controllers: [GeneratorController],

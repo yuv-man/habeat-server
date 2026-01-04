@@ -1036,37 +1036,111 @@ const distributeWorkouts = (
 
   // Create a map of day number to day object for easy lookup
   const dayMap = new Map<number, any>();
-  weeklyPlanArray.forEach((day: any) => {
-    const dayNumber = nameToDay[day.day.toLowerCase()];
+  weeklyPlanArray.forEach((day: any, index: number) => {
+    // Try multiple ways to match the day name
+    const dayNameLower = (day.day || "").toLowerCase().trim();
+    let dayNumber = nameToDay[dayNameLower];
+    
+    // If not found, try without spaces and with different formats
+    if (dayNumber === undefined) {
+      const normalizedDay = dayNameLower.replace(/\s+/g, "");
+      dayNumber = nameToDay[normalizedDay];
+    }
+    
+    // If still not found, try matching by first 3 characters (e.g., "mon" for "monday")
+    if (dayNumber === undefined && dayNameLower.length >= 3) {
+      const dayPrefix = dayNameLower.substring(0, 3);
+      for (const [name, num] of Object.entries(nameToDay)) {
+        if (name.startsWith(dayPrefix)) {
+          dayNumber = num;
+          break;
+        }
+      }
+    }
+    
+    // If still not found, try to infer from date if available
+    if (dayNumber === undefined && day.date) {
+      try {
+        const dateObj = new Date(day.date);
+        if (!isNaN(dateObj.getTime())) {
+          const dayOfWeek = dateObj.getDay(); // 0 = Sunday, 1 = Monday, etc.
+          // Map JavaScript day (0-6) to our day numbers (0 = Sunday, 1 = Monday, etc.)
+          dayNumber = dayOfWeek;
+          logger.debug(
+            `[distributeWorkouts] Mapped day "${day.day}" to day number ${dayNumber} using date ${day.date}`
+          );
+        }
+      } catch (e) {
+        // Ignore date parsing errors
+      }
+    }
+    
+    // Last resort: use array index to infer day (assuming Monday = 0)
+    if (dayNumber === undefined && index < 7) {
+      // If we have 7 days and they're in order, index 0 = Monday (1), index 1 = Tuesday (2), etc.
+      dayNumber = (index + 1) % 7; // Monday = 1, Tuesday = 2, ..., Sunday = 0
+      logger.debug(
+        `[distributeWorkouts] Mapped day "${day.day}" to day number ${dayNumber} using array index ${index}`
+      );
+    }
+    
     if (dayNumber !== undefined) {
       dayMap.set(dayNumber, day);
+      logger.debug(
+        `[distributeWorkouts] Mapped day "${day.day}" (${dayNameLower}) to day number ${dayNumber}`
+      );
+    } else {
+      logger.warn(
+        `[distributeWorkouts] Could not map day "${day.day}" to day number. Available days: ${Object.keys(nameToDay).join(", ")}`
+      );
     }
   });
+
+  // Log day mapping for debugging
+  logger.info(
+    `[distributeWorkouts] Day map created with ${dayMap.size} entries. Workout days: ${workoutDays.join(", ")}`
+  );
 
   // If we have collected workouts, distribute them
   if (allWorkouts.length > 0) {
     // Distribute collected workouts across workout days evenly
-    const workoutsPerDay = Math.ceil(allWorkouts.length / workoutDays.length);
+    // Each workout day should get at least 1 workout, distribute extras evenly
+    const baseWorkoutsPerDay = Math.floor(allWorkouts.length / workoutDays.length);
+    const extraWorkouts = allWorkouts.length % workoutDays.length;
     let workoutIndex = 0;
 
-    for (const dayNumber of workoutDays) {
+    for (let i = 0; i < workoutDays.length; i++) {
+      const dayNumber = workoutDays[i];
       const dayObj = dayMap.get(dayNumber);
       if (dayObj) {
+        // Calculate how many workouts this day should get
+        // First 'extraWorkouts' days get one extra workout
+        const workoutsForThisDay = baseWorkoutsPerDay + (i < extraWorkouts ? 1 : 0);
         const dayWorkouts: IWorkout[] = [];
-        for (
-          let i = 0;
-          i < workoutsPerDay && workoutIndex < allWorkouts.length;
-          i++
-        ) {
+        
+        for (let j = 0; j < workoutsForThisDay && workoutIndex < allWorkouts.length; j++) {
           dayWorkouts.push(allWorkouts[workoutIndex]);
           workoutIndex++;
         }
+        
         dayObj.workouts = dayWorkouts;
         logger.info(
-          `[distributeWorkouts] Assigned ${dayWorkouts.length} workouts to ${dayToName[dayNumber]}`
+          `[distributeWorkouts] Assigned ${dayWorkouts.length} workout(s) to ${dayToName[dayNumber]} (day ${dayNumber})`
         );
+      } else {
+        logger.warn(
+          `[distributeWorkouts] Could not find day object for ${dayToName[dayNumber]} (day number ${dayNumber})`
+        );
+        // If day object not found, still consume workouts to avoid assigning them elsewhere
+        const workoutsForThisDay = baseWorkoutsPerDay + (i < extraWorkouts ? 1 : 0);
+        workoutIndex += workoutsForThisDay;
       }
     }
+    
+    // Log distribution summary
+    logger.info(
+      `[distributeWorkouts] Distributed ${allWorkouts.length} workouts across ${workoutDays.length} days: ${workoutDays.map(d => `${dayToName[d]}(${dayMap.get(d)?.workouts?.length || 0})`).join(", ")}`
+    );
   } else {
     // No workouts from AI, generate defaults for each workout day
     logger.info(
@@ -1074,6 +1148,7 @@ const distributeWorkouts = (
     );
 
     let templateIndex = 0;
+    let workoutsGenerated = 0;
     for (const dayNumber of workoutDays) {
       const dayObj = dayMap.get(dayNumber);
       if (dayObj) {
@@ -1092,9 +1167,49 @@ const distributeWorkouts = (
           },
         ];
         templateIndex++;
+        workoutsGenerated++;
         logger.info(
           `[distributeWorkouts] Generated default workout "${template.name}" for ${dayToName[dayNumber]}`
         );
+      } else {
+        logger.warn(
+          `[distributeWorkouts] Could not find day object for ${dayToName[dayNumber]} (day number ${dayNumber}), cannot generate workout`
+        );
+      }
+    }
+    
+    if (workoutsGenerated === 0) {
+      logger.error(
+        `[distributeWorkouts] CRITICAL: No workouts were generated! Day map size: ${dayMap.size}, Workout days: ${workoutDays.join(", ")}, Weekly plan array length: ${weeklyPlanArray.length}`
+      );
+      // Fallback: try to assign workouts to any available days
+      if (weeklyPlanArray.length > 0) {
+        logger.warn(
+          `[distributeWorkouts] Attempting fallback: assigning workouts to first ${Math.min(workoutDays.length, weeklyPlanArray.length)} days`
+        );
+        let templateIndex = 0;
+        for (let i = 0; i < Math.min(workoutDays.length, weeklyPlanArray.length); i++) {
+          const day = weeklyPlanArray[i];
+          if (day) {
+            const template =
+              defaultWorkoutTemplates[
+                templateIndex % defaultWorkoutTemplates.length
+              ];
+            day.workouts = [
+              {
+                name: template.name,
+                category: template.category,
+                duration: template.duration,
+                caloriesBurned: template.caloriesBurned,
+                done: false,
+              },
+            ];
+            templateIndex++;
+            logger.info(
+              `[distributeWorkouts] Fallback: Generated workout "${template.name}" for day at index ${i}`
+            );
+          }
+        }
       }
     }
   }
@@ -1429,10 +1544,10 @@ export const transformWeeklyPlan = async (
             calculateDayWorkoutWater(day.workouts || [])
         ),
         workouts: (day.workouts || []).map((w: IWorkout) => ({
-          name: w.name,
+          name: w.name || "Workout",
           category: w.category || "cardio",
-          duration: parseDuration(w.duration),
-          caloriesBurned: parseCalories(w.caloriesBurned),
+          duration: parseDuration(w.duration || 30),
+          caloriesBurned: parseCalories(w.caloriesBurned || 250),
           time: w.time,
           done: false,
         })),
@@ -1595,11 +1710,37 @@ export const transformWeeklyPlan = async (
     const dateKey = getLocalDateKey(dateObj);
     const formattedDate = `${monthNames[dateObj.getMonth()]} ${dateObj.getDate()}`;
 
+    // Ensure workouts array exists (should have been set by distributeWorkouts)
+    let dayWorkouts = day.workouts || [];
+    
+    // Post-processing: Ensure workouts are present on workout days
+    const dayNumber = nameToDay[day.day.toLowerCase()];
+    if (dayWorkouts.length === 0 && dayNumber !== undefined && workoutDays.includes(dayNumber)) {
+      logger.warn(
+        `[transformWeeklyPlan] Day ${day.day} (${dateKey}) is a workout day but has no workouts! Generating default workout. Day number: ${dayNumber}`
+      );
+      // Generate a default workout for this day
+      const templateIndex = workoutDays.indexOf(dayNumber) % defaultWorkoutTemplates.length;
+      const template = defaultWorkoutTemplates[templateIndex];
+      dayWorkouts = [
+        {
+          name: template.name,
+          category: template.category,
+          duration: template.duration,
+          caloriesBurned: template.caloriesBurned,
+          done: false,
+        },
+      ];
+      logger.info(
+        `[transformWeeklyPlan] Generated fallback workout "${template.name}" for ${day.day} (${dateKey})`
+      );
+    }
+    
     weeklyPlanObject[dateKey] = {
       day: day.day,
       date: formattedDate,
       meals: day.meals,
-      workouts: day.workouts || [],
+      workouts: dayWorkouts,
       waterIntake: day.waterIntake || 8,
     };
   });

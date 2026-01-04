@@ -8,6 +8,8 @@ import { Model } from "mongoose";
 import { Plan } from "../plan/plan.model";
 import { User } from "../user/user.model";
 import { Goal } from "../goals/goal.model";
+import { DailyProgress } from "../progress/progress.model";
+import { ShoppingList } from "../shopping/shopping-list.model";
 import aiService from "./generate.service";
 import logger from "../utils/logger";
 import {
@@ -18,7 +20,9 @@ import {
   IWeeklyPlanObject,
   IWorkout,
   IGoal,
+  IDailyProgress,
 } from "../types/interfaces";
+import { IShoppingList } from "../shopping/shopping-list.model";
 import {
   calculateBMR,
   calculateTDEE,
@@ -31,6 +35,7 @@ import {
   parseDuration,
   parseCalories,
   calculateDayWorkoutWater,
+  getLocalDateKey,
 } from "../utils/helpers";
 import mongoose from "mongoose";
 import { Meal } from "../meal/meal.model";
@@ -41,7 +46,11 @@ export class GeneratorService {
     @InjectModel(Plan.name) private planModel: Model<IPlan>,
     @InjectModel(User.name) private userModel: Model<IUserData>,
     @InjectModel(Meal.name) private mealModel: Model<IMeal>,
-    @InjectModel(Goal.name) private goalModel: Model<IGoal>
+    @InjectModel(Goal.name) private goalModel: Model<IGoal>,
+    @InjectModel(DailyProgress.name)
+    private progressModel: Model<IDailyProgress>,
+    @InjectModel(ShoppingList.name)
+    private shoppingListModel: Model<IShoppingList>
   ) {}
 
   /**
@@ -372,6 +381,37 @@ export class GeneratorService {
       language: generatedLanguage || language,
       generatedAt: generatedAt ? new Date(generatedAt) : new Date(),
     });
+
+    // Delete today's progress if it exists (new plan means fresh start for today)
+    const todayForProgress = new Date();
+    todayForProgress.setHours(0, 0, 0, 0);
+    const todayDateKey = getLocalDateKey(todayForProgress);
+
+    const deletedProgress = await this.progressModel.deleteOne({
+      userId: userIdObjectId,
+      dateKey: todayDateKey,
+    });
+
+    if (deletedProgress.deletedCount > 0) {
+      logger.info(
+        `[generateWeeklyMealPlan] Deleted today's progress (${todayDateKey}) for user ${userId} - new plan generated`
+      );
+    }
+
+    // Delete old shopping list for this user (new plan means new shopping list)
+    // Find old plan first to get its planId
+    const oldPlan = await this.planModel.findOne({ userId: userIdObjectId });
+    if (oldPlan) {
+      const deletedShoppingList = await this.shoppingListModel.deleteOne({
+        userId: userIdObjectId,
+        planId: oldPlan._id,
+      });
+      if (deletedShoppingList.deletedCount > 0) {
+        logger.info(
+          `[generateWeeklyMealPlan] Deleted old shopping list for user ${userId} - new plan generated`
+        );
+      }
+    }
 
     await plan.save();
 

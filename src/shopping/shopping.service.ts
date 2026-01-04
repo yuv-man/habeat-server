@@ -98,15 +98,25 @@ export class ShoppingService {
       ];
       for (const meal of meals) {
         if (meal?.ingredients && Array.isArray(meal.ingredients)) {
-          meal.ingredients.forEach(
-            (ing: [string, string] | [string, string, string?] | string) => {
-              if (Array.isArray(ing)) {
-                allIngredients.push(ing);
-              } else if (typeof ing === "string") {
-                allIngredients.push([ing, ""]);
-              }
+          meal.ingredients.forEach((ing: any) => {
+            if (Array.isArray(ing)) {
+              // Tuple format: [name, amount] or [name, amount, category]
+              allIngredients.push(
+                ing as [string, string] | [string, string, string?]
+              );
+            } else if (typeof ing === "string") {
+              // String format: just the name
+              allIngredients.push([ing, ""]);
+            } else if (ing && typeof ing === "object" && ing.name) {
+              // Object format: {name: string, amount: string, category?: string}
+              const tuple: [string, string, string?] = [
+                ing.name || "",
+                ing.amount || "",
+                ing.category,
+              ];
+              allIngredients.push(tuple);
             }
-          );
+          });
         }
       }
     }
@@ -122,10 +132,31 @@ export class ShoppingService {
     >();
 
     allIngredients.forEach((ing) => {
-      const ingredientName = Array.isArray(ing) ? ing[0] : String(ing);
-      const ingredientAmount = Array.isArray(ing) ? ing[1] : "";
-      const ingredientCategory =
-        Array.isArray(ing) && ing.length > 2 ? ing[2] : undefined;
+      // Handle different ingredient formats
+      let ingredientName: string;
+      let ingredientAmount: string;
+      let ingredientCategory: string | undefined;
+
+      if (Array.isArray(ing)) {
+        // Tuple format: [name, amount] or [name, amount, category]
+        ingredientName = ing[0] || "";
+        ingredientAmount = ing[1] || "";
+        ingredientCategory = ing.length > 2 ? ing[2] : undefined;
+      } else if (typeof ing === "string") {
+        // String format: just the name
+        ingredientName = ing;
+        ingredientAmount = "";
+        ingredientCategory = undefined;
+      } else {
+        // Invalid format - skip
+        return;
+      }
+
+      // Skip if name is empty
+      if (!ingredientName || ingredientName.trim() === "") {
+        return;
+      }
+
       const key = this.normalizeIngredientKey(ingredientName);
 
       const parsed = this.parseAmount(ingredientAmount);
