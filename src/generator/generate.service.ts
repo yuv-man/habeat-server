@@ -1126,6 +1126,33 @@ const buildPrompt = (
       ? `FOCUS: ${goalAdjustments.workoutTypes.join(", ")}`
       : `FOCUS: ${Object.keys(workoutCategories).join(", ")}`;
 
+  // Calculate meal-specific targets for better macro distribution
+  const breakfastTarget = Math.round(targetCalories * 0.25); // ~25% of daily calories
+  const lunchTarget = Math.round(targetCalories * 0.35); // ~35% of daily calories
+  const dinnerTarget = Math.round(targetCalories * 0.3); // ~30% of daily calories
+  const snackTarget = Math.round(targetCalories * 0.1); // ~10% of daily calories per snack
+
+  const breakfastMacros = {
+    protein: Math.round(macros.protein * 0.2),
+    carbs: Math.round(macros.carbs * 0.5),
+    fat: Math.round(macros.fat * 0.3),
+  };
+  const lunchMacros = {
+    protein: Math.round(macros.protein * 0.3),
+    carbs: Math.round(macros.carbs * 0.4),
+    fat: Math.round(macros.fat * 0.3),
+  };
+  const dinnerMacros = {
+    protein: Math.round(macros.protein * 0.35),
+    carbs: Math.round(macros.carbs * 0.35),
+    fat: Math.round(macros.fat * 0.3),
+  };
+  const snackMacros = {
+    protein: Math.round(macros.protein * 0.15),
+    carbs: Math.round(macros.carbs * 0.5),
+    fat: Math.round(macros.fat * 0.25),
+  };
+
   // THE OPTIMIZED PROMPT
   const prompt = `As a nutritionist, create a ${planType} plan for a ${userData.age}y ${userData.gender} (${userData.height}cm/${userData.weight}kg).
   
@@ -1134,8 +1161,21 @@ const buildPrompt = (
   2. ${foodPrefs}
   3. ${dislikes}
   4. ${userData.dietaryRestrictions ? `RESTRICTIONS: ${userData.dietaryRestrictions.join(", ")}` : ""}
-  5. TARGETS: ${targetCalories} kcal (P:${macros.protein}g, C:${macros.carbs}g, F:${macros.fat}g)
+  5. DAILY TARGETS: ${targetCalories} kcal total (P:${macros.protein}g, C:${macros.carbs}g, F:${macros.fat}g)
   6. PATH: ${userData.path} (${pathGuideline})
+
+  MEAL-SPECIFIC TARGETS (MUST FOLLOW ACCURATELY):
+  - Breakfast: ~${breakfastTarget} kcal (P:${breakfastMacros.protein}g, C:${breakfastMacros.carbs}g, F:${breakfastMacros.fat}g)
+  - Lunch: ~${lunchTarget} kcal (P:${lunchMacros.protein}g, C:${lunchMacros.carbs}g, F:${lunchMacros.fat}g)
+  - Dinner: ~${dinnerTarget} kcal (P:${dinnerMacros.protein}g, C:${dinnerMacros.carbs}g, F:${dinnerMacros.fat}g)
+  - Snacks: ~${snackTarget} kcal each (P:${snackMacros.protein}g, C:${snackMacros.carbs}g, F:${snackMacros.fat}g)
+
+  CRITICAL MACRO CALCULATION RULES:
+  - Calories MUST be calculated from macros: (protein × 4) + (carbs × 4) + (fat × 9)
+  - Macros MUST add up correctly to match the target calories above
+  - Example: If breakfast target is ${breakfastTarget} kcal, then (protein×4) + (carbs×4) + (fat×9) should equal ~${breakfastTarget}
+  - DO NOT use random numbers - calculate based on ingredients and meal composition
+  - Each meal's macros should be within ±10% of the targets above
 
   MANDATORY DAILY SCHEDULE:
   You must follow this schedule exactly for the JSON keys:
@@ -1151,6 +1191,7 @@ const buildPrompt = (
   - Format: "ingredient|amount|unit|category" (e.g. "chicken|100|g|Proteins")
   - Use RAW ingredients. No "mixed veggies".
   - Categories: Proteins, Vegetables, Fruits, Grains, Dairy, Pantry, Spices.
+  - Calculate macros from ingredients: Proteins ~4 cal/g, Carbs ~4 cal/g, Fats ~9 cal/g
 
   OUTPUT FORMAT:
   Return ONLY valid JSON. No text. Matches this schema exactly:
@@ -1160,10 +1201,10 @@ const buildPrompt = (
         "day": "monday",
         "date": "YYYY-MM-DD",
         "meals": {
-          "breakfast": { "name": "...", "calories": 0, "macros": {"protein":0,"carbs":0,"fat":0}, "ingredients": ["name|0|unit|Category"], "prepTime": 0 },
-          "lunch": { ... },
-          "dinner": { ... },
-          "snacks": [{ ... }]
+          "breakfast": { "name": "...", "calories": ${breakfastTarget}, "macros": {"protein":${breakfastMacros.protein},"carbs":${breakfastMacros.carbs},"fat":${breakfastMacros.fat}}, "ingredients": ["name|amount|unit|Category"], "prepTime": 0 },
+          "lunch": { "name": "...", "calories": ${lunchTarget}, "macros": {"protein":${lunchMacros.protein},"carbs":${lunchMacros.carbs},"fat":${lunchMacros.fat}}, "ingredients": [...], "prepTime": 0 },
+          "dinner": { "name": "...", "calories": ${dinnerTarget}, "macros": {"protein":${dinnerMacros.protein},"carbs":${dinnerMacros.carbs},"fat":${dinnerMacros.fat}}, "ingredients": [...], "prepTime": 0 },
+          "snacks": [{ "name": "...", "calories": ${snackTarget}, "macros": {"protein":${snackMacros.protein},"carbs":${snackMacros.carbs},"fat":${snackMacros.fat}}, "ingredients": [...], "prepTime": 0 }]
         },
         "hydration": { "waterTarget": 8, "recommendations": ["..."] },
         "workouts": [{ "name": "...", "category": "...", "duration": 0, "caloriesBurned": 0 }]
@@ -1171,7 +1212,8 @@ const buildPrompt = (
     }
   }
   
-  Ensure keys in "weeklyPlan" match the dates in the Mandatory Daily Schedule.`;
+  Ensure keys in "weeklyPlan" match the dates in the Mandatory Daily Schedule.
+  IMPORTANT: Verify that calories = (protein×4) + (carbs×4) + (fat×9) for each meal!`;
 
   return { prompt, dayToName, nameToDay, dates, activeDays, workoutDays };
 };

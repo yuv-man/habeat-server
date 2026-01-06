@@ -36,6 +36,7 @@ import {
   parseCalories,
   calculateDayWorkoutWater,
   getLocalDateKey,
+  validateAndCorrectMealMacros,
 } from "../utils/helpers";
 import mongoose from "mongoose";
 import { Meal } from "../meal/meal.model";
@@ -52,6 +53,154 @@ export class GeneratorService {
     @InjectModel(ShoppingList.name)
     private shoppingListModel: Model<IShoppingList>
   ) {}
+
+  /**
+   * Find existing meals from database that match criteria
+   */
+  private async findMatchingMeals(
+    category: "breakfast" | "lunch" | "dinner" | "snack",
+    targetCalories: number,
+    userData: IUserData,
+    limit: number = 10
+  ): Promise<IMeal[]> {
+    const calorieTolerance = 150; // ±150 calories tolerance
+    const minCalories = Math.max(0, targetCalories - calorieTolerance);
+    const maxCalories = targetCalories + calorieTolerance;
+
+    // Build query to find matching meals
+    const query: any = {
+      category,
+      calories: { $gte: minCalories, $lte: maxCalories },
+    };
+
+    // Exclude meals with allergens
+    if (userData.allergies && userData.allergies.length > 0) {
+      const allergenRegex = new RegExp(userData.allergies.join("|"), "i");
+      query.$nor = [
+        { name: { $regex: allergenRegex } },
+        { "ingredients.0": { $regex: allergenRegex } },
+      ];
+    }
+
+    // Try to match preferences (boost score if preferences match)
+    const matchingMeals = await this.mealModel
+      .find(query)
+      .limit(limit * 2) // Get more to filter by preferences
+      .lean()
+      .exec();
+
+    // Score meals based on preference matching
+    const scoredMeals = matchingMeals.map((meal: any) => {
+      let score = 0;
+      const mealNameLower = (meal.name || "").toLowerCase();
+      const ingredientsLower = (meal.ingredients || [])
+        .map((ing: any) => {
+          if (Array.isArray(ing)) return String(ing[0] || "").toLowerCase();
+          return String(ing || "").toLowerCase();
+        })
+        .join(" ");
+
+      // Check if meal matches preferences
+      if (userData.foodPreferences && userData.foodPreferences.length > 0) {
+        userData.foodPreferences.forEach((pref: string) => {
+          if (
+            mealNameLower.includes(pref.toLowerCase()) ||
+            ingredientsLower.includes(pref.toLowerCase())
+          ) {
+            score += 10; // Boost score for preference match
+          }
+        });
+      }
+
+      // Check if meal contains dislikes (penalize)
+      if (userData.dislikes && userData.dislikes.length > 0) {
+        userData.dislikes.forEach((dislike: string) => {
+          if (
+            mealNameLower.includes(dislike.toLowerCase()) ||
+            ingredientsLower.includes(dislike.toLowerCase())
+          ) {
+            score -= 20; // Heavy penalty for dislikes
+          }
+        });
+      }
+
+      // Prefer meals that have been used before (proven good)
+      if (meal.analytics?.timesGenerated) {
+        score += Math.min(meal.analytics.timesGenerated, 5); // Max +5 for popularity
+      }
+
+      // Prefer meals closer to target calories
+      const calorieDiff = Math.abs(meal.calories - targetCalories);
+      score += Math.max(0, 10 - calorieDiff / 10); // Closer = higher score
+
+      return { meal, score };
+    });
+
+    // Sort by score and return top matches
+    return scoredMeals
+      .filter((item) => item.score >= 0) // Only return meals without heavy penalties
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((item) => ({
+        _id: item.meal._id.toString(),
+        name: item.meal.name,
+        calories: item.meal.calories,
+        macros: item.meal.macros,
+        category: item.meal.category,
+        prepTime: item.meal.prepTime || 30,
+        ingredients: item.meal.ingredients || [],
+      }));
+  }
+
+  /**
+   * Calculate and validate meal macros based on target values
+   */
+  private calculateMealMacros(
+    targetCalories: number,
+    dailyMacros: { protein: number; carbs: number; fat: number },
+    mealType: "breakfast" | "lunch" | "dinner" | "snack"
+  ): { protein: number; carbs: number; fat: number; calories: number } {
+    // Typical meal distribution percentages
+    const mealDistribution: Record<
+      string,
+      { protein: number; carbs: number; fat: number }
+    > = {
+      breakfast: { protein: 0.2, carbs: 0.5, fat: 0.3 }, // 20% protein, 50% carbs, 30% fat
+      lunch: { protein: 0.3, carbs: 0.4, fat: 0.3 }, // 30% protein, 40% carbs, 30% fat
+      dinner: { protein: 0.35, carbs: 0.35, fat: 0.3 }, // 35% protein, 35% carbs, 30% fat
+      snack: { protein: 0.25, carbs: 0.5, fat: 0.25 }, // 25% protein, 50% carbs, 25% fat
+    };
+
+    const distribution = mealDistribution[mealType] || mealDistribution.lunch;
+    const mealCalories =
+      targetCalories * distribution.protein * 4 +
+      targetCalories * distribution.carbs * 4 +
+      targetCalories * distribution.fat * 9;
+
+    // Calculate macros based on daily distribution
+    const protein = Math.round(
+      (dailyMacros.protein * distribution.protein) /
+        (distribution.protein + distribution.carbs + distribution.fat)
+    );
+    const carbs = Math.round(
+      (dailyMacros.carbs * distribution.carbs) /
+        (distribution.protein + distribution.carbs + distribution.fat)
+    );
+    const fat = Math.round(
+      (dailyMacros.fat * distribution.fat) /
+        (distribution.protein + distribution.carbs + distribution.fat)
+    );
+
+    // Recalculate calories from macros (more accurate)
+    const calculatedCalories = protein * 4 + carbs * 4 + fat * 9;
+
+    return {
+      protein: Math.max(0, protein),
+      carbs: Math.max(0, carbs),
+      fat: Math.max(0, fat),
+      calories: Math.round(calculatedCalories),
+    };
+  }
 
   /**
    * 1. Generate weekly meal plan
@@ -190,6 +339,33 @@ export class GeneratorService {
       await this.planModel.findOneAndDelete({ userId: userIdObjectId });
     }
 
+    // Calculate meal-specific targets for validation and reuse
+    const breakfastTarget = Math.round(targetCalories * 0.25);
+    const lunchTarget = Math.round(targetCalories * 0.35);
+    const dinnerTarget = Math.round(targetCalories * 0.3);
+    const snackTarget = Math.round(targetCalories * 0.1);
+
+    const breakfastMacros = {
+      protein: Math.round(macros.protein * 0.2),
+      carbs: Math.round(macros.carbs * 0.5),
+      fat: Math.round(macros.fat * 0.3),
+    };
+    const lunchMacros = {
+      protein: Math.round(macros.protein * 0.3),
+      carbs: Math.round(macros.carbs * 0.4),
+      fat: Math.round(macros.fat * 0.3),
+    };
+    const dinnerMacros = {
+      protein: Math.round(macros.protein * 0.35),
+      carbs: Math.round(macros.carbs * 0.35),
+      fat: Math.round(macros.fat * 0.3),
+    };
+    const snackMacros = {
+      protein: Math.round(macros.protein * 0.15),
+      carbs: Math.round(macros.carbs * 0.5),
+      fat: Math.round(macros.fat * 0.25),
+    };
+
     // Convert mealPlan.weeklyPlan array to object format with date keys
     const weeklyPlanObject: IWeeklyPlanObject = {};
     let totalCalories = 0;
@@ -292,6 +468,70 @@ export class GeneratorService {
     // mealPlan.weeklyPlan is now an object with date keys
     const weeklyPlanEntries = Object.entries(mealPlan.weeklyPlan);
 
+    // Helper function to process meal with validation and reuse logic
+    const processMealWithReuse = async (
+      meal: IMeal | undefined,
+      category: "breakfast" | "lunch" | "dinner" | "snack"
+    ): Promise<IMeal | null> => {
+      if (!meal) return null;
+
+      // Determine target calories and macros based on category
+      let targetCal, targetMacros;
+      switch (category) {
+        case "breakfast":
+          targetCal = breakfastTarget;
+          targetMacros = breakfastMacros;
+          break;
+        case "lunch":
+          targetCal = lunchTarget;
+          targetMacros = lunchMacros;
+          break;
+        case "dinner":
+          targetCal = dinnerTarget;
+          targetMacros = dinnerMacros;
+          break;
+        case "snack":
+          targetCal = snackTarget;
+          targetMacros = snackMacros;
+          break;
+      }
+
+      // Try to find existing meal from database first
+      try {
+        const matchingMeals = await this.findMatchingMeals(
+          category,
+          targetCal,
+          userData,
+          5
+        );
+
+        if (matchingMeals.length > 0) {
+          // Use the best matching meal
+          const reusedMeal = matchingMeals[0];
+          logger.info(
+            `[generateWeeklyMealPlan] Reusing existing meal "${reusedMeal.name}" for ${category}`
+          );
+          return {
+            ...reusedMeal,
+            _id: reusedMeal._id,
+          };
+        }
+      } catch (error) {
+        logger.warn(
+          `[generateWeeklyMealPlan] Error finding matching meals: ${error}`
+        );
+      }
+
+      // If no matching meal found, validate and correct the AI-generated meal
+      const validatedMeal = validateAndCorrectMealMacros(
+        meal as any,
+        targetCal,
+        targetMacros
+      );
+
+      return convertMeal(validatedMeal as IMeal);
+    };
+
     for (const [dateKey, dayData] of weeklyPlanEntries) {
       const day = dayData as IDayPlanWithMetadata;
 
@@ -304,16 +544,28 @@ export class GeneratorService {
         time: w.time,
       }));
 
+      // Process meals with reuse and validation
+      const [breakfast, lunch, dinner, processedSnacks] = await Promise.all([
+        processMealWithReuse(day.meals?.breakfast, "breakfast"),
+        processMealWithReuse(day.meals?.lunch, "lunch"),
+        processMealWithReuse(day.meals?.dinner, "dinner"),
+        Promise.all(
+          (day.meals?.snacks || []).map((snack) =>
+            processMealWithReuse(snack, "snack")
+          )
+        ),
+      ]);
+
       // Preserve day name and formatted date from the transformed plan
       // Note: day.waterIntake already includes base (8 glasses) + workout water from transformWeeklyPlan
       const dayPlan = {
         day: day.day, // e.g., "monday"
         date: day.date, // e.g., "Dec 4"
         meals: {
-          breakfast: convertMeal(day.meals?.breakfast),
-          lunch: convertMeal(day.meals?.lunch),
-          dinner: convertMeal(day.meals?.dinner),
-          snacks: (day.meals?.snacks || []).map(convertMeal).filter(Boolean), // Filter out nulls
+          breakfast: breakfast,
+          lunch: lunch,
+          dinner: dinner,
+          snacks: processedSnacks.filter(Boolean), // Filter out nulls
         },
         workouts,
         // Use waterIntake from transformed plan (already includes base + workout water, capped at 12)
@@ -323,37 +575,40 @@ export class GeneratorService {
 
       weeklyPlanObject[dateKey] = dayPlan;
 
-      // Calculate totals for weekly macros from meals
-      const breakfast = day.meals?.breakfast;
-      const lunch = day.meals?.lunch;
-      const dinner = day.meals?.dinner;
-      const snacks = day.meals?.snacks || [];
+      // Calculate totals for weekly macros from processed meals
+      const breakfastMeal = dayPlan.meals.breakfast;
+      const lunchMeal = dayPlan.meals.lunch;
+      const dinnerMeal = dayPlan.meals.dinner;
+      const snacksMeals = dayPlan.meals.snacks || [];
 
-      if (breakfast?.calories) totalCalories += breakfast.calories;
-      if (lunch?.calories) totalCalories += lunch.calories;
-      if (dinner?.calories) totalCalories += dinner.calories;
-      snacks.forEach((snack: IMeal) => {
+      if (breakfastMeal?.calories) totalCalories += breakfastMeal.calories;
+      if (lunchMeal?.calories) totalCalories += lunchMeal.calories;
+      if (dinnerMeal?.calories) totalCalories += dinnerMeal.calories;
+      snacksMeals.forEach((snack: IMeal) => {
         if (snack?.calories) totalCalories += snack.calories;
       });
 
-      if (breakfast?.macros?.protein) totalProtein += breakfast.macros.protein;
-      if (lunch?.macros?.protein) totalProtein += lunch.macros.protein;
-      if (dinner?.macros?.protein) totalProtein += dinner.macros.protein;
-      snacks.forEach((snack: IMeal) => {
+      if (breakfastMeal?.macros?.protein)
+        totalProtein += breakfastMeal.macros.protein;
+      if (lunchMeal?.macros?.protein) totalProtein += lunchMeal.macros.protein;
+      if (dinnerMeal?.macros?.protein)
+        totalProtein += dinnerMeal.macros.protein;
+      snacksMeals.forEach((snack: IMeal) => {
         if (snack?.macros?.protein) totalProtein += snack.macros.protein;
       });
 
-      if (breakfast?.macros?.carbs) totalCarbs += breakfast.macros.carbs;
-      if (lunch?.macros?.carbs) totalCarbs += lunch.macros.carbs;
-      if (dinner?.macros?.carbs) totalCarbs += dinner.macros.carbs;
-      snacks.forEach((snack: IMeal) => {
+      if (breakfastMeal?.macros?.carbs)
+        totalCarbs += breakfastMeal.macros.carbs;
+      if (lunchMeal?.macros?.carbs) totalCarbs += lunchMeal.macros.carbs;
+      if (dinnerMeal?.macros?.carbs) totalCarbs += dinnerMeal.macros.carbs;
+      snacksMeals.forEach((snack: IMeal) => {
         if (snack?.macros?.carbs) totalCarbs += snack.macros.carbs;
       });
 
-      if (breakfast?.macros?.fat) totalFat += breakfast.macros.fat;
-      if (lunch?.macros?.fat) totalFat += lunch.macros.fat;
-      if (dinner?.macros?.fat) totalFat += dinner.macros.fat;
-      snacks.forEach((snack: IMeal) => {
+      if (breakfastMeal?.macros?.fat) totalFat += breakfastMeal.macros.fat;
+      if (lunchMeal?.macros?.fat) totalFat += lunchMeal.macros.fat;
+      if (dinnerMeal?.macros?.fat) totalFat += dinnerMeal.macros.fat;
+      snacksMeals.forEach((snack: IMeal) => {
         if (snack?.macros?.fat) totalFat += snack.macros.fat;
       });
     }

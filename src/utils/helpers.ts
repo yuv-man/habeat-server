@@ -934,6 +934,73 @@ const parseIngredients = (
 };
 
 // Helper function to clean meal data
+/**
+ * Validate and correct meal macros based on calories
+ * Ensures calories = (protein×4) + (carbs×4) + (fat×9)
+ */
+export const validateAndCorrectMealMacros = (
+  meal: IAIMealData,
+  targetCalories?: number,
+  targetMacros?: { protein: number; carbs: number; fat: number }
+): IAIMealData => {
+  if (!meal || !meal.macros) return meal;
+
+  let { protein, carbs, fat } = meal.macros;
+  let calories = meal.calories || 0;
+
+  // Calculate actual calories from macros
+  const calculatedCalories = protein * 4 + carbs * 4 + fat * 9;
+
+  // If calories don't match macros, adjust macros proportionally
+  if (Math.abs(calculatedCalories - calories) > 10) {
+    // Recalculate macros to match calories
+    const totalMacroCalories = calculatedCalories || calories;
+    if (totalMacroCalories > 0) {
+      const proteinRatio = (protein * 4) / totalMacroCalories;
+      const carbsRatio = (carbs * 4) / totalMacroCalories;
+      const fatRatio = (fat * 9) / totalMacroCalories;
+
+      calories = targetCalories || calories || calculatedCalories;
+      protein = Math.round((calories * proteinRatio) / 4);
+      carbs = Math.round((calories * carbsRatio) / 4);
+      fat = Math.round((calories * fatRatio) / 9);
+    }
+  }
+
+  // If target macros provided, adjust to be closer to targets
+  if (targetMacros && targetCalories) {
+    const tolerance = 0.15; // 15% tolerance
+    const proteinDiff = Math.abs(protein - targetMacros.protein) / targetMacros.protein;
+    const carbsDiff = Math.abs(carbs - targetMacros.carbs) / targetMacros.carbs;
+    const fatDiff = Math.abs(fat - targetMacros.fat) / targetMacros.fat;
+
+    // If macros are too far from target, adjust proportionally
+    if (proteinDiff > tolerance || carbsDiff > tolerance || fatDiff > tolerance) {
+      const adjustment = 0.7; // 70% towards target, 30% keep current
+      protein = Math.round(
+        protein * (1 - adjustment) + targetMacros.protein * adjustment
+      );
+      carbs = Math.round(
+        carbs * (1 - adjustment) + targetMacros.carbs * adjustment
+      );
+      fat = Math.round(fat * (1 - adjustment) + targetMacros.fat * adjustment);
+      
+      // Recalculate calories from adjusted macros
+      calories = protein * 4 + carbs * 4 + fat * 9;
+    }
+  }
+
+  return {
+    ...meal,
+    calories: Math.round(calories),
+    macros: {
+      protein: Math.max(0, Math.round(protein)),
+      carbs: Math.max(0, Math.round(carbs)),
+      fat: Math.max(0, Math.round(fat)),
+    },
+  };
+};
+
 export const cleanMealData = (meal: IAIMealData | undefined): IMeal => {
   if (!meal) {
     return {
