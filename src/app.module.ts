@@ -10,6 +10,7 @@ import { GoalModule } from "./goals/goal.module";
 import { MealModule } from "./meal/meal.module";
 import { RecipeModule } from "./recipe/recipe.module";
 import { ShoppingModule } from "./shopping/shopping.module";
+import { ChatModule } from "./chat/chat.module";
 import logger from "./utils/logger";
 
 @Module({
@@ -69,6 +70,7 @@ import logger from "./utils/logger";
     MealModule,
     RecipeModule,
     ShoppingModule,
+    ChatModule,
   ],
 })
 export class AppModule {}

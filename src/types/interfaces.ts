@@ -344,3 +344,52 @@ export interface IDailyProgress extends Document {
 export interface JwtPayload {
   id: string;
 }
+
+// Chat interfaces
+export interface IProposedAction {
+  type: "meal_swap" | "workout_change" | "add_snack" | "none";
+  payload?: IMealSwapPayload | IWorkoutChangePayload | IAddSnackPayload;
+  status: "pending" | "accepted" | "rejected" | "expired";
+}
+
+export interface IMealSwapPayload {
+  dateKey: string;
+  mealType: "breakfast" | "lunch" | "dinner" | "snack";
+  snackIndex?: number;
+  currentMeal: {
+    name: string;
+    calories: number;
+  };
+  proposedMeal: IMeal;
+  reason: string;
+}
+
+export interface IWorkoutChangePayload {
+  dateKey: string;
+  action: "add" | "update" | "remove";
+  workoutIndex?: number;
+  currentWorkout?: IWorkout;
+  proposedWorkout?: IWorkout;
+  reason: string;
+}
+
+export interface IAddSnackPayload {
+  dateKey: string;
+  proposedSnack: IMeal;
+  reason: string;
+}
+
+export interface IChatMessage {
+  _id?: mongoose.Types.ObjectId;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: Date;
+  proposedAction?: IProposedAction;
+}
+
+export interface IChat extends Document {
+  userId: mongoose.Types.ObjectId;
+  messages: IChatMessage[];
+  createdAt: Date;
+  updatedAt: Date;
+}
