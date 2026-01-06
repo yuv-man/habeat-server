@@ -1193,6 +1193,12 @@ const buildPrompt = (
   - Categories: Proteins, Vegetables, Fruits, Grains, Dairy, Pantry, Spices.
   - Calculate macros from ingredients: Proteins ~4 cal/g, Carbs ~4 cal/g, Fats ~9 cal/g
 
+  VARIETY REQUIREMENT:
+  - Each day's meals must be nutritionally similar but culinarily DISTINCT
+  - Proteins: Rotate through chicken, fish, beef, tofu, legumes, turkey, pork, eggs
+  - Avoid repeating the same dish name anywhere in the week
+  - If Day 1 has "Grilled Chicken Breast", Day 2 cannot have grilled chicken
+
   OUTPUT FORMAT:
   Return ONLY valid JSON. No text. Matches this schema exactly:
   {
