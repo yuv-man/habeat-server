@@ -24,6 +24,7 @@ import {
 import { AuthService } from "./auth.service";
 import { AuthGuard } from "./auth.guard";
 import { SignupDto } from "./dto/signup.dto";
+import { IUserData } from "../types/interfaces";
 import logger from "../utils/logger";
 
 @ApiTags("auth")
@@ -346,10 +347,108 @@ export class AuthController {
     }
   }
 
+  @Post("google/mobile/signup")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Google OAuth signup for mobile apps",
+    description:
+      "Mobile endpoint for Google OAuth signup. Accepts Google ID token directly from mobile SDK (iOS/Android). Returns user data and JWT token.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "User successfully signed up",
+  })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid request or user already exists",
+  })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        idToken: {
+          type: "string",
+          description: "Google ID token from mobile SDK",
+          example: "eyJhbGciOiJSUzI1NiIsImtpZCI6Ij...",
+        },
+        userData: {
+          type: "object",
+          description: "Optional user data to pre-fill profile",
+          properties: {
+            name: { type: "string" },
+            age: { type: "number" },
+            gender: { type: "string", enum: ["male", "female", "other"] },
+            height: { type: "number" },
+            weight: { type: "number" },
+            path: {
+              type: "string",
+              enum: [
+                "keto",
+                "healthy",
+                "gain-muscle",
+                "running",
+                "lose-weight",
+                "fasting",
+              ],
+            },
+          },
+        },
+      },
+      required: ["idToken"],
+    },
+  })
+  async googleMobileSignup(
+    @Body()
+    body: {
+      idToken: string;
+      userData?: Partial<IUserData>;
+    }
+  ) {
+    if (!body.idToken) {
+      throw new BadRequestException("Google ID token is required");
+    }
+    return this.authService.googleSignup(body.idToken, body.userData);
+  }
+
+  @Post("google/mobile/signin")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Google OAuth signin for mobile apps",
+    description:
+      "Mobile endpoint for Google OAuth signin. Accepts Google ID token directly from mobile SDK (iOS/Android). Returns user data and JWT token.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "User successfully signed in",
+  })
+  @ApiResponse({
+    status: 401,
+    description: "Invalid token or user not found",
+  })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        idToken: {
+          type: "string",
+          description: "Google ID token from mobile SDK",
+          example: "eyJhbGciOiJSUzI1NiIsImtpZCI6Ij...",
+        },
+      },
+      required: ["idToken"],
+    },
+  })
+  async googleMobileSignin(@Body() body: { idToken: string }) {
+    if (!body.idToken) {
+      throw new BadRequestException("Google ID token is required");
+    }
+    return this.authService.googleSignin(body.idToken);
+  }
+
   @Post("google/signin")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: "Complete Google OAuth signin",
+    summary: "Complete Google OAuth signin (Web)",
     description:
       "Completes the Google OAuth signin flow by looking up the user and returning their data. Called by frontend after receiving token and userId from OAuth callback redirect.",
   })

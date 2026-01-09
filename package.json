@@ -34,6 +34,7 @@
   "description": "",
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
+    "@nestjs/cli": "^10.4.9",
     "@nestjs/common": "^10.3.0",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^10.3.0",
@@ -42,7 +43,6 @@
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.3.0",
     "@nestjs/swagger": "^7.4.2",
-    "@nestjs/cli": "^10.4.9",
     "axios": "^1.11.0",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",

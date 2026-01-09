@@ -1154,72 +1154,65 @@ const buildPrompt = (
   };
 
   // THE OPTIMIZED PROMPT
-  const prompt = `As a nutritionist, create a ${planType} plan for a ${userData.age}y ${userData.gender} (${userData.height}cm/${userData.weight}kg).
-  
-  CONTEXT & RULES:
-  1. ${goalContext}
-  2. ${foodPrefs}
-  3. ${dislikes}
-  4. ${userData.dietaryRestrictions ? `RESTRICTIONS: ${userData.dietaryRestrictions.join(", ")}` : ""}
-  5. DAILY TARGETS: ${targetCalories} kcal total (P:${macros.protein}g, C:${macros.carbs}g, F:${macros.fat}g)
-  6. PATH: ${userData.path} (${pathGuideline})
+  const prompt = `
+You are a precision nutritionist and structured data generator. Create a highly varied ${planType} plan for a ${userData.age}y ${userData.gender} (${userData.height}cm/${userData.weight}kg).
 
-  MEAL-SPECIFIC TARGETS (MUST FOLLOW ACCURATELY):
-  - Breakfast: ~${breakfastTarget} kcal (P:${breakfastMacros.protein}g, C:${breakfastMacros.carbs}g, F:${breakfastMacros.fat}g)
-  - Lunch: ~${lunchTarget} kcal (P:${lunchMacros.protein}g, C:${lunchMacros.carbs}g, F:${lunchMacros.fat}g)
-  - Dinner: ~${dinnerTarget} kcal (P:${dinnerMacros.protein}g, C:${dinnerMacros.carbs}g, F:${dinnerMacros.fat}g)
-  - Snacks: ~${snackTarget} kcal each (P:${snackMacros.protein}g, C:${snackMacros.carbs}g, F:${snackMacros.fat}g)
+====== CRITICAL VARIETY ENFORCEMENT ======
+The user will reject this plan if meals are repeated. 
+1. **NO REPEATS:** You must generate 21 unique distinct meals (7 breakfasts, 7 lunches, 7 dinners).
+2. **PROTEIN ROTATION:** You must use a different primary protein source for every Lunch and Dinner (e.g., Mon=Chicken, Tue=Beef, Wed=Tofu, Thu=Fish, etc.).
+3. **CUISINE ROTATION:** Every day must feature a different flavor profile (e.g., Mon=Italian, Tue=Mexican, Wed=Asian, etc.).
 
-  CRITICAL MACRO CALCULATION RULES:
-  - Calories MUST be calculated from macros: (protein × 4) + (carbs × 4) + (fat × 9)
-  - Macros MUST add up correctly to match the target calories above
-  - Example: If breakfast target is ${breakfastTarget} kcal, then (protein×4) + (carbs×4) + (fat×9) should equal ~${breakfastTarget}
-  - DO NOT use random numbers - calculate based on ingredients and meal composition
-  - Each meal's macros should be within ±10% of the targets above
+====== USER PROFILE & CONSTRAINTS ======
+TARGETS:
+- Daily Calories: ${targetCalories} kcal (±5%)
+- Macros: P:${macros.protein}g, C:${macros.carbs}g, F:${macros.fat}g (±10%)
+- Goal: ${goalContext}
+- Path: ${userData.path}
 
-  MANDATORY DAILY SCHEDULE:
-  You must follow this schedule exactly for the JSON keys:
-  ${dailyScheduleManifest}
+DIETARY RULES:
+- Allergies: ${userData.allergies ? userData.allergies.join(", ") : "None"}
+- Restrictions: ${userData.dietaryRestrictions ? userData.dietaryRestrictions.join(", ") : "None"}
+- Dislikes: ${dislikes}
+- Food Preferences: ${foodPrefs}
 
-  WORKOUT INSTRUCTIONS:
-  - If the schedule above says "MUST INCLUDE WORKOUT", generate a workout array with 1 entry.
-  - If it says "Rest Day", the workout array must be empty [].
-  - Workout Focus: ${workoutFocus}
-  - Intensity: Adaptive to goal.
+MEAL FRAMEWORKS (Approximate):
+- Breakfast: ~${breakfastTarget} kcal (P:${breakfastMacros.protein}g, C:${breakfastMacros.carbs}g, F:${breakfastMacros.fat}g)
+- Lunch: ~${lunchTarget} kcal (P:${lunchMacros.protein}g, C:${lunchMacros.carbs}g, F:${lunchMacros.fat}g)
+- Dinner: ~${dinnerTarget} kcal (P:${dinnerMacros.protein}g, C:${dinnerMacros.carbs}g, F:${dinnerMacros.fat}g)
+- Snacks: ~${snackTarget} kcal (P:${snackMacros.protein}g, C:${snackMacros.carbs}g, F:${snackMacros.fat}g)
 
-  INGREDIENT RULES:
-  - Format: "ingredient|amount|unit|category" (e.g. "chicken|100|g|Proteins")
-  - Use RAW ingredients. No "mixed veggies".
-  - Categories: Proteins, Vegetables, Fruits, Grains, Dairy, Pantry, Spices.
-  - Calculate macros from ingredients: Proteins ~4 cal/g, Carbs ~4 cal/g, Fats ~9 cal/g
+====== DATA STRUCTURE RULES ======
+1. Return ONLY valid JSON. Do not include markdown formatting (like \`\`\`json).
+2. Follow this schedule keys exactly: ${dailyScheduleManifest}
+3. INGREDIENTS: Format as "ingredient|amount|unit|category" using RAW amounts.
+4. MATH: Ensure (Protein*4 + Carbs*4 + Fat*9) matches the calorie total for each meal.
 
-  VARIETY REQUIREMENT:
-  - Each day's meals must be nutritionally similar but culinarily DISTINCT
-  - Proteins: Rotate through chicken, fish, beef, tofu, legumes, turkey, pork, eggs
-  - Avoid repeating the same dish name anywhere in the week
-  - If Day 1 has "Grilled Chicken Breast", Day 2 cannot have grilled chicken
-
-  OUTPUT FORMAT:
-  Return ONLY valid JSON. No text. Matches this schema exactly:
-  {
-    "weeklyPlan": {
-      "YYYY-MM-DD": {
-        "day": "monday",
-        "date": "YYYY-MM-DD",
-        "meals": {
-          "breakfast": { "name": "...", "calories": ${breakfastTarget}, "macros": {"protein":${breakfastMacros.protein},"carbs":${breakfastMacros.carbs},"fat":${breakfastMacros.fat}}, "ingredients": ["name|amount|unit|Category"], "prepTime": 0 },
-          "lunch": { "name": "...", "calories": ${lunchTarget}, "macros": {"protein":${lunchMacros.protein},"carbs":${lunchMacros.carbs},"fat":${lunchMacros.fat}}, "ingredients": [...], "prepTime": 0 },
-          "dinner": { "name": "...", "calories": ${dinnerTarget}, "macros": {"protein":${dinnerMacros.protein},"carbs":${dinnerMacros.carbs},"fat":${dinnerMacros.fat}}, "ingredients": [...], "prepTime": 0 },
-          "snacks": [{ "name": "...", "calories": ${snackTarget}, "macros": {"protein":${snackMacros.protein},"carbs":${snackMacros.carbs},"fat":${snackMacros.fat}}, "ingredients": [...], "prepTime": 0 }]
+====== OUTPUT SCHEMA ======
+{
+  "weeklyPlan": {
+    "YYYY-MM-DD": {
+      "day": "string",
+      "date": "YYYY-MM-DD",
+      "variety_check": "Short string describing the cuisine/protein (e.g., 'Italian Chicken')", 
+      "meals": {
+        "breakfast": { 
+          "name": "string", 
+          "calories": number, 
+          "macros": { "protein": number, "carbs": number, "fat": number }, 
+          "ingredients": ["string"], 
+          "prepTime": number 
         },
-        "hydration": { "waterTarget": 8, "recommendations": ["..."] },
-        "workouts": [{ "name": "...", "category": "...", "duration": 0, "caloriesBurned": 0 }]
-      }
+        "lunch": { ...same structure },
+        "dinner": { ...same structure },
+        "snacks": [{ ...same structure }]
+      },
+      "hydration": { "waterTarget": number, "recommendations": ["string"] },
+      "workouts": [{ "name": "string", "category": "string", "duration": number, "caloriesBurned": number }]
     }
   }
-  
-  Ensure keys in "weeklyPlan" match the dates in the Mandatory Daily Schedule.
-  IMPORTANT: Verify that calories = (protein×4) + (carbs×4) + (fat×9) for each meal!`;
+}
+`;
 
   return { prompt, dayToName, nameToDay, dates, activeDays, workoutDays };
 };

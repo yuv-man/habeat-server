@@ -40,6 +40,7 @@ import {
 } from "../utils/helpers";
 import mongoose from "mongoose";
 import { Meal } from "../meal/meal.model";
+import { isPlanExpired } from "./helper";
 
 @Injectable()
 export class GeneratorService {
@@ -468,68 +469,113 @@ export class GeneratorService {
     // mealPlan.weeklyPlan is now an object with date keys
     const weeklyPlanEntries = Object.entries(mealPlan.weeklyPlan);
 
+    // PERFORMANCE OPTIMIZATION: Pre-fetch all matching meals for each category upfront
+    // This reduces DB queries from ~21-28 (one per meal) to just 4 (one per category)
+    logger.info(
+      `[generateWeeklyMealPlan] Pre-fetching matching meals from database for reuse...`
+    );
+    const [breakfastMatches, lunchMatches, dinnerMatches, snackMatches] =
+      await Promise.all([
+        this.findMatchingMeals("breakfast", breakfastTarget, userData, 10),
+        this.findMatchingMeals("lunch", lunchTarget, userData, 10),
+        this.findMatchingMeals("dinner", dinnerTarget, userData, 10),
+        this.findMatchingMeals("snack", snackTarget, userData, 10),
+      ]);
+
+    logger.info(
+      `[generateWeeklyMealPlan] Found ${breakfastMatches.length} breakfast, ${lunchMatches.length} lunch, ${dinnerMatches.length} dinner, ${snackMatches.length} snack matches`
+    );
+
+    // Track which meals have already been used to prevent duplicates
+    const usedMealIds = new Set<string>();
+    // Track indices for each category to cycle through matches
+    const mealIndices = {
+      breakfast: 0,
+      lunch: 0,
+      dinner: 0,
+      snack: 0,
+    };
+
     // Helper function to process meal with validation and reuse logic
-    const processMealWithReuse = async (
+    const processMealWithReuse = (
       meal: IMeal | undefined,
       category: "breakfast" | "lunch" | "dinner" | "snack"
-    ): Promise<IMeal | null> => {
+    ): IMeal | null => {
       if (!meal) return null;
 
       // Determine target calories and macros based on category
-      let targetCal, targetMacros;
+      let targetCal, targetMacros, availableMatches;
       switch (category) {
         case "breakfast":
           targetCal = breakfastTarget;
           targetMacros = breakfastMacros;
+          availableMatches = breakfastMatches;
           break;
         case "lunch":
           targetCal = lunchTarget;
           targetMacros = lunchMacros;
+          availableMatches = lunchMatches;
           break;
         case "dinner":
           targetCal = dinnerTarget;
           targetMacros = dinnerMacros;
+          availableMatches = dinnerMatches;
           break;
         case "snack":
           targetCal = snackTarget;
           targetMacros = snackMacros;
+          availableMatches = snackMatches;
           break;
       }
 
-      // Try to find existing meal from database first
-      try {
-        const matchingMeals = await this.findMatchingMeals(
-          category,
-          targetCal,
-          userData,
-          5
-        );
+      // Try to reuse a meal from pre-fetched matches
+      if (availableMatches && availableMatches.length > 0) {
+        // Find next unused meal in the matches
+        let reusedMeal: IMeal | null = null;
+        let attempts = 0;
+        const maxAttempts = availableMatches.length;
 
-        if (matchingMeals.length > 0) {
-          // Use the best matching meal
-          const reusedMeal = matchingMeals[0];
-          logger.info(
-            `[generateWeeklyMealPlan] Reusing existing meal "${reusedMeal.name}" for ${category}`
-          );
+        while (
+          attempts < maxAttempts &&
+          mealIndices[category] < availableMatches.length
+        ) {
+          const candidate = availableMatches[mealIndices[category]];
+          mealIndices[category]++; // Move to next meal for next time
+
+          if (!usedMealIds.has(candidate._id)) {
+            reusedMeal = candidate;
+            usedMealIds.add(candidate._id);
+            logger.debug(
+              `[generateWeeklyMealPlan] Reusing meal "${candidate.name}" (ID: ${candidate._id}) for ${category}`
+            );
+            break;
+          }
+          attempts++;
+        }
+
+        if (reusedMeal) {
           return {
             ...reusedMeal,
             _id: reusedMeal._id,
           };
         }
-      } catch (error) {
-        logger.warn(
-          `[generateWeeklyMealPlan] Error finding matching meals: ${error}`
-        );
       }
 
-      // If no matching meal found, validate and correct the AI-generated meal
+      // If no matching meal available or all matches used, validate and use AI-generated meal
       const validatedMeal = validateAndCorrectMealMacros(
         meal as any,
         targetCal,
         targetMacros
       );
 
-      return convertMeal(validatedMeal as IMeal);
+      const convertedMeal = convertMeal(validatedMeal as IMeal);
+
+      // Track AI-generated meals too to prevent accidental duplicates
+      if (convertedMeal) {
+        usedMealIds.add(convertedMeal._id);
+      }
+
+      return convertedMeal;
     };
 
     for (const [dateKey, dayData] of weeklyPlanEntries) {
@@ -544,17 +590,13 @@ export class GeneratorService {
         time: w.time,
       }));
 
-      // Process meals with reuse and validation
-      const [breakfast, lunch, dinner, processedSnacks] = await Promise.all([
-        processMealWithReuse(day.meals?.breakfast, "breakfast"),
-        processMealWithReuse(day.meals?.lunch, "lunch"),
-        processMealWithReuse(day.meals?.dinner, "dinner"),
-        Promise.all(
-          (day.meals?.snacks || []).map((snack) =>
-            processMealWithReuse(snack, "snack")
-          )
-        ),
-      ]);
+      // Process meals with reuse and validation (now synchronous since meals are pre-fetched)
+      const breakfast = processMealWithReuse(day.meals?.breakfast, "breakfast");
+      const lunch = processMealWithReuse(day.meals?.lunch, "lunch");
+      const dinner = processMealWithReuse(day.meals?.dinner, "dinner");
+      const processedSnacks = (day.meals?.snacks || []).map((snack) =>
+        processMealWithReuse(snack, "snack")
+      );
 
       // Preserve day name and formatted date from the transformed plan
       // Note: day.waterIntake already includes base (8 glasses) + workout water from transformWeeklyPlan
@@ -657,6 +699,16 @@ export class GeneratorService {
     // Find old plan first to get its planId
     const oldPlan = await this.planModel.findOne({ userId: userIdObjectId });
     if (oldPlan) {
+      if (!isPlanExpired(oldPlan)) {
+        const deletedPlan = await this.planModel.deleteOne({
+          userId: userIdObjectId,
+        });
+        if (deletedPlan.deletedCount > 0) {
+          logger.info(
+            `[generateWeeklyMealPlan] Deleted old plan for user ${userId} - new plan generated`
+          );
+        }
+      }
       const deletedShoppingList = await this.shoppingListModel.deleteOne({
         userId: userIdObjectId,
         planId: oldPlan._id,

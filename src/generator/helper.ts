@@ -1,3 +1,5 @@
+import { IPlan } from "../types/interfaces";
+
 export const pathGuidelines: Record<string, string> = {
   healthy:
     "Focus on balanced nutrition with whole foods, variety, and sustainable eating habits.",
@@ -34,4 +36,16 @@ export const workoutCategories = {
   weights: "Weights",
   core: "Core",
   stretching: "Stretching",
+};
+
+export const isPlanExpired = (plan: IPlan): boolean => {
+  if (!plan?.weeklyPlan) return false;
+  const dates = Object.keys(plan.weeklyPlan).sort();
+  if (dates.length === 0) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const lastDateStr = dates[dates.length - 1];
+  const lastDate = new Date(lastDateStr);
+  lastDate.setHours(0, 0, 0, 0);
+  return lastDate < today;
 };
