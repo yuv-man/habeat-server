@@ -16,6 +16,7 @@ import {
   IPlan,
   IUserData,
   IMeal,
+  IMealWithStatus,
   IDayPlanWithMetadata,
   IWeeklyPlanObject,
   IWorkout,
@@ -984,8 +985,7 @@ export class GeneratorService {
     }
 
     // 3. Use current meal's macros as target, or fall back to provided values
-    const targetCalories =
-      currentMeal.calories || originalMeal.calories || 500;
+    const targetCalories = currentMeal.calories || originalMeal.calories || 500;
     const targetMacros = currentMeal.macros ||
       originalMeal.macros || {
         protein: Math.round((targetCalories * 0.25) / 4),
@@ -1029,7 +1029,7 @@ export class GeneratorService {
     });
 
     // 6. Prepare meal data for plan update
-    const mealData: IMeal = {
+    const mealData: IMealWithStatus = {
       _id: savedMeal._id.toString(),
       name: savedMeal.name,
       calories: Math.round(savedMeal.calories),
@@ -1045,8 +1045,7 @@ export class GeneratorService {
     };
 
     // 7. Calculate calorie/macro differences for daily totals update
-    const calorieDiff =
-      (mealData.calories || 0) - (originalMeal.calories || 0);
+    const calorieDiff = (mealData.calories || 0) - (originalMeal.calories || 0);
     const proteinDiff =
       (mealData.macros?.protein || 0) - (originalMeal.macros?.protein || 0);
     const carbsDiff =
