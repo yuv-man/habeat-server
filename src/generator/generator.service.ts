@@ -934,4 +934,175 @@ export class GeneratorService {
       },
     };
   }
+
+  /**
+   * 5. Generate a quick rescue meal (<=10 min prep) and swap it into the plan
+   * This is an atomic operation: generate + swap in one call for instant UX
+   * Used by the "I'm Tired" button feature
+   */
+  async generateAndSwapRescueMeal(
+    userId: string,
+    planId: string,
+    date: string,
+    mealType: "breakfast" | "lunch" | "dinner",
+    currentMeal: {
+      calories: number;
+      macros?: { protein: number; carbs: number; fat: number };
+    },
+    language: string = "en"
+  ): Promise<{
+    success: boolean;
+    message: string;
+    data: {
+      rescueMeal: IMeal;
+      originalMealName: string;
+    };
+  }> {
+    // 1. Get user data for dietary restrictions and preferences
+    const user = await this.userModel.findById(userId).lean().exec();
+    if (!user) {
+      throw new NotFoundException("User not found");
+    }
+
+    // 2. Get the plan and current meal
+    const plan = await this.planModel.findById(planId);
+    if (!plan) {
+      throw new NotFoundException("Plan not found");
+    }
+
+    // Find the day in the plan using the date key
+    const weeklyPlan = (plan as any).weeklyPlan || {};
+    const dayPlan = weeklyPlan[date];
+
+    if (!dayPlan) {
+      throw new NotFoundException(`Day ${date} not found in plan`);
+    }
+
+    const originalMeal = dayPlan.meals?.[mealType];
+    if (!originalMeal) {
+      throw new NotFoundException(`${mealType} not found for ${date}`);
+    }
+
+    // 3. Use current meal's macros as target, or fall back to provided values
+    const targetCalories =
+      currentMeal.calories || originalMeal.calories || 500;
+    const targetMacros = currentMeal.macros ||
+      originalMeal.macros || {
+        protein: Math.round((targetCalories * 0.25) / 4),
+        carbs: Math.round((targetCalories * 0.45) / 4),
+        fat: Math.round((targetCalories * 0.3) / 9),
+      };
+
+    // 4. Generate rescue meal via AI
+    logger.info(
+      `[RescueMeal] Generating rescue meal for ${mealType} on ${date} (target: ${targetCalories} kcal)`
+    );
+
+    const rescueMeal = await aiService.generateRescueMeal(
+      {
+        category: mealType,
+        targetCalories,
+        targetMacros,
+        dietaryRestrictions: [
+          ...((user as any).dietaryRestrictions || []),
+          ...((user as any).allergies || []),
+        ],
+        preferences: (user as any).foodPreferences || [],
+        dislikes: (user as any).dislikes || [],
+      },
+      language
+    );
+
+    // 5. Save rescue meal to database for future reuse
+    const savedMeal = await this.mealModel.create({
+      name: rescueMeal.name,
+      calories: rescueMeal.calories,
+      macros: rescueMeal.macros,
+      category: mealType,
+      prepTime: rescueMeal.prepTime,
+      ingredients: rescueMeal.ingredients,
+      aiGenerated: true,
+      isRescueMeal: true,
+      analytics: {
+        timesGenerated: 1,
+      },
+    });
+
+    // 6. Prepare meal data for plan update
+    const mealData: IMeal = {
+      _id: savedMeal._id.toString(),
+      name: savedMeal.name,
+      calories: Math.round(savedMeal.calories),
+      macros: {
+        protein: Math.round(savedMeal.macros?.protein || 0),
+        carbs: Math.round(savedMeal.macros?.carbs || 0),
+        fat: Math.round(savedMeal.macros?.fat || 0),
+      },
+      category: mealType,
+      ingredients: savedMeal.ingredients || [],
+      prepTime: savedMeal.prepTime || 10,
+      done: false,
+    };
+
+    // 7. Calculate calorie/macro differences for daily totals update
+    const calorieDiff =
+      (mealData.calories || 0) - (originalMeal.calories || 0);
+    const proteinDiff =
+      (mealData.macros?.protein || 0) - (originalMeal.macros?.protein || 0);
+    const carbsDiff =
+      (mealData.macros?.carbs || 0) - (originalMeal.macros?.carbs || 0);
+    const fatDiff =
+      (mealData.macros?.fat || 0) - (originalMeal.macros?.fat || 0);
+
+    // 8. Update the plan with the new meal
+    dayPlan.meals[mealType] = mealData;
+
+    // Update daily totals if they exist
+    if (dayPlan.totalCalories !== undefined) {
+      dayPlan.totalCalories = Math.round(
+        (dayPlan.totalCalories || 0) + calorieDiff
+      );
+    }
+    if (dayPlan.totalProtein !== undefined) {
+      dayPlan.totalProtein = Math.round(
+        (dayPlan.totalProtein || 0) + proteinDiff
+      );
+    }
+    if (dayPlan.totalCarbs !== undefined) {
+      dayPlan.totalCarbs = Math.round((dayPlan.totalCarbs || 0) + carbsDiff);
+    }
+    if (dayPlan.totalFat !== undefined) {
+      dayPlan.totalFat = Math.round((dayPlan.totalFat || 0) + fatDiff);
+    }
+
+    plan.markModified("weeklyPlan");
+    await plan.save();
+
+    // 9. Update progress record if it exists for this date
+    const progress = await this.progressModel.findOne({
+      userId: new mongoose.Types.ObjectId(userId),
+      dateKey: date,
+    });
+
+    if (progress) {
+      const progressMeals = (progress as any).meals || {};
+      progressMeals[mealType] = { ...mealData, done: false };
+      progress.markModified("meals");
+      await progress.save();
+      logger.info(`[RescueMeal] Updated progress record for ${date}`);
+    }
+
+    logger.info(
+      `[RescueMeal] Successfully swapped "${originalMeal.name}" with "${rescueMeal.name}" (${rescueMeal.prepTime} min prep)`
+    );
+
+    return {
+      success: true,
+      message: `Swapped to quick meal: ${rescueMeal.name}`,
+      data: {
+        rescueMeal: mealData,
+        originalMealName: originalMeal.name || "Unknown meal",
+      },
+    };
+  }
 }

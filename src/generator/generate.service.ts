@@ -1515,19 +1515,6 @@ Each meal MUST have ALL these fields:
    - NOTE: Ingredient names use underscores, but meal names use spaces!
 6. "prepTime" - preparation time in minutes (integer)`;
 
-  // Helper function to normalize meal names (convert underscores to spaces and proper capitalization)
-  const normalizeMealName = (name: string): string => {
-    if (!name) return "Unnamed Meal";
-    // Replace underscores with spaces
-    let normalized = name.replace(/_/g, " ");
-    // Convert to Title Case (capitalize first letter of each word)
-    normalized = normalized
-      .split(" ")
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(" ");
-    return normalized;
-  };
-
   const parseResponse = (jsonText: string): IMeal[] => {
     const parsed = JSON.parse(jsonText);
     const meals = parsed.meals || parsed;
@@ -1567,6 +1554,132 @@ Each meal MUST have ALL these fields:
   );
 
   return meals;
+};
+
+// Helper function to normalize meal names (convert underscores to spaces and proper capitalization)
+const normalizeMealName = (name: string): string => {
+  if (!name) return "Unnamed Meal";
+  // Replace underscores with spaces
+  let normalized = name.replace(/_/g, " ");
+  // Convert to Title Case (capitalize first letter of each word)
+  normalized = normalized
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+  return normalized;
+};
+
+/**
+ * Generate a quick "rescue meal" for the "I'm Tired" feature
+ * - Maximum 10 minute prep time
+ * - Matches target macros (±20% tolerance)
+ * - Uses simple, commonly available ingredients
+ * - Minimal cooking required
+ */
+const generateRescueMeal = async (
+  mealCriteria: {
+    category: "breakfast" | "lunch" | "dinner";
+    targetCalories: number;
+    targetMacros?: { protein: number; carbs: number; fat: number };
+    dietaryRestrictions?: string[];
+    preferences?: string[];
+    dislikes?: string[];
+  },
+  language: string = "en"
+): Promise<IMeal> => {
+  const { category, targetCalories, targetMacros } = mealCriteria;
+
+  // Calculate default macros if not provided (based on typical meal distribution)
+  const defaultMacros = targetMacros || {
+    protein: Math.round((targetCalories * 0.25) / 4), // 25% from protein
+    carbs: Math.round((targetCalories * 0.45) / 4), // 45% from carbs
+    fat: Math.round((targetCalories * 0.3) / 9), // 30% from fat
+  };
+
+  const prompt = `You are a professional nutritionist. Generate ONE quick "rescue meal" for someone who is tired and has no time to cook.
+
+## CRITICAL REQUIREMENTS:
+- Preparation time: MAXIMUM 10 minutes (quick assembly, minimal cooking)
+- Category: ${category}
+- Target calories: approximately ${targetCalories} calories (±15%)
+- Target macros (±20% tolerance): Protein: ${defaultMacros.protein}g, Carbs: ${defaultMacros.carbs}g, Fat: ${defaultMacros.fat}g
+- Language for meal name and ingredients: ${language}
+${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
+${mealCriteria.preferences?.length ? `- Preferences (try to include): ${mealCriteria.preferences.join(", ")}` : ""}
+${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
+
+## MEAL CHARACTERISTICS:
+- Should use simple, commonly available ingredients
+- Minimal cooking required (microwave, toaster, no-cook preferred)
+- Can be assembled quickly (sandwiches, wraps, bowls, smoothies, salads, etc.)
+- Still nutritious and satisfying despite being quick
+- NO restaurant/takeout suggestions - must be home-preparable
+
+## QUICK MEAL IDEAS BY CATEGORY:
+- Breakfast: overnight oats (pre-made), yogurt parfait, toast with toppings, smoothie, cereal with fruit
+- Lunch: wrap/sandwich, salad bowl, hummus plate, leftover reheating, deli meat roll-ups
+- Dinner: rotisserie chicken + sides, pasta with jarred sauce, stir-fry with pre-cut veggies, quesadilla, eggs + toast
+
+## Response Format:
+Return ONLY valid JSON:
+{
+  "name": "Quick Meal Name",
+  "calories": ${targetCalories},
+  "macros": {"protein": ${defaultMacros.protein}, "carbs": ${defaultMacros.carbs}, "fat": ${defaultMacros.fat}},
+  "category": "${category}",
+  "ingredients": [["ingredient_name", "100 g"]],
+  "prepTime": 10
+}
+
+## Rules:
+1. "name" - appetizing meal name using spaces (Title Case, e.g., "Greek Yogurt Power Bowl")
+2. "prepTime" - MUST be 10 or less (this is critical!)
+3. "ingredients" - use underscores for ingredient names (e.g., "greek_yogurt", "mixed_berries")`;
+
+  const parseResponse = (jsonText: string) => {
+    const mealData = JSON.parse(jsonText);
+
+    // Ensure prepTime is <= 10 minutes (critical for rescue meals)
+    const prepTime = Math.min(mealData.prepTime || 10, 10);
+
+    return {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: normalizeMealName(mealData.name),
+      calories: Math.round(mealData.calories || targetCalories),
+      macros: {
+        protein: Math.round(mealData.macros?.protein || defaultMacros.protein),
+        carbs: Math.round(mealData.macros?.carbs || defaultMacros.carbs),
+        fat: Math.round(mealData.macros?.fat || defaultMacros.fat),
+      },
+      category,
+      ingredients: Array.isArray(mealData.ingredients)
+        ? mealData.ingredients.map((ing: any) => {
+            if (Array.isArray(ing)) {
+              return [String(ing[0] || ""), String(ing[1] || "")];
+            }
+            return [String(ing), ""];
+          })
+        : [],
+      prepTime,
+      done: false,
+    };
+  };
+
+  logger.info(
+    `[generateRescueMeal] Generating rescue meal for ${category} (${targetCalories} kcal)`
+  );
+
+  const meal = await generateWithFallback<IMeal>(prompt, parseResponse, {
+    timeoutMs: 30000, // Shorter timeout for faster UX
+    maxRetries: 2, // Fewer retries for speed
+    context: "RescueMeal",
+  });
+
+  logger.info(
+    `[generateRescueMeal] Generated: ${meal.name} (${meal.prepTime} min prep)`
+  );
+
+  return meal;
 };
 
 const generateSnack = async (
@@ -1751,6 +1864,7 @@ const aiService = {
   generateMeal,
   generateMealPlanWithLlama2,
   generateMealSuggestions,
+  generateRescueMeal,
   generateSnack,
   generateGoal,
 };

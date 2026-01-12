@@ -189,4 +189,76 @@ Optional parameters that can be passed as query strings or in the request body. 
       body.language || "en"
     );
   }
+
+  @Post("rescue-meal/:userId/:planId")
+  @ApiOperation({
+    summary: 'Generate and swap a quick rescue meal (I\'m Tired button)',
+    description: `Instantly generates a quick "rescue meal" (<=10 min prep time) and swaps it with the current meal.
+
+**Features:**
+- Maximum 10 minute preparation time
+- Matches similar macros to the original meal (±20% tolerance)
+- Follows user's dietary restrictions and preferences
+- AI-generated for variety
+- Atomic operation: generates and swaps in one API call
+
+**Use Case:**
+This endpoint powers the "I'm Tired / No Time" button feature, providing instant meal swaps when users don't have time to cook the planned meal.`,
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Rescue meal generated and swapped successfully",
+    schema: {
+      example: {
+        success: true,
+        message: "Swapped to quick meal: Greek Yogurt Power Bowl",
+        data: {
+          rescueMeal: {
+            _id: "65a123...",
+            name: "Greek Yogurt Power Bowl",
+            calories: 485,
+            macros: { protein: 32, carbs: 48, fat: 14 },
+            category: "lunch",
+            ingredients: [["greek_yogurt", "200 g"], ["mixed_berries", "100 g"]],
+            prepTime: 5,
+            done: false,
+          },
+          originalMealName: "Grilled Chicken Salad",
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: "Invalid meal type (must be breakfast, lunch, or dinner)" })
+  @ApiResponse({ status: 404, description: "User, plan, or meal not found" })
+  async generateRescueMeal(
+    @Param("userId") userId: string,
+    @Param("planId") planId: string,
+    @Body()
+    body: {
+      date: string;
+      mealType: "breakfast" | "lunch" | "dinner";
+      targetCalories?: number;
+      targetMacros?: { protein: number; carbs: number; fat: number };
+      language?: string;
+    }
+  ) {
+    // Validate mealType is not snack (rescue meals only for main meals)
+    if (!["breakfast", "lunch", "dinner"].includes(body.mealType)) {
+      throw new Error(
+        "Rescue meals are only available for breakfast, lunch, or dinner"
+      );
+    }
+
+    return this.generatorService.generateAndSwapRescueMeal(
+      userId,
+      planId,
+      body.date,
+      body.mealType,
+      {
+        calories: body.targetCalories || 500,
+        macros: body.targetMacros,
+      },
+      body.language || "en"
+    );
+  }
 }
