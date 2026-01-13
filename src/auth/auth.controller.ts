@@ -104,7 +104,7 @@ export class AuthController {
     return this.authService.getUser(req.user._id.toString());
   }
 
-  @Get("google/signup")
+  @Get("google/web/signup")
   @ApiOperation({
     summary: "Initiate Google OAuth signup",
     description:
@@ -223,7 +223,7 @@ export class AuthController {
     }
   }
 
-  @Get("google/signin")
+  @Get("google/web/signin")
   @ApiOperation({
     summary: "Initiate Google OAuth signin",
     description:
@@ -442,15 +442,90 @@ export class AuthController {
     if (!body.idToken) {
       throw new BadRequestException("Google ID token is required");
     }
-    return this.authService.googleSignin(body.idToken);
+    const result = await this.authService.googleSignin(body.idToken);
+
+    // Fetch user plan for consistency with other endpoints
+    const userData = await this.authService.getUser(result.user._id.toString());
+
+    return {
+      status: "success",
+      data: {
+        user: result.user,
+        plan: userData.data.plan,
+        token: result.token,
+      },
+    };
   }
 
-  @Post("google/signin")
+  @Post("google/web/signup")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: "Complete Google OAuth signin (Web)",
+    summary: "Google OAuth signup for web apps",
     description:
-      "Completes the Google OAuth signin flow by looking up the user and returning their data. Called by frontend after receiving token and userId from OAuth callback redirect.",
+      "Web endpoint for Google OAuth signup. Accepts Google ID token directly from Google Identity Services. Returns user data and JWT token.",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "User successfully signed up",
+  })
+  @ApiResponse({
+    status: 400,
+    description: "Invalid request or user already exists",
+  })
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        accessToken: {
+          type: "string",
+          description: "Google ID token from Google Identity Services",
+          example: "eyJhbGciOiJSUzI1NiIsImtpZCI6Ij...",
+        },
+        userData: {
+          type: "object",
+          description: "Optional user data to pre-fill profile",
+          properties: {
+            name: { type: "string" },
+            age: { type: "number" },
+            gender: { type: "string", enum: ["male", "female", "other"] },
+            height: { type: "number" },
+            weight: { type: "number" },
+            path: {
+              type: "string",
+              enum: [
+                "keto",
+                "healthy",
+                "gain-muscle",
+                "running",
+                "lose-weight",
+                "fasting",
+              ],
+            },
+          },
+        },
+      },
+      required: ["accessToken", "userData"],
+    },
+  })
+  async googleWebSignup(
+    @Body()
+    body: {
+      accessToken: string;
+      userData?: Partial<IUserData>;
+    }
+  ) {
+    if (!body.accessToken) {
+      throw new BadRequestException("Google ID token is required");
+    }
+    return this.authService.googleSignup(body.accessToken, body.userData);
+  }
+
+  @Post("google/web/signin")
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: "Google OAuth signin for web apps",
+    description:
+      "Web endpoint for Google OAuth signin. Accepts Google ID token directly from Google Identity Services OR userId/accessToken from redirect flow. Returns user data and JWT token.",
   })
   @ApiResponse({
     status: 200,
@@ -474,28 +549,30 @@ export class AuthController {
     schema: {
       type: "object",
       properties: {
-        provider: { type: "string", example: "google" },
-        userId: { type: "string", example: "user_id_here" },
-        accessToken: { type: "string", example: "jwt_token_here" },
+        userId: {
+          type: "string",
+          description: "User ID (required for redirect flow completion)",
+        },
+        accessToken: {
+          type: "string",
+          description:
+            "Google ID token (for direct auth) or JWT token (for redirect flow)",
+          example: "jwt_token_here",
+        },
       },
-      required: ["userId", "accessToken"],
+      required: ["accessToken"],
     },
   })
-  async completeGoogleSignin(
+  async googleWebSignin(
     @Body()
     body: {
-      provider: string;
-      userId: string;
+      userId?: string;
       accessToken: string;
     },
     @Request() req: any,
     @Res() res: Response
   ) {
-    const { userId, accessToken } = body;
-
     // Set CORS headers
-    // Always allow localhost for local development/testing
-    // Also allow both DEV and PROD client sites regardless of environment
     const allowedOrigins = [
       "http://localhost:8080",
       "http://localhost:8081",
@@ -503,12 +580,10 @@ export class AuthController {
       "http://localhost:3001",
     ];
 
-    // Add DEV_CLIENT_SITE if set
     if (process.env.DEV_CLIENT_SITE) {
       allowedOrigins.push(process.env.DEV_CLIENT_SITE);
     }
 
-    // Add PROD_CLIENT_SITE if set
     if (process.env.PROD_CLIENT_SITE) {
       allowedOrigins.push(process.env.PROD_CLIENT_SITE);
     }
@@ -526,21 +601,36 @@ export class AuthController {
       );
     }
 
-    if (!userId) {
-      throw new BadRequestException("userId is required");
-    }
-    if (!accessToken) {
+    if (!body.accessToken) {
       throw new BadRequestException("accessToken is required");
     }
 
-    const data = await this.authService.getUser(userId);
+    // If userId is provided, this is a redirect flow completion
+    if (body.userId) {
+      const data = await this.authService.getUser(body.userId);
+      res.json({
+        status: "success",
+        data: {
+          user: data.data.user,
+          plan: data.data.plan,
+          token: body.accessToken,
+        },
+      });
+      return;
+    }
+
+    // Otherwise, treat accessToken as Google ID token for direct authentication
+    const result = await this.authService.googleSignin(body.accessToken);
+
+    // Fetch user plan
+    const userData = await this.authService.getUser(result.user._id.toString());
 
     res.json({
       status: "success",
       data: {
-        user: data.data.user,
-        plan: data.data.plan,
-        token: accessToken,
+        user: result.user,
+        plan: userData.data.plan,
+        token: result.token,
       },
     });
   }
