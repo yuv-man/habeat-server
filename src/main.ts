@@ -43,13 +43,29 @@ async function bootstrap() {
 
   app.enableCors({
     origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, Postman, curl, etc.)
+      if (!origin) {
+        return callback(null, true);
+      }
+      
+      // Allow Capacitor/Ionic mobile app origins
       if (
-        !origin ||
-        allowedOrigins.includes(origin) ||
-        origin.startsWith("http://localhost:")
+        origin.startsWith("capacitor://") ||
+        origin.startsWith("ionic://") ||
+        origin.startsWith("file://")
       ) {
         return callback(null, true);
       }
+      
+      // Allow configured origins
+      if (
+        allowedOrigins.includes(origin) ||
+        origin.startsWith("http://localhost:") ||
+        origin.startsWith("https://localhost:")
+      ) {
+        return callback(null, true);
+      }
+      
       return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
