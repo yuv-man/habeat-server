@@ -8,6 +8,7 @@ import {
   IParsedWeeklyPlanResponse,
   IWorkout,
   IMealWithStatus,
+  IUserData,
 } from "../types/interfaces";
 import { ingredientCategories } from "./ingredientCategories";
 import mongoose from "mongoose";
@@ -970,12 +971,17 @@ export const validateAndCorrectMealMacros = (
   // If target macros provided, adjust to be closer to targets
   if (targetMacros && targetCalories) {
     const tolerance = 0.15; // 15% tolerance
-    const proteinDiff = Math.abs(protein - targetMacros.protein) / targetMacros.protein;
+    const proteinDiff =
+      Math.abs(protein - targetMacros.protein) / targetMacros.protein;
     const carbsDiff = Math.abs(carbs - targetMacros.carbs) / targetMacros.carbs;
     const fatDiff = Math.abs(fat - targetMacros.fat) / targetMacros.fat;
 
     // If macros are too far from target, adjust proportionally
-    if (proteinDiff > tolerance || carbsDiff > tolerance || fatDiff > tolerance) {
+    if (
+      proteinDiff > tolerance ||
+      carbsDiff > tolerance ||
+      fatDiff > tolerance
+    ) {
       const adjustment = 0.7; // 70% towards target, 30% keep current
       protein = Math.round(
         protein * (1 - adjustment) + targetMacros.protein * adjustment
@@ -984,7 +990,7 @@ export const validateAndCorrectMealMacros = (
         carbs * (1 - adjustment) + targetMacros.carbs * adjustment
       );
       fat = Math.round(fat * (1 - adjustment) + targetMacros.fat * adjustment);
-      
+
       // Recalculate calories from adjusted macros
       calories = protein * 4 + carbs * 4 + fat * 9;
     }
@@ -1107,13 +1113,13 @@ const distributeWorkouts = (
     // Try multiple ways to match the day name
     const dayNameLower = (day.day || "").toLowerCase().trim();
     let dayNumber = nameToDay[dayNameLower];
-    
+
     // If not found, try without spaces and with different formats
     if (dayNumber === undefined) {
       const normalizedDay = dayNameLower.replace(/\s+/g, "");
       dayNumber = nameToDay[normalizedDay];
     }
-    
+
     // If still not found, try matching by first 3 characters (e.g., "mon" for "monday")
     if (dayNumber === undefined && dayNameLower.length >= 3) {
       const dayPrefix = dayNameLower.substring(0, 3);
@@ -1124,7 +1130,7 @@ const distributeWorkouts = (
         }
       }
     }
-    
+
     // If still not found, try to infer from date if available
     if (dayNumber === undefined && day.date) {
       try {
@@ -1141,7 +1147,7 @@ const distributeWorkouts = (
         // Ignore date parsing errors
       }
     }
-    
+
     // Last resort: use array index to infer day (assuming Monday = 0)
     if (dayNumber === undefined && index < 7) {
       // If we have 7 days and they're in order, index 0 = Monday (1), index 1 = Tuesday (2), etc.
@@ -1150,7 +1156,7 @@ const distributeWorkouts = (
         `[distributeWorkouts] Mapped day "${day.day}" to day number ${dayNumber} using array index ${index}`
       );
     }
-    
+
     if (dayNumber !== undefined) {
       dayMap.set(dayNumber, day);
       logger.debug(
@@ -1172,7 +1178,9 @@ const distributeWorkouts = (
   if (allWorkouts.length > 0) {
     // Distribute collected workouts across workout days evenly
     // Each workout day should get at least 1 workout, distribute extras evenly
-    const baseWorkoutsPerDay = Math.floor(allWorkouts.length / workoutDays.length);
+    const baseWorkoutsPerDay = Math.floor(
+      allWorkouts.length / workoutDays.length
+    );
     const extraWorkouts = allWorkouts.length % workoutDays.length;
     let workoutIndex = 0;
 
@@ -1182,14 +1190,19 @@ const distributeWorkouts = (
       if (dayObj) {
         // Calculate how many workouts this day should get
         // First 'extraWorkouts' days get one extra workout
-        const workoutsForThisDay = baseWorkoutsPerDay + (i < extraWorkouts ? 1 : 0);
+        const workoutsForThisDay =
+          baseWorkoutsPerDay + (i < extraWorkouts ? 1 : 0);
         const dayWorkouts: IWorkout[] = [];
-        
-        for (let j = 0; j < workoutsForThisDay && workoutIndex < allWorkouts.length; j++) {
+
+        for (
+          let j = 0;
+          j < workoutsForThisDay && workoutIndex < allWorkouts.length;
+          j++
+        ) {
           dayWorkouts.push(allWorkouts[workoutIndex]);
           workoutIndex++;
         }
-        
+
         dayObj.workouts = dayWorkouts;
         logger.info(
           `[distributeWorkouts] Assigned ${dayWorkouts.length} workout(s) to ${dayToName[dayNumber]} (day ${dayNumber})`
@@ -1199,14 +1212,15 @@ const distributeWorkouts = (
           `[distributeWorkouts] Could not find day object for ${dayToName[dayNumber]} (day number ${dayNumber})`
         );
         // If day object not found, still consume workouts to avoid assigning them elsewhere
-        const workoutsForThisDay = baseWorkoutsPerDay + (i < extraWorkouts ? 1 : 0);
+        const workoutsForThisDay =
+          baseWorkoutsPerDay + (i < extraWorkouts ? 1 : 0);
         workoutIndex += workoutsForThisDay;
       }
     }
-    
+
     // Log distribution summary
     logger.info(
-      `[distributeWorkouts] Distributed ${allWorkouts.length} workouts across ${workoutDays.length} days: ${workoutDays.map(d => `${dayToName[d]}(${dayMap.get(d)?.workouts?.length || 0})`).join(", ")}`
+      `[distributeWorkouts] Distributed ${allWorkouts.length} workouts across ${workoutDays.length} days: ${workoutDays.map((d) => `${dayToName[d]}(${dayMap.get(d)?.workouts?.length || 0})`).join(", ")}`
     );
   } else {
     // No workouts from AI, generate defaults for each workout day
@@ -1244,7 +1258,7 @@ const distributeWorkouts = (
         );
       }
     }
-    
+
     if (workoutsGenerated === 0) {
       logger.error(
         `[distributeWorkouts] CRITICAL: No workouts were generated! Day map size: ${dayMap.size}, Workout days: ${workoutDays.join(", ")}, Weekly plan array length: ${weeklyPlanArray.length}`
@@ -1255,7 +1269,11 @@ const distributeWorkouts = (
           `[distributeWorkouts] Attempting fallback: assigning workouts to first ${Math.min(workoutDays.length, weeklyPlanArray.length)} days`
         );
         let templateIndex = 0;
-        for (let i = 0; i < Math.min(workoutDays.length, weeklyPlanArray.length); i++) {
+        for (
+          let i = 0;
+          i < Math.min(workoutDays.length, weeklyPlanArray.length);
+          i++
+        ) {
           const day = weeklyPlanArray[i];
           if (day) {
             const template =
@@ -1350,7 +1368,7 @@ export const transformWeeklyPlan = async (
   // This prevents the AI from generating more than a week's worth of data
   if (weeklyPlanArray.length > 7) {
     logger.warn(
-      `[transformWeeklyPlan] AI returned ${weeklyPlanArray.length} days, limiting to 7. Original days: ${weeklyPlanArray.map((d: any) => d.day || 'unknown').join(", ")}`
+      `[transformWeeklyPlan] AI returned ${weeklyPlanArray.length} days, limiting to 7. Original days: ${weeklyPlanArray.map((d: any) => d.day || "unknown").join(", ")}`
     );
     weeklyPlanArray = weeklyPlanArray.slice(0, 7);
   }
@@ -1549,7 +1567,7 @@ export const transformWeeklyPlan = async (
             parsedDate = undefined;
           }
         }
-        
+
         // Only use if it's within validDates range
         if (parsedDate && validDates.length > 0) {
           const dateKey = getLocalDateKey(parsedDate);
@@ -1823,7 +1841,7 @@ export const transformWeeklyPlan = async (
       logger.warn(
         `[transformWeeklyPlan] Date ${getLocalDateKey(dateObj)} for day ${day.day} is outside week boundary (${getLocalDateKey(mondayDate)} to ${getLocalDateKey(sundayDate)}). Attempting to fix...`
       );
-      
+
       // Try to find a valid date within the week based on day name
       const dayNumber = nameToDay[day.day.toLowerCase()];
       if (dayNumber !== undefined) {
@@ -1866,15 +1884,20 @@ export const transformWeeklyPlan = async (
 
     // Ensure workouts array exists (should have been set by distributeWorkouts)
     let dayWorkouts = day.workouts || [];
-    
+
     // Post-processing: Ensure workouts are present on workout days
     const dayNumber = nameToDay[day.day.toLowerCase()];
-    if (dayWorkouts.length === 0 && dayNumber !== undefined && workoutDays.includes(dayNumber)) {
+    if (
+      dayWorkouts.length === 0 &&
+      dayNumber !== undefined &&
+      workoutDays.includes(dayNumber)
+    ) {
       logger.warn(
         `[transformWeeklyPlan] Day ${day.day} (${dateKey}) is a workout day but has no workouts! Generating default workout. Day number: ${dayNumber}`
       );
       // Generate a default workout for this day
-      const templateIndex = workoutDays.indexOf(dayNumber) % defaultWorkoutTemplates.length;
+      const templateIndex =
+        workoutDays.indexOf(dayNumber) % defaultWorkoutTemplates.length;
       const template = defaultWorkoutTemplates[templateIndex];
       dayWorkouts = [
         {
@@ -1889,7 +1912,7 @@ export const transformWeeklyPlan = async (
         `[transformWeeklyPlan] Generated fallback workout "${template.name}" for ${day.day} (${dateKey})`
       );
     }
-    
+
     weeklyPlanObject[dateKey] = {
       day: day.day,
       date: formattedDate,
@@ -1929,4 +1952,362 @@ export const transformWeeklyPlan = async (
     language,
     generatedAt: new Date().toISOString(),
   };
+};
+
+/**
+ * Enrich weekly plan with user's favorite meals (20-30% replacement)
+ * Uses meals the user has explicitly favorited, filtered by category and calories
+ */
+export const enrichPlanWithFavoriteMeals = async (
+  planResponse: MealPlanResponse,
+  userData: IUserData
+): Promise<MealPlanResponse> => {
+  try {
+    const weeklyPlan = planResponse.mealPlan.weeklyPlan as IWeeklyPlanObject;
+    if (!weeklyPlan || typeof weeklyPlan !== "object") {
+      logger.warn(
+        "[enrichPlanWithFavoriteMeals] Invalid weekly plan structure, skipping enrichment"
+      );
+      return planResponse;
+    }
+
+    // Check if user has favorite meals
+    const favoriteMealIds = userData.favoriteMeals || [];
+    if (!favoriteMealIds || favoriteMealIds.length === 0) {
+      logger.info(
+        "[enrichPlanWithFavoriteMeals] User has no favorite meals, skipping enrichment"
+      );
+      return planResponse;
+    }
+
+    const mongooseConnection = mongoose.connection;
+    if (mongooseConnection.readyState !== 1) {
+      logger.warn(
+        "[enrichPlanWithFavoriteMeals] MongoDB not connected, skipping enrichment"
+      );
+      return planResponse;
+    }
+
+    const MealModel = getMealModel();
+
+    // Fetch user's favorite meals from database
+    const validIds = favoriteMealIds
+      .filter((id: any) => id)
+      .map((id: any) => {
+        try {
+          return typeof id === "string" ? new mongoose.Types.ObjectId(id) : id;
+        } catch (e) {
+          return null;
+        }
+      })
+      .filter((id: any) => id !== null);
+
+    if (validIds.length === 0) {
+      logger.warn(
+        "[enrichPlanWithFavoriteMeals] No valid favorite meal IDs found"
+      );
+      return planResponse;
+    }
+
+    const favoriteMeals = await MealModel.find({
+      _id: { $in: validIds },
+    })
+      .lean()
+      .exec();
+
+    if (favoriteMeals.length === 0) {
+      logger.warn(
+        "[enrichPlanWithFavoriteMeals] No favorite meals found in database"
+      );
+      return planResponse;
+    }
+
+    logger.info(
+      `[enrichPlanWithFavoriteMeals] Found ${favoriteMeals.length} favorite meals for user`
+    );
+
+    // Organize favorite meals by category
+    const favoritesByCategory: Record<string, any[]> = {
+      breakfast: [],
+      lunch: [],
+      dinner: [],
+      snack: [],
+    };
+
+    favoriteMeals.forEach((meal: any) => {
+      const category = meal.category;
+      if (category && favoritesByCategory[category]) {
+        favoritesByCategory[category].push(meal);
+      }
+    });
+
+    // Collect all meals that could be replaced
+    const dayKeys = Object.keys(weeklyPlan);
+    const mealsToReplace: Array<{
+      dateKey: string;
+      mealType: "breakfast" | "lunch" | "dinner";
+      currentMeal: IMealWithStatus;
+      targetCalories: number;
+    }> = [];
+
+    dayKeys.forEach((dateKey) => {
+      const dayPlan = weeklyPlan[dateKey];
+      if (!dayPlan || !dayPlan.meals) return;
+
+      ["breakfast", "lunch", "dinner"].forEach((mealType) => {
+        const meal = dayPlan.meals[
+          mealType as keyof typeof dayPlan.meals
+        ] as IMealWithStatus;
+        if (meal && meal.name && meal.calories) {
+          mealsToReplace.push({
+            dateKey,
+            mealType: mealType as "breakfast" | "lunch" | "dinner",
+            currentMeal: meal,
+            targetCalories: meal.calories,
+          });
+        }
+      });
+    });
+
+    if (mealsToReplace.length === 0) {
+      logger.warn("[enrichPlanWithFavoriteMeals] No meals found to replace");
+      return planResponse;
+    }
+
+    // Calculate target replacements (20-30% of meals)
+    const totalMeals = mealsToReplace.length;
+    const targetReplacements = Math.max(1, Math.floor(totalMeals * 0.25)); // 25% (within 20-30% range)
+
+    logger.info(
+      `[enrichPlanWithFavoriteMeals] Planning to replace ${targetReplacements} out of ${totalMeals} meals with favorite meals`
+    );
+
+    // Randomly shuffle meals to replace
+    const shuffled = [...mealsToReplace].sort(() => Math.random() - 0.5);
+    let replacedCount = 0;
+
+    // Replace meals with matching favorite meals
+    for (const { dateKey, mealType, targetCalories } of shuffled) {
+      if (replacedCount >= targetReplacements) break;
+
+      const categoryFavorites = favoritesByCategory[mealType] || [];
+      if (categoryFavorites.length === 0) continue;
+
+      // Filter favorites by calorie range (±150 calories tolerance)
+      const calorieTolerance = 150;
+      const matchingFavorites = categoryFavorites.filter((fav: any) => {
+        const calorieDiff = Math.abs((fav.calories || 0) - targetCalories);
+        return calorieDiff <= calorieTolerance;
+      });
+
+      if (matchingFavorites.length === 0) continue;
+
+      // Pick a random favorite meal from matches
+      const selectedFavorite = matchingFavorites[
+        Math.floor(Math.random() * matchingFavorites.length)
+      ] as any;
+
+      const dayPlan = weeklyPlan[dateKey];
+
+      // Replace the meal with favorite
+      (dayPlan.meals as any)[mealType] = {
+        _id: selectedFavorite._id.toString(),
+        name: selectedFavorite.name,
+        calories: selectedFavorite.calories,
+        macros: selectedFavorite.macros || { protein: 0, carbs: 0, fat: 0 },
+        category: mealType,
+        prepTime: parsePrepTime(selectedFavorite.prepTime),
+        ingredients: selectedFavorite.ingredients || [],
+        done: false,
+      };
+
+      // Update usage count
+      try {
+        await MealModel.findByIdAndUpdate(selectedFavorite._id, {
+          $inc: { "analytics.timesGenerated": 1 },
+        });
+      } catch (error) {
+        // Ignore analytics update errors
+      }
+
+      replacedCount++;
+      logger.info(
+        `[enrichPlanWithFavoriteMeals] Replaced ${mealType} on ${dateKey} with favorite meal: ${selectedFavorite.name}`
+      );
+    }
+
+    logger.info(
+      `[enrichPlanWithFavoriteMeals] Successfully replaced ${replacedCount} meals with favorite meals (${Math.round((replacedCount / totalMeals) * 100)}%)`
+    );
+
+    return planResponse;
+  } catch (error) {
+    logger.error(
+      `[enrichPlanWithFavoriteMeals] Error enriching plan with favorite meals: ${error instanceof Error ? error.message : String(error)}`
+    );
+    // Return original plan if enrichment fails
+    return planResponse;
+  }
+};
+
+/**
+ * Replace 20-30% of AI-generated meals with meals from database
+ * This saves AI costs and improves consistency by reusing proven meals
+ */
+export const enrichPlanWithDBMeals = async (
+  planResponse: MealPlanResponse,
+  userData: IUserData
+): Promise<MealPlanResponse> => {
+  try {
+    const weeklyPlan = planResponse.mealPlan.weeklyPlan as IWeeklyPlanObject;
+    if (!weeklyPlan || typeof weeklyPlan !== "object") {
+      logger.warn(
+        "[enrichPlanWithDBMeals] Invalid weekly plan structure, skipping DB enrichment"
+      );
+      return planResponse;
+    }
+
+    const mongooseConnection = mongoose.connection;
+    if (mongooseConnection.readyState !== 1) {
+      logger.warn(
+        "[enrichPlanWithDBMeals] MongoDB not connected, skipping DB enrichment"
+      );
+      return planResponse;
+    }
+
+    const MealModel = getMealModel();
+    const dayKeys = Object.keys(weeklyPlan);
+    const totalMeals = dayKeys.length * 3; // breakfast, lunch, dinner (excluding snacks)
+    const targetReplacements = Math.max(1, Math.floor(totalMeals * 0.25)); // 25% of meals (20-30% range)
+
+    logger.info(
+      `[enrichPlanWithDBMeals] Planning to replace ${targetReplacements} out of ${totalMeals} meals with DB meals`
+    );
+
+    // Collect all meals that need potential replacement
+    const mealsToReplace: Array<{
+      dateKey: string;
+      mealType: "breakfast" | "lunch" | "dinner";
+      currentMeal: IMealWithStatus;
+      targetCalories: number;
+    }> = [];
+
+    dayKeys.forEach((dateKey) => {
+      const dayPlan = weeklyPlan[dateKey];
+      if (!dayPlan || !dayPlan.meals) return;
+
+      ["breakfast", "lunch", "dinner"].forEach((mealType) => {
+        const meal = dayPlan.meals[
+          mealType as keyof typeof dayPlan.meals
+        ] as IMealWithStatus;
+        if (meal && meal.name && meal.calories) {
+          mealsToReplace.push({
+            dateKey,
+            mealType: mealType as "breakfast" | "lunch" | "dinner",
+            currentMeal: meal,
+            targetCalories: meal.calories,
+          });
+        }
+      });
+    });
+
+    if (mealsToReplace.length === 0) {
+      logger.warn("[enrichPlanWithDBMeals] No meals found to replace");
+      return planResponse;
+    }
+
+    // Randomly select meals to replace
+    const shuffled = [...mealsToReplace].sort(() => Math.random() - 0.5);
+    const mealsToActuallyReplace = shuffled.slice(
+      0,
+      Math.min(targetReplacements, mealsToReplace.length)
+    );
+
+    logger.info(
+      `[enrichPlanWithDBMeals] Selected ${mealsToActuallyReplace.length} meals to replace with DB meals`
+    );
+
+    let replacedCount = 0;
+
+    // Replace each selected meal with a DB meal
+    for (const {
+      dateKey,
+      mealType,
+      targetCalories,
+    } of mealsToActuallyReplace) {
+      try {
+        // Query DB for matching meal
+        const calorieTolerance = 150;
+        const query: any = {
+          category: mealType,
+          calories: {
+            $gte: Math.max(0, targetCalories - calorieTolerance),
+            $lte: targetCalories + calorieTolerance,
+          },
+        };
+
+        // Exclude allergens
+        if (userData.allergies && userData.allergies.length > 0) {
+          const allergenRegex = new RegExp(userData.allergies.join("|"), "i");
+          query.$nor = [
+            { name: { $regex: allergenRegex } },
+            { "ingredients.0": { $regex: allergenRegex } },
+          ];
+        }
+
+        // Find a matching meal from DB
+        const dbMeals = await MealModel.find(query)
+          .sort({ "analytics.timesGenerated": -1 }) // Prioritize popular meals
+          .limit(5)
+          .lean()
+          .exec();
+
+        if (dbMeals.length > 0) {
+          // Pick a random meal from top matches
+          const selectedMeal = dbMeals[
+            Math.floor(Math.random() * dbMeals.length)
+          ] as any;
+          const dayPlan = weeklyPlan[dateKey];
+
+          // Replace the meal
+          (dayPlan.meals as any)[mealType] = {
+            _id: selectedMeal._id.toString(),
+            name: selectedMeal.name,
+            calories: selectedMeal.calories,
+            macros: selectedMeal.macros || { protein: 0, carbs: 0, fat: 0 },
+            category: mealType,
+            prepTime: parsePrepTime(selectedMeal.prepTime),
+            ingredients: selectedMeal.ingredients || [],
+            done: false,
+          };
+
+          // Update usage count
+          await MealModel.findByIdAndUpdate(selectedMeal._id, {
+            $inc: { "analytics.timesGenerated": 1 },
+          });
+
+          replacedCount++;
+          logger.info(
+            `[enrichPlanWithDBMeals] Replaced ${mealType} on ${dateKey} with DB meal: ${selectedMeal.name}`
+          );
+        }
+      } catch (error) {
+        logger.warn(
+          `[enrichPlanWithDBMeals] Failed to replace meal for ${dateKey}/${mealType}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+
+    logger.info(
+      `[enrichPlanWithDBMeals] Successfully replaced ${replacedCount} meals with DB meals (${Math.round((replacedCount / totalMeals) * 100)}%)`
+    );
+
+    return planResponse;
+  } catch (error) {
+    logger.error(
+      `[enrichPlanWithDBMeals] Error enriching plan with DB meals: ${error instanceof Error ? error.message : String(error)}`
+    );
+    // Return original plan if enrichment fails
+    return planResponse;
+  }
 };

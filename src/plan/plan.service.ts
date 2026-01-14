@@ -100,6 +100,122 @@ export class PlanService {
   }
 
   /**
+   * Query meals from database based on criteria
+   * This helps reuse existing meals instead of always generating new ones
+   * @param criteria - Search criteria for meals
+   * @returns Array of matching meals from database
+   */
+  async findMealsByCriteria(criteria: {
+    category: "breakfast" | "lunch" | "dinner" | "snack";
+    targetCalories?: number;
+    dietaryRestrictions?: string[];
+    preferences?: string[];
+    dislikes?: string[];
+    name?: string; // Optional: search by name (for free-text queries)
+    limit?: number;
+  }): Promise<IMeal[]> {
+    const {
+      category,
+      targetCalories,
+      dietaryRestrictions = [],
+      preferences = [],
+      dislikes = [],
+      name,
+      limit = 10,
+    } = criteria;
+
+    const query: any = {
+      category,
+    };
+
+    // Search by name if provided (for free-text user queries)
+    if (name && name.trim()) {
+      // Use regex for partial name matching (case-insensitive)
+      query.name = { $regex: new RegExp(escapeRegex(name.trim()), "i") };
+    }
+
+    // Filter by calories range (±20% tolerance)
+    if (targetCalories) {
+      query.calories = {
+        $gte: Math.round(targetCalories * 0.8),
+        $lte: Math.round(targetCalories * 1.2),
+      };
+    }
+
+    // Filter out meals with disliked ingredients
+    if (dislikes.length > 0) {
+      const dislikeRegex = dislikes
+        .map((d) => escapeRegex(d.toLowerCase()))
+        .join("|");
+      query["ingredients.0"] = {
+        $not: { $regex: new RegExp(dislikeRegex, "i") },
+      };
+    }
+
+    try {
+      const meals = await this.mealModel
+        .find(query)
+        .sort({ "analytics.timesGenerated": -1 }) // Prioritize frequently used meals
+        .limit(limit)
+        .lean()
+        .exec();
+
+      // Filter meals that match dietary restrictions and preferences
+      const filteredMeals = meals.filter((meal: any) => {
+        // Check dietary restrictions (e.g., vegetarian, vegan)
+        if (dietaryRestrictions.length > 0) {
+          const mealIngredients = (meal.ingredients || [])
+            .map((ing: any) =>
+              Array.isArray(ing) ? ing[0]?.toLowerCase() : ing?.toLowerCase()
+            )
+            .join(" ");
+
+          // Simple check: if restrictions include "vegetarian" or "vegan", filter out meat
+          if (
+            dietaryRestrictions.some((r) =>
+              ["vegetarian", "vegan"].includes(r.toLowerCase())
+            )
+          ) {
+            const meatKeywords = [
+              "chicken",
+              "beef",
+              "pork",
+              "fish",
+              "meat",
+              "turkey",
+              "lamb",
+            ];
+            if (meatKeywords.some((keyword) => mealIngredients.includes(keyword))) {
+              return false;
+            }
+          }
+        }
+
+        return true;
+      });
+
+      logger.info(
+        `[findMealsByCriteria] Found ${filteredMeals.length} meals from DB for category ${category}`
+      );
+
+      return filteredMeals.map((meal: any) => ({
+        _id: meal._id.toString(),
+        name: meal.name,
+        calories: meal.calories,
+        macros: meal.macros || { protein: 0, carbs: 0, fat: 0 },
+        category: meal.category,
+        prepTime: parsePrepTime(meal.prepTime),
+        ingredients: meal.ingredients || [],
+      })) as IMeal[];
+    } catch (error) {
+      logger.error(
+        `[findMealsByCriteria] Error querying meals: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return [];
+    }
+  }
+
+  /**
    * Get a meal from DB or generate via AI if not found
    * This is the main function for meal swapping - check DB first, generate if needed
    * @param mealName - Name of the meal to get/generate

@@ -63,7 +63,8 @@ export class GeneratorService {
     category: "breakfast" | "lunch" | "dinner" | "snack",
     targetCalories: number,
     userData: IUserData,
-    limit: number = 10
+    limit: number = 10,
+    name?: string // Optional: search by name for free-text queries
   ): Promise<IMeal[]> {
     const calorieTolerance = 150; // ±150 calories tolerance
     const minCalories = Math.max(0, targetCalories - calorieTolerance);
@@ -74,6 +75,18 @@ export class GeneratorService {
       category,
       calories: { $gte: minCalories, $lte: maxCalories },
     };
+
+    // Search by name if provided (for free-text user queries)
+    if (name && name.trim()) {
+      // Use regex for partial name matching (case-insensitive)
+      const escapedName = name.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      query.name = { $regex: new RegExp(escapedName, "i") };
+      // If searching by name, relax calorie constraints slightly
+      query.calories = {
+        $gte: Math.max(0, targetCalories - 200),
+        $lte: targetCalories + 200,
+      };
+    }
 
     // Exclude meals with allergens
     if (userData.allergies && userData.allergies.length > 0) {
@@ -877,6 +890,7 @@ export class GeneratorService {
 
   /**
    * 4. Generate meal suggestions based on user and meal criteria
+   * OPTIMIZED: Uses DB meals first, then fills remaining slots with AI-generated meals
    */
   async generateMealSuggestions(
     userId: string,
@@ -887,12 +901,45 @@ export class GeneratorService {
       preferences?: string[];
       dislikes?: string[];
       numberOfSuggestions?: number;
-      aiRules?: string;
+      aiRules?: string; // Can contain free-text meal name query
     },
     language: string = "en"
   ) {
     if (!mealCriteria.category) {
       throw new BadRequestException("Meal category is required");
+    }
+
+    const numberOfSuggestions = mealCriteria.numberOfSuggestions || 3;
+    const targetCalories = mealCriteria.targetCalories || 500;
+
+    // Extract meal name from aiRules if it looks like a meal name query
+    // aiRules can contain free-text like "chicken salad" or "make me a pasta dish"
+    let mealNameFromRules: string | undefined;
+    if (mealCriteria.aiRules && mealCriteria.aiRules.trim()) {
+      const rulesLower = mealCriteria.aiRules.toLowerCase().trim();
+      // If aiRules is short and doesn't contain common instruction words, treat it as meal name
+      const instructionWords = [
+        "make",
+        "create",
+        "generate",
+        "suggest",
+        "include",
+        "add",
+        "use",
+        "with",
+        "without",
+      ];
+      const isInstruction = instructionWords.some((word) =>
+        rulesLower.includes(word)
+      );
+
+      // If it's short (< 50 chars) and doesn't look like an instruction, treat as meal name
+      if (!isInstruction && mealCriteria.aiRules.length < 50) {
+        mealNameFromRules = mealCriteria.aiRules.trim();
+        logger.info(
+          `[generateMealSuggestions] Extracted meal name from aiRules: "${mealNameFromRules}"`
+        );
+      }
     }
 
     // Get user data to include dietary info if not provided
@@ -913,24 +960,111 @@ export class GeneratorService {
       }
     }
 
-    // Generate meals using AI
-    const generatedMeals: IMeal[] = await aiService.generateMealSuggestions(
-      mealCriteria,
-      language
+    // STEP 1: Query meals from database first (saves AI costs and time)
+    logger.info(
+      `[generateMealSuggestions] Querying DB for meals matching criteria: category=${mealCriteria.category}, calories=${targetCalories}${mealNameFromRules ? `, name="${mealNameFromRules}"` : ""}`
     );
 
-    // Save meals to database
-    const savedMeals = await this.mealModel.insertMany(generatedMeals);
+    const dbMeals = await this.findMatchingMeals(
+      mealCriteria.category,
+      targetCalories,
+      user as IUserData,
+      numberOfSuggestions,
+      mealNameFromRules // Pass extracted name for free-text search
+    );
+
+    logger.info(
+      `[generateMealSuggestions] Found ${dbMeals.length} meals from DB, need ${numberOfSuggestions} total`
+    );
+
+    // Convert DB meals to IMeal format
+    const dbMealsFormatted: IMeal[] = dbMeals.map((meal: any) => ({
+      _id: meal._id.toString(),
+      name: meal.name,
+      calories: meal.calories,
+      macros: meal.macros || { protein: 0, carbs: 0, fat: 0 },
+      category: meal.category,
+      prepTime: parsePrepTime(meal.prepTime),
+      ingredients: meal.ingredients || [],
+    }));
+
+    // STEP 2: Fill remaining slots with AI-generated meals (if needed)
+    const remainingSlots = Math.max(
+      0,
+      numberOfSuggestions - dbMealsFormatted.length
+    );
+    let aiMeals: IMeal[] = [];
+
+    if (remainingSlots > 0) {
+      logger.info(
+        `[generateMealSuggestions] Generating ${remainingSlots} meals via AI to fill remaining slots`
+      );
+
+      // Generate only the remaining number of meals needed
+      const aiCriteria = {
+        ...mealCriteria,
+        numberOfSuggestions: remainingSlots,
+      };
+
+      aiMeals = await aiService.generateMealSuggestions(aiCriteria, language);
+
+      // Save AI-generated meals to database for future reuse
+      if (aiMeals.length > 0) {
+        try {
+          await this.mealModel.insertMany(
+            aiMeals.map((meal) => ({
+              ...meal,
+              aiGenerated: true,
+              analytics: {
+                timesGenerated: 1,
+              },
+            }))
+          );
+          logger.info(
+            `[generateMealSuggestions] Saved ${aiMeals.length} AI-generated meals to DB`
+          );
+        } catch (error) {
+          logger.warn(
+            `[generateMealSuggestions] Failed to save some AI meals to DB: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+      }
+    } else {
+      logger.info(
+        `[generateMealSuggestions] All ${numberOfSuggestions} meals found in DB, no AI generation needed!`
+      );
+    }
+
+    // STEP 3: Combine DB meals and AI meals, prioritizing DB meals
+    const allMeals = [...dbMealsFormatted, ...aiMeals].slice(
+      0,
+      numberOfSuggestions
+    );
+
+    // Update usage count for DB meals
+    for (const meal of dbMealsFormatted) {
+      try {
+        await this.mealModel.findByIdAndUpdate(meal._id, {
+          $inc: { "analytics.timesGenerated": 1 },
+        });
+      } catch (error) {
+        // Ignore errors updating analytics
+      }
+    }
 
     return {
       success: true,
-      message: `Generated ${generatedMeals.length} meal suggestions`,
+      message: `Generated ${allMeals.length} meal suggestions (${dbMealsFormatted.length} from DB, ${aiMeals.length} from AI)`,
       data: {
-        meals: generatedMeals,
+        meals: allMeals,
         criteria: {
           category: mealCriteria.category,
           targetCalories: mealCriteria.targetCalories,
-          numberOfSuggestions: mealCriteria.numberOfSuggestions || 3,
+          numberOfSuggestions: numberOfSuggestions,
+        },
+        source: {
+          fromDatabase: dbMealsFormatted.length,
+          fromAI: aiMeals.length,
         },
       },
     };

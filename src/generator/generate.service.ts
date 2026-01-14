@@ -21,6 +21,7 @@ import { PATH_WORKOUTS_GOAL } from "../enums/enumPaths";
 import { pathGuidelines, workoutCategories } from "./helper";
 import {
   transformWeeklyPlan,
+  enrichPlanWithFavoriteMeals,
   MealPlanResponse,
   cleanMealData,
   convertAIIngredientsToMealFormat,
@@ -722,7 +723,7 @@ const generateMealPlanWithGemini = async (
         `[Gemini] Successfully parsed ${parsedResponse.weeklyPlan.length} days`
       );
 
-      return await transformWeeklyPlan(
+      const transformedPlan = await transformWeeklyPlan(
         parsedResponse,
         dayToName,
         nameToDay,
@@ -733,6 +734,14 @@ const generateMealPlanWithGemini = async (
         language,
         weekStartDate
       );
+
+      // Enrich plan with user's favorite meals (20-30% replacement)
+      const enrichedPlan = await enrichPlanWithFavoriteMeals(
+        transformedPlan,
+        userData
+      );
+
+      return enrichedPlan;
     } catch (error: unknown) {
       clearTimeout(timeoutHandle!);
 
@@ -1282,9 +1291,15 @@ const generateMealPlanWithLlama2 = async (
       weekStartDate
     );
 
+    // Enrich plan with user's favorite meals (20-30% replacement)
+    const enrichedPlan = await enrichPlanWithFavoriteMeals(
+      transformedPlan,
+      userData
+    );
+
     logger.info("[Llama] Meal plan generated successfully");
 
-    return transformedPlan;
+    return enrichedPlan;
   } catch (error: unknown) {
     logger.error("[Llama] Generation failed:", error);
     throw new Error(`Llama failed: ${getErrorMessage(error)}`);
