@@ -1342,9 +1342,18 @@ export const transformWeeklyPlan = async (
   }[] = [];
 
   // Handle both array and object formats for weeklyPlan
-  const weeklyPlanArray = Array.isArray(parsedResponse.weeklyPlan)
+  let weeklyPlanArray = Array.isArray(parsedResponse.weeklyPlan)
     ? parsedResponse.weeklyPlan
     : Object.values(parsedResponse.weeklyPlan);
+
+  // CRITICAL: Limit to 7 days maximum before processing
+  // This prevents the AI from generating more than a week's worth of data
+  if (weeklyPlanArray.length > 7) {
+    logger.warn(
+      `[transformWeeklyPlan] AI returned ${weeklyPlanArray.length} days, limiting to 7. Original days: ${weeklyPlanArray.map((d: any) => d.day || 'unknown').join(", ")}`
+    );
+    weeklyPlanArray = weeklyPlanArray.slice(0, 7);
+  }
 
   // Distribute workouts evenly across designated workout days
   // This fixes the issue where AI sometimes puts all workouts on the first day
@@ -1504,44 +1513,56 @@ export const transformWeeklyPlan = async (
       const dayNumber = nameToDay[day.day.toLowerCase()];
 
       // Determine the date for this day
+      // Priority: 1) validDates array (most reliable), 2) day.date from AI, 3) calculate from dayNumber
       let dayDate: Date | undefined;
 
-      // First, try to use date from the day object itself (most reliable)
-      if (day.date) {
-        if (day.date instanceof Date) {
-          dayDate = day.date;
-        } else if (typeof day.date === "string") {
-          dayDate = new Date(day.date);
-          // Validate the parsed date
-          if (isNaN(dayDate.getTime())) {
-            dayDate = undefined;
-          }
-        }
-      }
-
-      // If not found, try to match by day number in activeDays array
-      if (!dayDate && dayNumber !== undefined) {
+      // PRIORITY 1: Try to match by day number in activeDays array (uses validDates)
+      // This is the most reliable since validDates is pre-calculated correctly
+      if (dayNumber !== undefined && validDates.length > 0) {
         const dayIndexInActiveDays = activeDays.indexOf(dayNumber);
         if (
           dayIndexInActiveDays >= 0 &&
           dayIndexInActiveDays < validDates.length
         ) {
           dayDate = validDates[dayIndexInActiveDays];
-        }
-      }
-
-      // If still not found, try to find by matching day of week in dates array
-      if (!dayDate && dayNumber !== undefined && validDates.length > 0) {
-        // Find a date that matches the day of week
-        for (const date of validDates) {
-          if (date.getDay() === dayNumber) {
-            dayDate = date;
-            break;
+        } else {
+          // If not found by index, find by matching day of week
+          for (const date of validDates) {
+            if (date.getDay() === dayNumber) {
+              dayDate = date;
+              break;
+            }
           }
         }
       }
 
-      // If still no valid date, try to calculate from day name and valid dates
+      // PRIORITY 2: Try to use date from the day object itself (if not already set)
+      // But validate it's within validDates range
+      if (!dayDate && day.date) {
+        let parsedDate: Date | undefined;
+        if (day.date instanceof Date) {
+          parsedDate = day.date;
+        } else if (typeof day.date === "string") {
+          parsedDate = new Date(day.date);
+          // Validate the parsed date
+          if (isNaN(parsedDate.getTime())) {
+            parsedDate = undefined;
+          }
+        }
+        
+        // Only use if it's within validDates range
+        if (parsedDate && validDates.length > 0) {
+          const dateKey = getLocalDateKey(parsedDate);
+          const isValidWeekDate = validDates.some(
+            (vd) => getLocalDateKey(vd) === dateKey
+          );
+          if (isValidWeekDate) {
+            dayDate = parsedDate;
+          }
+        }
+      }
+
+      // PRIORITY 3: Calculate from day name and validWeekStartDate (fallback)
       if (!dayDate && dayNumber !== undefined && validDates.length > 0) {
         // Use the first valid date as a base and calculate from there
         const baseDate = validDates[0];
@@ -1549,16 +1570,19 @@ export const transformWeeklyPlan = async (
         const targetDayOfWeek = dayNumber;
         let daysToAdd = targetDayOfWeek - currentDayOfWeek;
         if (daysToAdd < 0) daysToAdd += 7;
-        dayDate = new Date(baseDate);
-        dayDate.setDate(baseDate.getDate() + daysToAdd);
+        // Ensure we don't go beyond 7 days
+        if (daysToAdd < 7) {
+          dayDate = new Date(baseDate);
+          dayDate.setDate(baseDate.getDate() + daysToAdd);
+        }
       }
 
-      // Final fallback: use today
+      // Final fallback: use validWeekStartDate (today or provided start date)
       if (!dayDate || isNaN(dayDate.getTime())) {
         logger.warn(
-          `[transformWeeklyPlan] Could not determine date for day ${day.day} (dayNumber: ${dayNumber}), using today as fallback`
+          `[transformWeeklyPlan] Could not determine date for day ${day.day} (dayNumber: ${dayNumber}), using weekStartDate as fallback`
         );
-        dayDate = new Date();
+        dayDate = new Date(validWeekStartDate);
         dayDate.setHours(0, 0, 0, 0);
       }
 
@@ -1665,6 +1689,23 @@ export const transformWeeklyPlan = async (
     throw new Error("Failed to calculate valid Monday date");
   }
 
+  // Calculate Sunday of the current week (end of week boundary)
+  const sundayDate = new Date(mondayDate);
+  sundayDate.setDate(mondayDate.getDate() + 6);
+  sundayDate.setHours(23, 59, 59, 999);
+
+  // Create a Set of valid date keys for the week (Monday to Sunday)
+  const validWeekDateKeys = new Set<string>();
+  for (let i = 0; i < 7; i++) {
+    const weekDate = new Date(mondayDate);
+    weekDate.setDate(mondayDate.getDate() + i);
+    validWeekDateKeys.add(getLocalDateKey(weekDate));
+  }
+
+  logger.info(
+    `[transformWeeklyPlan] Week boundary: ${getLocalDateKey(mondayDate)} (Monday) to ${getLocalDateKey(sundayDate)} (Sunday). Valid dates: ${Array.from(validWeekDateKeys).sort().join(", ")}`
+  );
+
   const dayToNameMap: Record<number, string> = {
     1: "monday",
     2: "tuesday",
@@ -1751,6 +1792,9 @@ export const transformWeeklyPlan = async (
   // The plan should only contain days from today through Sunday
   // Past days are irrelevant and just waste data
 
+  // Track used date keys to prevent duplicates
+  const usedDateKeys = new Set<string>();
+
   // Add only the generated days (from today through Sunday)
   validWeeklyPlan.forEach((day: any) => {
     let dateObj: Date;
@@ -1774,7 +1818,50 @@ export const transformWeeklyPlan = async (
       return;
     }
 
+    // CRITICAL: Ensure date is within the week boundary (Monday to Sunday)
+    if (dateObj < mondayDate || dateObj > sundayDate) {
+      logger.warn(
+        `[transformWeeklyPlan] Date ${getLocalDateKey(dateObj)} for day ${day.day} is outside week boundary (${getLocalDateKey(mondayDate)} to ${getLocalDateKey(sundayDate)}). Attempting to fix...`
+      );
+      
+      // Try to find a valid date within the week based on day name
+      const dayNumber = nameToDay[day.day.toLowerCase()];
+      if (dayNumber !== undefined) {
+        // Calculate the correct date for this day of week within the week boundary
+        const targetDate = new Date(mondayDate);
+        const daysToAdd = dayNumber === 0 ? 6 : dayNumber - 1; // Sunday is day 0, but we want index 6
+        targetDate.setDate(mondayDate.getDate() + daysToAdd);
+        dateObj = targetDate;
+        logger.info(
+          `[transformWeeklyPlan] Fixed date for ${day.day} to ${getLocalDateKey(dateObj)}`
+        );
+      } else {
+        logger.error(
+          `[transformWeeklyPlan] Cannot determine day number for ${day.day}, skipping`
+        );
+        return;
+      }
+    }
+
     const dateKey = getLocalDateKey(dateObj);
+
+    // CRITICAL: Validate that dateKey is within valid week dates
+    if (!validWeekDateKeys.has(dateKey)) {
+      logger.warn(
+        `[transformWeeklyPlan] Date key ${dateKey} is not in valid week dates. Skipping day ${day.day}`
+      );
+      return;
+    }
+
+    // CRITICAL: Prevent duplicate dates
+    if (usedDateKeys.has(dateKey)) {
+      logger.warn(
+        `[transformWeeklyPlan] Duplicate date ${dateKey} for day ${day.day}. Skipping duplicate.`
+      );
+      return;
+    }
+
+    usedDateKeys.add(dateKey);
     const formattedDate = `${monthNames[dateObj.getMonth()]} ${dateObj.getDate()}`;
 
     // Ensure workouts array exists (should have been set by distributeWorkouts)

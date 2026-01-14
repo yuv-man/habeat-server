@@ -513,8 +513,23 @@ export class PlanService {
       >();
 
       allIngredients.forEach((ing) => {
-        const ingredientName = Array.isArray(ing) ? ing[0] : String(ing);
-        const ingredientAmount = Array.isArray(ing) ? ing[1] : "";
+        // Ensure ingredientName is always a string
+        let ingredientName: string;
+        if (Array.isArray(ing)) {
+          ingredientName = typeof ing[0] === 'string' ? ing[0] : String(ing[0] || '');
+        } else {
+          ingredientName = String(ing || '');
+        }
+        
+        // Skip if ingredientName is empty or invalid
+        if (!ingredientName || typeof ingredientName !== 'string') {
+          logger.warn(
+            `[syncShoppingListWithPlan] Invalid ingredient name: ${JSON.stringify(ing)}, skipping`
+          );
+          return;
+        }
+        
+        const ingredientAmount = Array.isArray(ing) ? (ing[1] || '') : "";
         const ingredientCategory =
           Array.isArray(ing) && ing.length > 2 ? ing[2] : undefined;
         const key = this.normalizeIngredientKey(ingredientName);
