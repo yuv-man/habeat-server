@@ -43,14 +43,39 @@ async function bootstrap() {
 
   app.enableCors({
     origin: (origin, callback) => {
-      if (
-        !origin ||
-        allowedOrigins.includes(origin) ||
-        origin.startsWith("http://localhost:")
-      ) {
+      // Always allow requests with no origin (mobile apps, Postman, curl, etc.)
+      if (!origin) {
+        logger.info("CORS: Allowing request with no origin (mobile app)");
         return callback(null, true);
       }
-      return callback(new Error("Not allowed by CORS"));
+      
+      // Allow Capacitor/Ionic mobile app origins
+      if (
+        origin.startsWith("capacitor://") ||
+        origin.startsWith("ionic://") ||
+        origin.startsWith("file://") ||
+        origin.startsWith("http://localhost") ||
+        origin.startsWith("https://localhost")
+      ) {
+        logger.info(`CORS: Allowing mobile/localhost origin: ${origin}`);
+        return callback(null, true);
+      }
+      
+      // Allow configured origins
+      if (allowedOrigins.includes(origin)) {
+        logger.info(`CORS: Allowing configured origin: ${origin}`);
+        return callback(null, true);
+      }
+      
+      // In production, be more permissive for mobile apps
+      // Some Android apps might send unexpected origins
+      if (process.env.NODE_ENV === "production") {
+        logger.warn(`CORS: Allowing origin in production (mobile app): ${origin}`);
+        return callback(null, true);
+      }
+      
+      logger.warn(`CORS: Blocking origin: ${origin}`);
+      return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
@@ -59,8 +84,11 @@ async function bootstrap() {
       "Authorization",
       "Accept",
       "X-Requested-With",
+      "Origin",
     ],
     exposedHeaders: ["Authorization"],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
   });
 
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
