@@ -347,6 +347,92 @@ export class AuthController {
     }
   }
 
+  @Get("google/mobile/signup")
+  @ApiOperation({
+    summary: "Initiate Google OAuth signup for mobile apps",
+    description:
+      "Returns Google OAuth URL for mobile signup. Requires redirectUri (backend callback) and frontendRedirectUri (where to redirect after auth). Optional prompt parameter.",
+  })
+  @ApiResponse({
+    status: 302,
+    description: "Redirects to Google OAuth (when accessed via browser)",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Returns OAuth URL as JSON (when called via AJAX)",
+    schema: {
+      type: "object",
+      properties: {
+        authUrl: { type: "string" },
+      },
+    },
+  })
+  async initiateGoogleMobileSignup(
+    @Query("redirectUri") redirectUri: string,
+    @Query("frontendRedirectUri") frontendRedirectUri: string,
+    @Request() req: any,
+    @Res() res: Response,
+    @Query("format") format?: string,
+    @Query("prompt") prompt?: string
+  ) {
+    if (!redirectUri) {
+      throw new BadRequestException("redirectUri query parameter is required");
+    }
+
+    if (!frontendRedirectUri) {
+      throw new BadRequestException(
+        "frontendRedirectUri query parameter is required"
+      );
+    }
+
+    // Normalize redirectUri to ensure it includes /api prefix
+    const originalRedirectUri = redirectUri;
+    try {
+      const redirectUrl = new URL(redirectUri);
+      if (!redirectUrl.pathname.includes("/api/auth/google/callback")) {
+        redirectUrl.pathname = "/api/auth/google/callback";
+        redirectUri = redirectUrl.toString();
+        logger.info("Normalized redirectUri in initiateGoogleMobileSignup", {
+          original: originalRedirectUri,
+          normalized: redirectUri,
+        });
+      }
+    } catch (e) {
+      const protocol = req.protocol || "https";
+      const host = req.get("host") || "localhost:5000";
+      redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+      logger.info(
+        "Constructed redirectUri from request in initiateGoogleMobileSignup",
+        {
+          original: originalRedirectUri,
+          constructed: redirectUri,
+          protocol,
+          host,
+        }
+      );
+    }
+
+    const authUrl = await this.authService.getGoogleSigninUrl(
+      redirectUri,
+      frontendRedirectUri,
+      prompt,
+      "signup" // This is the signup endpoint
+    );
+
+    // Check if this is an AJAX request
+    const acceptHeader = req.headers.accept || "";
+    const isJsonRequest =
+      format === "json" ||
+      acceptHeader.includes("application/json") ||
+      req.headers["x-requested-with"] === "XMLHttpRequest";
+
+    if (isJsonRequest) {
+      res.json({ authUrl });
+    } else {
+      res.redirect(authUrl);
+    }
+  }
+
   @Post("google/mobile/signup")
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -408,6 +494,92 @@ export class AuthController {
       throw new BadRequestException("Google ID token is required");
     }
     return this.authService.googleSignup(body.idToken, body.userData);
+  }
+
+  @Get("google/mobile/signin")
+  @ApiOperation({
+    summary: "Initiate Google OAuth signin for mobile apps",
+    description:
+      "Returns Google OAuth URL for mobile signin. Requires redirectUri (backend callback) and frontendRedirectUri (where to redirect after auth). Optional prompt parameter.",
+  })
+  @ApiResponse({
+    status: 302,
+    description: "Redirects to Google OAuth (when accessed via browser)",
+  })
+  @ApiResponse({
+    status: 200,
+    description: "Returns OAuth URL as JSON (when called via AJAX)",
+    schema: {
+      type: "object",
+      properties: {
+        authUrl: { type: "string" },
+      },
+    },
+  })
+  async initiateGoogleMobileSignin(
+    @Query("redirectUri") redirectUri: string,
+    @Query("frontendRedirectUri") frontendRedirectUri: string,
+    @Request() req: any,
+    @Res() res: Response,
+    @Query("format") format?: string,
+    @Query("prompt") prompt?: string
+  ) {
+    if (!redirectUri) {
+      throw new BadRequestException("redirectUri query parameter is required");
+    }
+
+    if (!frontendRedirectUri) {
+      throw new BadRequestException(
+        "frontendRedirectUri query parameter is required"
+      );
+    }
+
+    // Normalize redirectUri to ensure it includes /api prefix
+    const originalRedirectUri = redirectUri;
+    try {
+      const redirectUrl = new URL(redirectUri);
+      if (!redirectUrl.pathname.includes("/api/auth/google/callback")) {
+        redirectUrl.pathname = "/api/auth/google/callback";
+        redirectUri = redirectUrl.toString();
+        logger.info("Normalized redirectUri in initiateGoogleMobileSignin", {
+          original: originalRedirectUri,
+          normalized: redirectUri,
+        });
+      }
+    } catch (e) {
+      const protocol = req.protocol || "https";
+      const host = req.get("host") || "localhost:5000";
+      redirectUri = `${protocol}://${host}/api/auth/google/callback`;
+      logger.info(
+        "Constructed redirectUri from request in initiateGoogleMobileSignin",
+        {
+          original: originalRedirectUri,
+          constructed: redirectUri,
+          protocol,
+          host,
+        }
+      );
+    }
+
+    const authUrl = await this.authService.getGoogleSigninUrl(
+      redirectUri,
+      frontendRedirectUri,
+      prompt,
+      "signin" // This is the signin endpoint
+    );
+
+    // Check if this is an AJAX request
+    const acceptHeader = req.headers.accept || "";
+    const isJsonRequest =
+      format === "json" ||
+      acceptHeader.includes("application/json") ||
+      req.headers["x-requested-with"] === "XMLHttpRequest";
+
+    if (isJsonRequest) {
+      res.json({ authUrl });
+    } else {
+      res.redirect(authUrl);
+    }
   }
 
   @Post("google/mobile/signin")
