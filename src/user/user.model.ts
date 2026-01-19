@@ -5,6 +5,87 @@ import mongoose, { CallbackError, Schema } from "mongoose";
 // Model name constant
 export const User = { name: "User" };
 
+// Badge schema for embedded documents
+const badgeSchema = new Schema(
+  {
+    id: { type: String, required: true },
+    name: { type: String, required: true },
+    description: { type: String, required: true },
+    icon: { type: String, required: true },
+    earnedAt: { type: Date, required: true, default: Date.now },
+    category: {
+      type: String,
+      enum: ["streak", "meals", "nutrition", "milestone", "special"],
+      required: true,
+    },
+  },
+  { _id: false }
+);
+
+// Engagement schema for gamification
+const engagementSchema = new Schema(
+  {
+    xp: { type: Number, default: 0 },
+    level: { type: Number, default: 1 },
+    streakDays: { type: Number, default: 0 },
+    longestStreak: { type: Number, default: 0 },
+    lastActiveDate: { type: String, default: null }, // YYYY-MM-DD format
+    totalMealsLogged: { type: Number, default: 0 },
+    totalDaysTracked: { type: Number, default: 0 },
+    badges: { type: [badgeSchema], default: [] },
+    streakFreezeAvailable: { type: Boolean, default: true },
+    streakFreezeUsedAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
+// Notification preferences schema
+const notificationPreferencesSchema = new Schema(
+  {
+    enabled: { type: Boolean, default: true },
+    mealReminders: {
+      enabled: { type: Boolean, default: true },
+      breakfast: { enabled: { type: Boolean, default: true }, time: { type: String, default: "08:00" } },
+      lunch: { enabled: { type: Boolean, default: true }, time: { type: String, default: "12:00" } },
+      dinner: { enabled: { type: Boolean, default: true }, time: { type: String, default: "19:00" } },
+      snacks: { enabled: { type: Boolean, default: false }, time: { type: String, default: "15:00" } },
+    },
+    streakAlerts: {
+      enabled: { type: Boolean, default: true },
+      warningTime: { type: String, default: "20:00" },
+    },
+    challengeUpdates: {
+      enabled: { type: Boolean, default: true },
+      onComplete: { type: Boolean, default: true },
+      onExpiring: { type: Boolean, default: true },
+    },
+    achievements: {
+      enabled: { type: Boolean, default: true },
+      levelUp: { type: Boolean, default: true },
+      badgeEarned: { type: Boolean, default: true },
+    },
+    weeklySummary: {
+      enabled: { type: Boolean, default: true },
+      dayOfWeek: { type: Number, default: 0 }, // Sunday
+      time: { type: String, default: "09:00" },
+    },
+    dailySummary: {
+      enabled: { type: Boolean, default: false },
+      time: { type: String, default: "21:00" },
+    },
+    motivationalNudges: {
+      enabled: { type: Boolean, default: true },
+      frequency: { type: String, enum: ["daily", "weekly", "occasional"], default: "occasional" },
+    },
+    quietHours: {
+      enabled: { type: Boolean, default: true },
+      start: { type: String, default: "22:00" },
+      end: { type: String, default: "08:00" },
+    },
+  },
+  { _id: false }
+);
+
 // project schema - All fields are optional for debugging
 const userSchemaDefinition = {
   name: { type: String, required: false },
@@ -41,6 +122,45 @@ const userSchemaDefinition = {
   // OAuth fields
   oauthProvider: { type: String, required: false }, // 'google', 'facebook', or null
   oauthId: { type: String, required: false }, // OAuth provider's user ID
+  // Engagement/Gamification
+  engagement: {
+    type: engagementSchema,
+    default: () => ({
+      xp: 0,
+      level: 1,
+      streakDays: 0,
+      longestStreak: 0,
+      lastActiveDate: null,
+      totalMealsLogged: 0,
+      totalDaysTracked: 0,
+      badges: [],
+      streakFreezeAvailable: true,
+      streakFreezeUsedAt: null,
+    }),
+  },
+  // Notification preferences
+  notificationPreferences: {
+    type: notificationPreferencesSchema,
+    default: () => ({
+      enabled: true,
+      mealReminders: {
+        enabled: true,
+        breakfast: { enabled: true, time: "08:00" },
+        lunch: { enabled: true, time: "12:00" },
+        dinner: { enabled: true, time: "19:00" },
+        snacks: { enabled: false, time: "15:00" },
+      },
+      streakAlerts: { enabled: true, warningTime: "20:00" },
+      challengeUpdates: { enabled: true, onComplete: true, onExpiring: true },
+      achievements: { enabled: true, levelUp: true, badgeEarned: true },
+      weeklySummary: { enabled: true, dayOfWeek: 0, time: "09:00" },
+      dailySummary: { enabled: false, time: "21:00" },
+      motivationalNudges: { enabled: true, frequency: "occasional" },
+      quietHours: { enabled: true, start: "22:00", end: "08:00" },
+    }),
+  },
+  // Device tokens for push notifications
+  deviceTokens: { type: [String], default: [] },
 };
 
 // Export schema for NestJS

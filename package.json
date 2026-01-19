@@ -27,7 +27,8 @@
     "docker:mongo:up": "docker-compose up -d mongodb",
     "docker:mongo:down": "docker-compose down mongodb",
     "docker:mongo:logs": "docker-compose logs -f mongodb",
-    "docker:mongo:restart": "docker-compose restart mongodb"
+    "docker:mongo:restart": "docker-compose restart mongodb",
+    "kill:server": "./scripts/kill-server.sh"
   },
   "author": "Yuval",
   "license": "ISC",

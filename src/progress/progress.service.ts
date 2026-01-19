@@ -2,12 +2,16 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Inject,
+  forwardRef,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import { DailyProgress } from "./progress.model";
 import { Plan } from "../plan/plan.model";
 import { Meal } from "../meal/meal.model";
+import { EngagementService } from "../engagement/engagement.service";
+import { ChallengeService } from "../challenge/challenge.service";
 import logger from "../utils/logger";
 import {
   formatProgressStats,
@@ -37,7 +41,11 @@ export class ProgressService {
     @InjectModel(DailyProgress.name)
     private progressModel: Model<IDailyProgress>,
     @InjectModel(Plan.name) private planModel: Model<IPlan>,
-    @InjectModel(Meal.name) private mealModel: Model<IMeal>
+    @InjectModel(Meal.name) private mealModel: Model<IMeal>,
+    @Inject(forwardRef(() => EngagementService))
+    private engagementService: EngagementService,
+    @Inject(forwardRef(() => ChallengeService))
+    private challengeService: ChallengeService
   ) {}
 
   /**
@@ -583,6 +591,47 @@ export class ProgressService {
     const planForSync = await this.planModel.findOne({ userId });
     await this.syncWaterGoalFromPlan(progress, planForSync, todayDateKey);
 
+    // Award XP for meal completion (only when marking as done, not when unmarking)
+    let engagementResult = null;
+    if (meal.done) {
+      try {
+        // Check if meal is balanced (has good macro ratios)
+        const isBalanced = this.isMealBalanced(meal);
+        engagementResult = await this.engagementService.onMealCompleted(
+          userId,
+          mealType,
+          isBalanced
+        );
+
+        // Check if day is complete for bonus XP
+        await this.engagementService.checkDayCompletion(userId);
+
+        // Update challenge progress for meal completion
+        await this.challengeService.onMealCompleted(userId, isBalanced);
+
+        // Update streak challenges with current streak
+        if (engagementResult.streak > 0) {
+          await this.challengeService.onStreakUpdated(userId, engagementResult.streak);
+        }
+
+        // Check if protein goal is reached and update challenges
+        const proteinConsumed = (progress as any).protein?.consumed || 0;
+        const proteinGoal = (progress as any).protein?.goal || 0;
+        if (proteinGoal > 0 && proteinConsumed >= proteinGoal) {
+          await this.challengeService.onProteinGoalReached(userId);
+        }
+
+        logger.info(
+          `[ProgressService] Engagement updated for user ${userId}: +${engagementResult.xpAwarded} XP, Level: ${engagementResult.level}, Streak: ${engagementResult.streak}`
+        );
+      } catch (error: any) {
+        // Don't fail the meal completion if engagement fails
+        logger.error(
+          `[ProgressService] Failed to update engagement: ${error.message}`
+        );
+      }
+    }
+
     return {
       success: true,
       data: {
@@ -590,8 +639,44 @@ export class ProgressService {
         message: meal.done
           ? `${mealType} marked as completed`
           : `${mealType} marked as incomplete`,
+        engagement: engagementResult
+          ? {
+              xpAwarded: engagementResult.xpAwarded,
+              totalXp: engagementResult.totalXp,
+              level: engagementResult.level,
+              leveledUp: engagementResult.leveledUp,
+              streak: engagementResult.streak,
+              newBadges: engagementResult.newBadges,
+            }
+          : null,
       },
     };
+  }
+
+  /**
+   * Check if a meal has balanced macros
+   * A balanced meal has reasonable protein, carbs, and fat distribution
+   */
+  private isMealBalanced(meal: any): boolean {
+    const macros = meal?.macros;
+    if (!macros) return false;
+
+    const total = (macros.protein || 0) + (macros.carbs || 0) + (macros.fat || 0);
+    if (total === 0) return false;
+
+    const proteinRatio = (macros.protein || 0) / total;
+    const carbsRatio = (macros.carbs || 0) / total;
+    const fatRatio = (macros.fat || 0) / total;
+
+    // Balanced = protein 15-40%, carbs 30-60%, fat 15-40%
+    return (
+      proteinRatio >= 0.15 &&
+      proteinRatio <= 0.4 &&
+      carbsRatio >= 0.2 &&
+      carbsRatio <= 0.6 &&
+      fatRatio >= 0.15 &&
+      fatRatio <= 0.4
+    );
   }
 
   async addWaterGlass(userId: string) {
@@ -650,8 +735,31 @@ export class ProgressService {
       await this.syncWaterGoalFromPlan(progress, plan, todayDateKey);
     }
 
+    const previousConsumed = (progress as any).water.consumed || 0;
     (progress as any).water.consumed += 1;
     await progress.save();
+
+    // Update challenges for water intake
+    const waterGoal = (progress as any).water.goal || 8;
+    const waterConsumed = (progress as any).water.consumed;
+    const goalReached = waterConsumed >= waterGoal && previousConsumed < waterGoal;
+    
+    try {
+      await this.challengeService.onWaterIntake(userId, waterConsumed, goalReached);
+      if (goalReached) {
+        logger.info(
+          `[ProgressService] Water goal reached for user ${userId}, challenge updated`
+        );
+      } else {
+        logger.info(
+          `[ProgressService] Water intake updated for user ${userId}: ${waterConsumed}/${waterGoal} glasses`
+        );
+      }
+    } catch (error: any) {
+      logger.error(
+        `[ProgressService] Failed to update water challenge: ${error.message}`
+      );
+    }
 
     return {
       success: true,
@@ -720,6 +828,20 @@ export class ProgressService {
         (plan as any).weeklyMacros.calories.consumed += caloriesBurnedValue;
       }
       await plan.save();
+    }
+
+    // Update challenge progress for workout completion (only when marking as done)
+    if (workout.done) {
+      try {
+        await this.challengeService.onWorkoutCompleted(userId);
+        logger.info(
+          `[ProgressService] Workout challenge updated for user ${userId}`
+        );
+      } catch (error: any) {
+        logger.error(
+          `[ProgressService] Failed to update workout challenge: ${error.message}`
+        );
+      }
     }
 
     return {
@@ -879,8 +1001,28 @@ export class ProgressService {
       await this.syncWaterGoalFromPlan(progress, plan, todayDateKey);
     }
 
+    const previousConsumed = (progress as any).water.consumed || 0;
     (progress as any).water.consumed = glasses;
     await progress.save();
+
+    // Update challenges for water intake
+    const waterGoal = (progress as any).water.goal || 8;
+    const goalReached = glasses >= waterGoal && previousConsumed < waterGoal;
+    
+    try {
+      // For updateWaterIntake, we need to calculate if goal was reached
+      // If glasses increased and reached goal, mark as goal reached
+      await this.challengeService.onWaterIntake(userId, glasses, goalReached);
+      if (goalReached) {
+        logger.info(
+          `[ProgressService] Water goal reached for user ${userId}, challenge updated`
+        );
+      }
+    } catch (error: any) {
+      logger.error(
+        `[ProgressService] Failed to update water challenge: ${error.message}`
+      );
+    }
 
     return {
       success: true,

@@ -11,6 +11,10 @@ import { MealModule } from "./meal/meal.module";
 import { RecipeModule } from "./recipe/recipe.module";
 import { ShoppingModule } from "./shopping/shopping.module";
 import { ChatModule } from "./chat/chat.module";
+import { EngagementModule } from "./engagement/engagement.module";
+import { ChallengeModule } from "./challenge/challenge.module";
+import { ReflectionModule } from "./reflection/reflection.module";
+import { NotificationModule } from "./notification/notification.module";
 import logger from "./utils/logger";
 
 @Module({
@@ -71,6 +75,10 @@ import logger from "./utils/logger";
     RecipeModule,
     ShoppingModule,
     ChatModule,
+    EngagementModule,
+    ChallengeModule,
+    ReflectionModule,
+    NotificationModule,
   ],
 })
 export class AppModule {}

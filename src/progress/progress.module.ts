@@ -1,4 +1,4 @@
-import { Module } from "@nestjs/common";
+import { Module, forwardRef } from "@nestjs/common";
 import { MongooseModule } from "@nestjs/mongoose";
 import { ProgressController } from "./progress.controller";
 import { ProgressService } from "./progress.service";
@@ -6,6 +6,8 @@ import { DailyProgress, DailyProgressSchema } from "./progress.model";
 import { Plan, PlanSchema } from "../plan/plan.model";
 import { User, UserSchema } from "../user/user.model";
 import { Meal, MealSchema } from "../meal/meal.model";
+import { EngagementModule } from "../engagement/engagement.module";
+import { ChallengeModule } from "../challenge/challenge.module";
 
 @Module({
   imports: [
@@ -15,6 +17,8 @@ import { Meal, MealSchema } from "../meal/meal.model";
       { name: User.name, schema: UserSchema },
       { name: Meal.name, schema: MealSchema },
     ]),
+    forwardRef(() => EngagementModule),
+    forwardRef(() => ChallengeModule),
   ],
   controllers: [ProgressController],
   providers: [ProgressService],

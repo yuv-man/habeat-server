@@ -1,5 +1,64 @@
 import mongoose, { Document } from "mongoose";
 
+// Badge earned by user
+export interface IBadge {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  earnedAt: Date;
+  category: "streak" | "meals" | "nutrition" | "milestone" | "special";
+}
+
+// User engagement state for gamification
+export interface IUserEngagement {
+  xp: number;
+  level: number;
+  streakDays: number;
+  longestStreak: number;
+  lastActiveDate: string; // YYYY-MM-DD format
+  totalMealsLogged: number;
+  totalDaysTracked: number;
+  badges: IBadge[];
+  streakFreezeAvailable: boolean; // One-time streak saver per month
+  streakFreezeUsedAt?: Date;
+}
+
+// Challenge types for gamification
+export type ChallengeType =
+  | "meals_logged" // Log X meals
+  | "water_intake" // Drink X glasses of water
+  | "streak_days" // Maintain X day streak
+  | "veggie_meals" // Eat X meals with vegetables
+  | "protein_goal" // Hit protein goal X times
+  | "workout_complete" // Complete X workouts
+  | "balanced_meals" // Log X balanced meals
+  | "home_cooking"; // Log X home-cooked meals
+
+export type ChallengeStatus = "active" | "completed" | "expired" | "claimed";
+export type ChallengeDifficulty = "easy" | "medium" | "hard";
+
+export interface IChallenge {
+  _id?: string;
+  userId: string;
+  type: ChallengeType;
+  title: string;
+  description: string;
+  icon: string;
+  target: number; // Goal to achieve
+  progress: number; // Current progress
+  xpReward: number;
+  difficulty: ChallengeDifficulty;
+  status: ChallengeStatus;
+  frequency: "daily" | "weekly"; // Whether challenge resets daily or accumulates weekly
+  startDate: Date;
+  endDate: Date; // Challenge expires after this
+  completedAt?: Date;
+  claimedAt?: Date;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 export interface IUserData {
   email: string;
   password: string;
@@ -35,6 +94,11 @@ export interface IUserData {
   oauthId?: string;
   token?: string;
   language?: string;
+  // Engagement/Gamification fields
+  engagement?: IUserEngagement;
+  // Notification preferences
+  notificationPreferences?: INotificationPreferences;
+  deviceTokens?: string[]; // FCM/APNs tokens for push notifications
   createdAt?: Date;
   updatedAt?: Date;
   comparePassword?: (candidatePassword: string) => Promise<boolean>;
@@ -392,4 +456,73 @@ export interface IChat extends Document {
   messages: IChatMessage[];
   createdAt: Date;
   updatedAt: Date;
+}
+
+// Notification Types
+export type NotificationType =
+  | "meal_reminder"
+  | "streak_warning"
+  | "streak_broken"
+  | "challenge_complete"
+  | "challenge_expiring"
+  | "level_up"
+  | "badge_earned"
+  | "weekly_summary"
+  | "daily_summary"
+  | "motivational";
+
+export interface INotificationPreferences {
+  enabled: boolean;
+  mealReminders: {
+    enabled: boolean;
+    breakfast: { enabled: boolean; time: string }; // HH:MM format
+    lunch: { enabled: boolean; time: string };
+    dinner: { enabled: boolean; time: string };
+    snacks: { enabled: boolean; time: string };
+  };
+  streakAlerts: {
+    enabled: boolean;
+    warningTime: string; // Time to warn about streak breaking (e.g., "20:00")
+  };
+  challengeUpdates: {
+    enabled: boolean;
+    onComplete: boolean;
+    onExpiring: boolean; // 24h before expiry
+  };
+  achievements: {
+    enabled: boolean;
+    levelUp: boolean;
+    badgeEarned: boolean;
+  };
+  weeklySummary: {
+    enabled: boolean;
+    dayOfWeek: number; // 0-6 (Sunday-Saturday)
+    time: string;
+  };
+  dailySummary: {
+    enabled: boolean;
+    time: string;
+  };
+  motivationalNudges: {
+    enabled: boolean;
+    frequency: "daily" | "weekly" | "occasional";
+  };
+  quietHours: {
+    enabled: boolean;
+    start: string; // HH:MM
+    end: string; // HH:MM
+  };
+}
+
+export interface IScheduledNotification {
+  _id?: string;
+  userId: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  scheduledAt: Date;
+  sent: boolean;
+  sentAt?: Date;
+  data?: Record<string, any>;
+  createdAt?: Date;
 }
