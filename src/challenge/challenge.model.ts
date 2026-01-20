@@ -11,6 +11,16 @@ export class Challenge {
   @Prop({
     required: true,
     enum: [
+      // Habit-based challenge types
+      "daily_logging",
+      "breakfast_habit",
+      "hydration_habit",
+      "balanced_eating",
+      "protein_focus",
+      "mindful_eating",
+      "meal_consistency",
+      "weekly_streak",
+      // Legacy types (kept for backward compatibility)
       "meals_logged",
       "water_intake",
       "streak_days",
@@ -38,10 +48,10 @@ export class Challenge {
   @Prop({ required: true, default: 0 })
   progress: number;
 
-  @Prop({ required: true })
-  xpReward: number;
+  @Prop({ required: true, default: 7 })
+  daysRequired: number;
 
-  @Prop({ required: true, enum: ["easy", "medium", "hard"] })
+  @Prop({ required: true, enum: ["starter", "building", "established", "easy", "medium", "hard"] })
   difficulty: string;
 
   @Prop({
@@ -57,12 +67,8 @@ export class Challenge {
   @Prop({ required: true })
   endDate: Date;
 
-  @Prop({
-    required: true,
-    enum: ["daily", "weekly"],
-    default: "daily",
-  })
-  frequency: string;
+  @Prop()
+  badgeId?: string;
 
   @Prop()
   completedAt?: Date;

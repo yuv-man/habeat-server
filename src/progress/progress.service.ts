@@ -607,7 +607,7 @@ export class ProgressService {
         await this.engagementService.checkDayCompletion(userId);
 
         // Update challenge progress for meal completion
-        await this.challengeService.onMealCompleted(userId, isBalanced);
+        await this.challengeService.onMealCompleted(userId, mealType, isBalanced);
 
         // Update streak challenges with current streak
         if (engagementResult.streak > 0) {

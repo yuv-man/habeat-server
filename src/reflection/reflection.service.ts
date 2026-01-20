@@ -4,6 +4,7 @@ import { Model } from "mongoose";
 import { DailyProgress } from "../progress/progress.model";
 import { Plan } from "../plan/plan.model";
 import { User } from "../user/user.model";
+import { XP_REWARDS } from "../engagement/engagement.service";
 import logger from "../utils/logger";
 
 // Insight templates for positive feedback
@@ -191,14 +192,16 @@ export class ReflectionService {
    * Calculate macro balance score
    */
   private calculateBalanceScore(progress: any, targets: any): number {
+    if (!progress) return 0;
+
     const proteinRatio =
       targets.protein > 0
-        ? (progress.protein?.consumed || 0) / targets.protein
+        ? (progress?.protein?.consumed || 0) / targets.protein
         : 0;
     const carbsRatio =
-      targets.carbs > 0 ? (progress.carbs?.consumed || 0) / targets.carbs : 0;
+      targets.carbs > 0 ? (progress?.carbs?.consumed || 0) / targets.carbs : 0;
     const fatRatio =
-      targets.fat > 0 ? (progress.fat?.consumed || 0) / targets.fat : 0;
+      targets.fat > 0 ? (progress?.fat?.consumed || 0) / targets.fat : 0;
 
     // Average deviation from 1.0 (perfect ratio)
     const avgDeviation =
@@ -225,6 +228,80 @@ export class ReflectionService {
   }
 
   /**
+   * Calculate daily XP earned based on today's progress
+   */
+  private calculateDailyXpEarned(progress: any, targets: any): number {
+    if (!progress) return 0;
+
+    let xpEarned = 0;
+
+    // Count completed meals (10 XP each)
+    const mealsCompleted = this.countCompletedMeals(progress.meals);
+    xpEarned += mealsCompleted * XP_REWARDS.MEAL_LOGGED;
+
+    // Check for balanced meals (20 XP each)
+    const meals = progress.meals || {};
+    const mealTypes = [
+      meals.breakfast,
+      meals.lunch,
+      meals.dinner,
+      ...(meals.snacks || []),
+    ].filter(Boolean);
+
+    mealTypes.forEach((meal: any) => {
+      if (meal.done && this.isMealBalanced(meal)) {
+        xpEarned += XP_REWARDS.BALANCED_MEAL;
+      }
+    });
+
+    // Check if day is complete (all main meals done = 50 XP)
+    const allMainMealsComplete =
+      meals.breakfast?.done && meals.lunch?.done && meals.dinner?.done;
+    if (allMainMealsComplete) {
+      xpEarned += XP_REWARDS.COMPLETE_DAY;
+    }
+
+    // Check if water goal reached (15 XP)
+    const waterConsumed = progress.water?.consumed || 0;
+    const waterGoal = progress.water?.goal || targets.water || 8;
+    if (waterConsumed >= waterGoal) {
+      xpEarned += XP_REWARDS.WATER_GOAL;
+    }
+
+    // Count completed workouts (25 XP each)
+    const workoutsCompleted =
+      progress.workouts?.filter((w: any) => w.done)?.length || 0;
+    xpEarned += workoutsCompleted * XP_REWARDS.WORKOUT_COMPLETED;
+
+    return xpEarned;
+  }
+
+  /**
+   * Check if a meal has balanced macros
+   */
+  private isMealBalanced(meal: any): boolean {
+    const macros = meal?.macros;
+    if (!macros) return false;
+
+    const total = (macros.protein || 0) + (macros.carbs || 0) + (macros.fat || 0);
+    if (total === 0) return false;
+
+    const proteinRatio = (macros.protein || 0) / total;
+    const carbsRatio = (macros.carbs || 0) / total;
+    const fatRatio = (macros.fat || 0) / total;
+
+    // Balanced = protein 15-40%, carbs 30-60%, fat 15-40%
+    return (
+      proteinRatio >= 0.15 &&
+      proteinRatio <= 0.4 &&
+      carbsRatio >= 0.2 &&
+      carbsRatio <= 0.6 &&
+      fatRatio >= 0.15 &&
+      fatRatio <= 0.4
+    );
+  }
+
+  /**
    * Get a random item from an array
    */
   private getRandomItem<T>(arr: T[]): T {
@@ -240,10 +317,18 @@ export class ReflectionService {
   ): { insight: string; emoji: string } {
     const insights: { category: string; score: number }[] = [];
 
+    // Early return if progress is null
+    if (!progress) {
+      return {
+        insight: this.getRandomItem(POSITIVE_INSIGHTS.streak),
+        emoji: "💪",
+      };
+    }
+
     // Check each category for achievements
     const proteinPercent =
       targets.protein > 0
-        ? ((progress.protein?.consumed || 0) / targets.protein) * 100
+        ? ((progress?.protein?.consumed || 0) / targets.protein) * 100
         : 0;
     if (proteinPercent >= 90) {
       insights.push({ category: "protein", score: proteinPercent });
@@ -251,7 +336,7 @@ export class ReflectionService {
 
     const waterPercent =
       targets.water > 0
-        ? ((progress.water?.consumed || 0) / targets.water) * 100
+        ? ((progress?.water?.consumed || 0) / targets.water) * 100
         : 0;
     if (waterPercent >= 100) {
       insights.push({ category: "water", score: waterPercent });
@@ -259,7 +344,7 @@ export class ReflectionService {
 
     const caloriesPercent =
       targets.calories > 0
-        ? ((progress.caloriesConsumed || 0) / targets.calories) * 100
+        ? ((progress?.caloriesConsumed || 0) / targets.calories) * 100
         : 0;
     if (caloriesPercent >= 85 && caloriesPercent <= 115) {
       insights.push({
@@ -268,13 +353,13 @@ export class ReflectionService {
       });
     }
 
-    const mealsCompleted = this.countCompletedMeals(progress.meals);
+    const mealsCompleted = this.countCompletedMeals(progress?.meals);
     if (mealsCompleted >= 3) {
       insights.push({ category: "meals", score: mealsCompleted * 25 });
     }
 
     const workoutsCompleted =
-      progress.workouts?.filter((w: any) => w.done)?.length || 0;
+      progress?.workouts?.filter((w: any) => w.done)?.length || 0;
     if (workoutsCompleted > 0) {
       insights.push({ category: "workout", score: workoutsCompleted * 50 });
     }
@@ -345,10 +430,6 @@ export class ReflectionService {
       water: 8,
     };
 
-    // Get user engagement for XP
-    const user = (await this.userModel.findById(userId).lean()) as any;
-    const engagement = user?.engagement;
-
     // Calculate health scores
     const healthScore = this.calculateHealthScore(progress, targets);
     const yesterdayScore = this.calculateHealthScore(
@@ -378,11 +459,14 @@ export class ReflectionService {
         ? Math.round(((progress?.water?.consumed || 0) / targets.water) * 100)
         : 0;
 
+    // Calculate daily XP earned based on today's actions
+    const xpEarned = this.calculateDailyXpEarned(progress, targets);
+
     return {
       date: dateKey,
       healthScore,
       healthScoreChange,
-      xpEarned: engagement?.xp || 0, // Today's XP (simplified - in real app track daily XP)
+      xpEarned,
       insight,
       emoji,
       stats: {

@@ -3,171 +3,129 @@ import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import { Challenge, ChallengeDocument } from "./challenge.model";
 import { EngagementService } from "../engagement/engagement.service";
-import { IChallenge, ChallengeType, ChallengeDifficulty } from "../types/interfaces";
+import { IChallenge, ChallengeType, ChallengeDifficulty, HabitChallengeType } from "../types/interfaces";
 import logger from "../utils/logger";
 
-// Challenge templates - used to generate challenges for users
-interface ChallengeTemplate {
-  type: ChallengeType;
+// Habit-focused challenge templates
+interface HabitChallengeTemplate {
+  type: HabitChallengeType;
   title: string;
   description: string;
   icon: string;
   target: number;
-  xpReward: number;
+  daysRequired: number;
   difficulty: ChallengeDifficulty;
-  durationDays: number;
-  frequency: "daily" | "weekly"; // daily = resets each day, weekly = accumulates over period
+  badgeId?: string; // Optional badge awarded on completion
 }
 
-// Challenge templates organized by difficulty
-const CHALLENGE_TEMPLATES: ChallengeTemplate[] = [
-  // Easy challenges (1-3 days) - Daily challenges
+// Habit-focused challenge templates organized by difficulty
+const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
+  // Starter habits (3-day) - Build initial momentum
   {
-    type: "meals_logged",
-    title: "Meal Tracker",
-    description: "Log 3 meals today",
+    type: "breakfast_habit",
+    title: "Morning Starter",
+    description: "Log breakfast for 3 days",
     icon: "utensils",
     target: 3,
-    xpReward: 50,
-    difficulty: "easy",
-    durationDays: 1,
-    frequency: "daily",
+    daysRequired: 3,
+    difficulty: "starter",
   },
   {
-    type: "water_intake",
+    type: "hydration_habit",
     title: "Stay Hydrated",
-    description: "Drink 8 glasses of water today",
+    description: "Hit your water goal for 3 days",
     icon: "droplet",
-    target: 8,
-    xpReward: 30,
-    difficulty: "easy",
-    durationDays: 1,
-    frequency: "daily",
+    target: 3,
+    daysRequired: 3,
+    difficulty: "starter",
   },
   {
-    type: "balanced_meals",
-    title: "Balance Check",
-    description: "Log 2 balanced meals today",
-    icon: "scale",
-    target: 2,
-    xpReward: 40,
-    difficulty: "easy",
-    durationDays: 1,
-    frequency: "daily",
-  },
-
-  // Medium challenges (3-5 days) - Weekly challenges
-  {
-    type: "meals_logged",
-    title: "Consistent Logger",
-    description: "Log 10 meals this week",
+    type: "daily_logging",
+    title: "Track Your Day",
+    description: "Log all meals for 3 days",
     icon: "clipboard-list",
-    target: 10,
-    xpReward: 100,
-    difficulty: "medium",
-    durationDays: 7,
-    frequency: "weekly",
-  },
-  {
-    type: "water_intake",
-    title: "Hydration Hero",
-    description: "Hit water goal for 3 days this week",
-    icon: "droplets",
     target: 3,
-    xpReward: 80,
-    difficulty: "medium",
-    durationDays: 7,
-    frequency: "weekly",
-  },
-  {
-    type: "protein_goal",
-    title: "Protein Power",
-    description: "Hit your protein goal 3 times this week",
-    icon: "beef",
-    target: 3,
-    xpReward: 90,
-    difficulty: "medium",
-    durationDays: 7,
-    frequency: "weekly",
-  },
-  {
-    type: "workout_complete",
-    title: "Active Week",
-    description: "Complete 3 workouts this week",
-    icon: "dumbbell",
-    target: 3,
-    xpReward: 100,
-    difficulty: "medium",
-    durationDays: 7,
-    frequency: "weekly",
-  },
-  {
-    type: "streak_days",
-    title: "Keep It Going",
-    description: "Maintain a 3-day streak",
-    icon: "flame",
-    target: 3,
-    xpReward: 75,
-    difficulty: "medium",
-    durationDays: 7,
-    frequency: "weekly",
+    daysRequired: 3,
+    difficulty: "starter",
   },
 
-  // Hard challenges (7+ days) - Weekly challenges
+  // Building habits (7-day) - Establish consistency
   {
-    type: "meals_logged",
-    title: "Meal Master",
-    description: "Log 21 meals in a week",
+    type: "daily_logging",
+    title: "Consistent Tracker",
+    description: "Log all meals for 7 days",
     icon: "award",
-    target: 21,
-    xpReward: 200,
-    difficulty: "hard",
-    durationDays: 7,
-    frequency: "weekly",
+    target: 7,
+    daysRequired: 7,
+    difficulty: "building",
   },
   {
-    type: "streak_days",
-    title: "Week Warrior",
-    description: "Maintain a 7-day streak",
+    type: "balanced_eating",
+    title: "Balance Week",
+    description: "Hit macro balance 5 of 7 days",
+    icon: "scale",
+    target: 5,
+    daysRequired: 7,
+    difficulty: "building",
+  },
+  {
+    type: "hydration_habit",
+    title: "Hydration Hero",
+    description: "Hit water goal for 7 days",
+    icon: "droplets",
+    target: 7,
+    daysRequired: 7,
+    difficulty: "building",
+    badgeId: "hydration_habit",
+  },
+  {
+    type: "protein_focus",
+    title: "Protein Priority",
+    description: "Hit your protein goal 5 of 7 days",
+    icon: "beef",
+    target: 5,
+    daysRequired: 7,
+    difficulty: "building",
+  },
+
+  // Established habits (14-day) - Solidify the habit
+  {
+    type: "meal_consistency",
+    title: "No Skipping",
+    description: "Don't skip meals for 14 days",
     icon: "trophy",
-    target: 7,
-    xpReward: 250,
-    difficulty: "hard",
-    durationDays: 7,
-    frequency: "weekly",
+    target: 14,
+    daysRequired: 14,
+    difficulty: "established",
   },
   {
-    type: "water_intake",
-    title: "Hydration Champion",
-    description: "Hit water goal for 7 days this week",
-    icon: "medal",
-    target: 7,
-    xpReward: 180,
-    difficulty: "hard",
-    durationDays: 7,
-    frequency: "weekly",
-  },
-  {
-    type: "balanced_meals",
-    title: "Nutrition Expert",
-    description: "Log 14 balanced meals in a week",
+    type: "daily_logging",
+    title: "Two Week Tracker",
+    description: "Log all meals for 14 days",
     icon: "star",
     target: 14,
-    xpReward: 220,
-    difficulty: "hard",
-    durationDays: 7,
-    frequency: "weekly",
+    daysRequired: 14,
+    difficulty: "established",
+    badgeId: "two_weeks",
   },
   {
-    type: "workout_complete",
-    title: "Fitness Champion",
-    description: "Complete 5 workouts in a week",
-    icon: "zap",
-    target: 5,
-    xpReward: 200,
-    difficulty: "hard",
-    durationDays: 7,
-    frequency: "weekly",
+    type: "protein_focus",
+    title: "Protein Pro",
+    description: "Hit protein goal 12 of 14 days",
+    icon: "medal",
+    target: 12,
+    daysRequired: 14,
+    difficulty: "established",
+    badgeId: "protein_pro",
+  },
+  {
+    type: "weekly_streak",
+    title: "Full Week Champion",
+    description: "Complete 2 full weeks of tracking",
+    icon: "flame",
+    target: 14,
+    daysRequired: 14,
+    difficulty: "established",
   },
 ];
 
@@ -220,14 +178,14 @@ export class ChallengeService {
   }
 
   /**
-   * Assign new challenges to a user
-   * Called when user has fewer than 3 active challenges
+   * Assign new habit challenges to a user
+   * Called when user has fewer than 2 active challenges
    */
   async assignChallenges(userId: string): Promise<IChallenge[]> {
     const activeChallenges = await this.getActiveChallenges(userId);
 
-    // User should have 3 active challenges at a time
-    const needed = 3 - activeChallenges.length;
+    // User should have 2 active habit challenges at a time (simpler than 3)
+    const needed = 2 - activeChallenges.length;
     if (needed <= 0) {
       return activeChallenges;
     }
@@ -236,7 +194,7 @@ export class ChallengeService {
     const activeTypes = new Set(activeChallenges.map((c) => c.type));
 
     // Filter available templates
-    const availableTemplates = CHALLENGE_TEMPLATES.filter(
+    const availableTemplates = HABIT_CHALLENGE_TEMPLATES.filter(
       (t) => !activeTypes.has(t.type)
     );
 
@@ -244,8 +202,8 @@ export class ChallengeService {
     const newChallenges: IChallenge[] = [];
     const shuffled = this.shuffleArray([...availableTemplates]);
 
-    // Try to get a mix of difficulties
-    const difficulties: ChallengeDifficulty[] = ["easy", "medium", "hard"];
+    // Try to get a mix of difficulties - prefer starter for new users
+    const difficulties: ChallengeDifficulty[] = ["starter", "building", "established"];
     let difficultyIndex = 0;
 
     for (const template of shuffled) {
@@ -254,7 +212,7 @@ export class ChallengeService {
       // Try to match the desired difficulty, but accept any if needed
       const targetDifficulty = difficulties[difficultyIndex % 3];
       if (template.difficulty === targetDifficulty || newChallenges.length === needed - 1) {
-        const challenge = await this.createChallenge(userId, template);
+        const challenge = await this.createHabitChallenge(userId, template);
         newChallenges.push(challenge);
         difficultyIndex++;
       }
@@ -264,28 +222,28 @@ export class ChallengeService {
     for (const template of shuffled) {
       if (newChallenges.length >= needed) break;
       if (!newChallenges.find((c) => c.type === template.type)) {
-        const challenge = await this.createChallenge(userId, template);
+        const challenge = await this.createHabitChallenge(userId, template);
         newChallenges.push(challenge);
       }
     }
 
     logger.info(
-      `[ChallengeService] Assigned ${newChallenges.length} new challenges to user ${userId}`
+      `[ChallengeService] Assigned ${newChallenges.length} new habit challenges to user ${userId}`
     );
 
     return [...activeChallenges, ...newChallenges];
   }
 
   /**
-   * Create a challenge from a template
+   * Create a habit challenge from a template
    */
-  private async createChallenge(
+  private async createHabitChallenge(
     userId: string,
-    template: ChallengeTemplate
+    template: HabitChallengeTemplate
   ): Promise<IChallenge> {
     const now = new Date();
     const endDate = new Date(now);
-    endDate.setDate(endDate.getDate() + template.durationDays);
+    endDate.setDate(endDate.getDate() + template.daysRequired);
 
     const challenge = new this.challengeModel({
       userId,
@@ -295,9 +253,9 @@ export class ChallengeService {
       icon: template.icon,
       target: template.target,
       progress: 0,
-      xpReward: template.xpReward,
+      daysRequired: template.daysRequired,
       difficulty: template.difficulty,
-      frequency: template.frequency,
+      badgeId: template.badgeId,
       status: "active",
       startDate: now,
       endDate,
@@ -343,12 +301,13 @@ export class ChallengeService {
   }
 
   /**
-   * Claim reward for a completed challenge
+   * Claim reward for a completed habit challenge
+   * Awards badge if challenge has one defined
    */
   async claimReward(
     userId: string,
     challengeId: string
-  ): Promise<{ success: boolean; xpAwarded: number; challenge: IChallenge }> {
+  ): Promise<{ success: boolean; challenge: IChallenge; badgeAwarded?: string }> {
     const challenge = await this.challengeModel.findOne({
       _id: challengeId,
       userId,
@@ -359,12 +318,13 @@ export class ChallengeService {
       throw new Error("Challenge not found or not completed");
     }
 
-    // Award XP
-    await this.engagementService.awardXP(
-      userId,
-      challenge.xpReward,
-      `challenge_${challenge.type}`
-    );
+    let badgeAwarded: string | undefined;
+
+    // Award badge if challenge has one defined
+    if (challenge.badgeId) {
+      await this.engagementService.awardBadge(userId, challenge.badgeId);
+      badgeAwarded = challenge.badgeId;
+    }
 
     // Mark as claimed
     challenge.status = "claimed";
@@ -372,7 +332,7 @@ export class ChallengeService {
     await challenge.save();
 
     logger.info(
-      `[ChallengeService] Challenge reward claimed: ${challenge.title}, +${challenge.xpReward} XP for user ${userId}`
+      `[ChallengeService] Habit challenge completed: ${challenge.title}${badgeAwarded ? `, badge: ${badgeAwarded}` : ""} for user ${userId}`
     );
 
     // Assign new challenges if needed
@@ -380,8 +340,8 @@ export class ChallengeService {
 
     return {
       success: true,
-      xpAwarded: challenge.xpReward,
       challenge: challenge.toObject() as IChallenge,
+      badgeAwarded,
     };
   }
 
@@ -403,76 +363,64 @@ export class ChallengeService {
   }
 
   /**
-   * Process meal completion - update relevant challenges
+   * Process meal completion - update relevant habit challenges
    */
-  async onMealCompleted(userId: string, isBalanced: boolean): Promise<void> {
-    // Update meals_logged challenges
-    await this.updateProgress(userId, "meals_logged", 1);
+  async onMealCompleted(userId: string, mealType: string, isBalanced: boolean): Promise<void> {
+    // Update daily_logging challenges
+    await this.updateProgress(userId, "daily_logging", 1);
 
-    // Update balanced_meals challenges if applicable
+    // Update meal_consistency challenges
+    await this.updateProgress(userId, "meal_consistency", 1);
+
+    // Update breakfast_habit if it's a breakfast
+    if (mealType === "breakfast") {
+      await this.updateProgress(userId, "breakfast_habit", 1);
+    }
+
+    // Update balanced_eating challenges if applicable
     if (isBalanced) {
-      await this.updateProgress(userId, "balanced_meals", 1);
+      await this.updateProgress(userId, "balanced_eating", 1);
     }
   }
 
   /**
-   * Process water intake - update relevant challenges incrementally
-   * For daily challenges: increments progress for each glass
-   * For weekly challenges: increments progress when daily goal is reached
-   */
-  async onWaterIntake(userId: string, glasses: number, goalReached: boolean = false): Promise<void> {
-    const challenges = await this.challengeModel.find({
-      userId,
-      type: "water_intake",
-      status: "active",
-    });
-
-    for (const challenge of challenges) {
-      if (challenge.frequency === "daily") {
-        // Daily challenge: increment progress for each glass
-        challenge.progress = Math.min(challenge.target, challenge.progress + 1);
-      } else if (challenge.frequency === "weekly") {
-        // Weekly challenge: increment progress when daily goal is reached
-        if (goalReached) {
-          challenge.progress = Math.min(challenge.target, challenge.progress + 1);
-        }
-      }
-
-      // Check if completed
-      if (challenge.progress >= challenge.target && challenge.status === "active") {
-        challenge.status = "completed";
-        challenge.completedAt = new Date();
-        logger.info(
-          `[ChallengeService] Water challenge completed: ${challenge.title} for user ${userId}`
-        );
-      }
-
-      await challenge.save();
-    }
-  }
-
-  /**
-   * Process water goal reached - update relevant challenges (legacy method for backward compatibility)
+   * Process water goal reached - update hydration habit challenges
    */
   async onWaterGoalReached(userId: string): Promise<void> {
-    await this.onWaterIntake(userId, 1, true);
+    await this.updateProgress(userId, "hydration_habit", 1);
   }
 
   /**
-   * Process workout completion - update relevant challenges
+   * Process water intake update - update hydration habit challenges
+   * Only increments when goal is reached (to avoid double counting)
+   */
+  async onWaterIntake(
+    userId: string,
+    waterConsumed: number,
+    goalReached: boolean
+  ): Promise<void> {
+    if (goalReached) {
+      await this.updateProgress(userId, "hydration_habit", 1);
+    }
+  }
+
+  /**
+   * Process workout completion - update workout-related challenges
    */
   async onWorkoutCompleted(userId: string): Promise<void> {
-    await this.updateProgress(userId, "workout_complete", 1);
+    // For now, workout challenges can be added later if needed
+    // This method exists to prevent errors when called from progress service
+    logger.info(`[ChallengeService] Workout completed for user ${userId}`);
   }
 
   /**
-   * Process streak update - update relevant challenges
+   * Process streak update - update weekly_streak challenges
    */
   async onStreakUpdated(userId: string, currentStreak: number): Promise<void> {
-    // Find streak challenges and update their progress directly
+    // Find weekly_streak challenges and update their progress directly
     const challenges = await this.challengeModel.find({
       userId,
-      type: "streak_days",
+      type: "weekly_streak",
       status: "active",
     });
 
@@ -483,7 +431,7 @@ export class ChallengeService {
         challenge.status = "completed";
         challenge.completedAt = new Date();
         logger.info(
-          `[ChallengeService] Streak challenge completed: ${challenge.title} for user ${userId}`
+          `[ChallengeService] Weekly streak challenge completed: ${challenge.title} for user ${userId}`
         );
       }
 
@@ -492,10 +440,10 @@ export class ChallengeService {
   }
 
   /**
-   * Process protein goal reached - update relevant challenges
+   * Process protein goal reached - update protein_focus challenges
    */
   async onProteinGoalReached(userId: string): Promise<void> {
-    await this.updateProgress(userId, "protein_goal", 1);
+    await this.updateProgress(userId, "protein_focus", 1);
   }
 
   // Helper to shuffle array

@@ -15,26 +15,68 @@ const badgeSchema = new Schema(
     earnedAt: { type: Date, required: true, default: Date.now },
     category: {
       type: String,
-      enum: ["streak", "meals", "nutrition", "milestone", "special"],
+      enum: ["streak", "meals", "nutrition", "milestone", "special", "consistency", "hydration"],
       required: true,
     },
   },
   { _id: false }
 );
 
-// Engagement schema for gamification
+// Weekly summary schema for habit tracking
+const weeklySummarySchema = new Schema(
+  {
+    weekStart: { type: Date, required: true },
+    weekEnd: { type: Date, required: true },
+    daysTracked: { type: Number, default: 0 },
+    consistencyScore: { type: Number, default: 0 },
+    avgCalories: { type: Number, default: 0 },
+    avgProtein: { type: Number, default: 0 },
+    avgCarbs: { type: Number, default: 0 },
+    avgFat: { type: Number, default: 0 },
+    calorieGoalHitDays: { type: Number, default: 0 },
+    avgWaterGlasses: { type: Number, default: 0 },
+    waterGoalHitDays: { type: Number, default: 0 },
+    achievements: { type: [String], default: [] },
+    bestDay: { type: String, default: null },
+    motivationalMessage: { type: String, default: "" },
+    focusAreaForNextWeek: { type: String, default: "" },
+  },
+  { _id: false }
+);
+
+// Engagement schema for habit-focused tracking
 const engagementSchema = new Schema(
   {
+    // Legacy fields (kept for backward compatibility during migration)
     xp: { type: Number, default: 0 },
     level: { type: Number, default: 1 },
-    streakDays: { type: Number, default: 0 },
+
+    // NEW: Habit Score System (0-100 based on consistency)
+    habitScore: { type: Number, default: 0 },
+
+    // Streak tracking (renamed for clarity)
+    streakDays: { type: Number, default: 0 }, // Current consistency streak
     longestStreak: { type: Number, default: 0 },
     lastActiveDate: { type: String, default: null }, // YYYY-MM-DD format
+
+    // NEW: Weekly tracking
+    weeklyConsistency: { type: Number, default: 0 }, // % of days tracked this week
+    weeklyGoalsHit: { type: Number, default: 0 }, // Count of daily goals achieved this week
+
+    // Totals
     totalMealsLogged: { type: Number, default: 0 },
     totalDaysTracked: { type: Number, default: 0 },
+
+    // Badges (health-focused)
     badges: { type: [badgeSchema], default: [] },
+
+    // Streak freeze
     streakFreezeAvailable: { type: Boolean, default: true },
     streakFreezeUsedAt: { type: Date, default: null },
+
+    // NEW: Weekly summaries
+    lastWeeklySummary: { type: Date, default: null },
+    weeklySummaries: { type: [weeklySummarySchema], default: [] },
   },
   { _id: false }
 );
@@ -126,16 +168,28 @@ const userSchemaDefinition = {
   engagement: {
     type: engagementSchema,
     default: () => ({
+      // Legacy (kept for migration)
       xp: 0,
       level: 1,
+      // Habit Score System
+      habitScore: 0,
+      // Streaks
       streakDays: 0,
       longestStreak: 0,
       lastActiveDate: null,
+      // Weekly tracking
+      weeklyConsistency: 0,
+      weeklyGoalsHit: 0,
+      // Totals
       totalMealsLogged: 0,
       totalDaysTracked: 0,
       badges: [],
+      // Streak freeze
       streakFreezeAvailable: true,
       streakFreezeUsedAt: null,
+      // Weekly summaries
+      lastWeeklySummary: null,
+      weeklySummaries: [],
     }),
   },
   // Notification preferences

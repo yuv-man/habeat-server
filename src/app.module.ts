@@ -15,6 +15,7 @@ import { EngagementModule } from "./engagement/engagement.module";
 import { ChallengeModule } from "./challenge/challenge.module";
 import { ReflectionModule } from "./reflection/reflection.module";
 import { NotificationModule } from "./notification/notification.module";
+import { PhotoRecognitionModule } from "./photo-recognition/photo-recognition.module";
 import logger from "./utils/logger";
 
 @Module({
@@ -79,6 +80,7 @@ import logger from "./utils/logger";
     ChallengeModule,
     ReflectionModule,
     NotificationModule,
+    PhotoRecognitionModule,
   ],
 })
 export class AppModule {}

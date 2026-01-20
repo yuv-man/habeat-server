@@ -7,36 +7,77 @@ export interface IBadge {
   description: string;
   icon: string;
   earnedAt: Date;
-  category: "streak" | "meals" | "nutrition" | "milestone" | "special";
+  category: "streak" | "meals" | "nutrition" | "milestone" | "special" | "consistency" | "hydration";
 }
 
-// User engagement state for gamification
+// Weekly summary for habit tracking
+export interface IWeeklySummary {
+  weekStart: Date;
+  weekEnd: Date;
+  daysTracked: number;
+  consistencyScore: number;
+  avgCalories: number;
+  avgProtein: number;
+  avgCarbs: number;
+  avgFat: number;
+  calorieGoalHitDays: number;
+  avgWaterGlasses: number;
+  waterGoalHitDays: number;
+  achievements: string[];
+  bestDay: string | null;
+  motivationalMessage: string;
+  focusAreaForNextWeek: string;
+}
+
+// User engagement state for habit tracking
 export interface IUserEngagement {
+  // Legacy fields (kept for backward compatibility)
   xp: number;
   level: number;
+  // Habit Score System (primary)
+  habitScore: number;
   streakDays: number;
   longestStreak: number;
   lastActiveDate: string; // YYYY-MM-DD format
+  // Weekly tracking
+  weeklyConsistency: number;
+  weeklyGoalsHit: number;
+  // Totals
   totalMealsLogged: number;
   totalDaysTracked: number;
   badges: IBadge[];
-  streakFreezeAvailable: boolean; // One-time streak saver per month
+  streakFreezeAvailable: boolean;
   streakFreezeUsedAt?: Date;
+  // Weekly summaries
+  lastWeeklySummary?: Date;
+  weeklySummaries: IWeeklySummary[];
 }
 
-// Challenge types for gamification
+// Habit-based challenge types
+export type HabitChallengeType =
+  | "daily_logging"      // Log all meals for X days
+  | "breakfast_habit"    // Log breakfast X days in a row
+  | "hydration_habit"    // Hit water goal X days
+  | "balanced_eating"    // Balanced macros X days
+  | "protein_focus"      // Hit protein goal X days
+  | "mindful_eating"     // Log meals consistently
+  | "meal_consistency"   // Don't skip any meals X days
+  | "weekly_streak";     // Complete full week of tracking
+
+// Legacy challenge types (kept for backward compatibility)
 export type ChallengeType =
-  | "meals_logged" // Log X meals
-  | "water_intake" // Drink X glasses of water
-  | "streak_days" // Maintain X day streak
-  | "veggie_meals" // Eat X meals with vegetables
-  | "protein_goal" // Hit protein goal X times
-  | "workout_complete" // Complete X workouts
-  | "balanced_meals" // Log X balanced meals
-  | "home_cooking"; // Log X home-cooked meals
+  | HabitChallengeType
+  | "meals_logged"
+  | "water_intake"
+  | "streak_days"
+  | "veggie_meals"
+  | "protein_goal"
+  | "workout_complete"
+  | "balanced_meals"
+  | "home_cooking";
 
 export type ChallengeStatus = "active" | "completed" | "expired" | "claimed";
-export type ChallengeDifficulty = "easy" | "medium" | "hard";
+export type ChallengeDifficulty = "starter" | "building" | "established";
 
 export interface IChallenge {
   _id?: string;
@@ -47,10 +88,10 @@ export interface IChallenge {
   icon: string;
   target: number; // Goal to achieve
   progress: number; // Current progress
-  xpReward: number;
+  daysRequired: number; // Duration of the habit challenge
   difficulty: ChallengeDifficulty;
   status: ChallengeStatus;
-  frequency: "daily" | "weekly"; // Whether challenge resets daily or accumulates weekly
+  badgeId?: string; // Badge awarded on completion
   startDate: Date;
   endDate: Date; // Challenge expires after this
   completedAt?: Date;

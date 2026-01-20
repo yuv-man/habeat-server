@@ -6,79 +6,110 @@ import { DailyProgress } from "../progress/progress.model";
 import { IUserData, IDailyProgress, IBadge } from "../types/interfaces";
 import logger from "../utils/logger";
 
-// XP rewards for different actions
-export const XP_REWARDS = {
-  MEAL_LOGGED: 10,
-  BALANCED_MEAL: 20, // Meal with good macro balance
-  COMPLETE_DAY: 50, // All meals completed for the day
-  WATER_GOAL: 15, // Hit water intake goal
-  WORKOUT_COMPLETED: 25,
-  STREAK_MILESTONE_7: 100, // 7-day streak
-  STREAK_MILESTONE_30: 500, // 30-day streak
-  STREAK_MILESTONE_100: 2000, // 100-day streak
-  FIRST_MEAL: 50, // First meal ever logged (onboarding)
-} as const;
+// Habit-focused badge definitions
+export const HABIT_BADGES: Record<string, Omit<IBadge, "earnedAt" | "id">> = {
+  // Consistency badges
+  first_week: {
+    name: "First Week",
+    description: "Tracked 7 days consistently",
+    icon: "calendar-check",
+    category: "consistency",
+  },
+  two_weeks: {
+    name: "Two Weeks Strong",
+    description: "Maintained a 14-day streak",
+    icon: "calendar-days",
+    category: "consistency",
+  },
+  habit_formed: {
+    name: "Habit Formed",
+    description: "21 days of consistent tracking",
+    icon: "sparkles",
+    category: "consistency",
+  },
+  monthly_habit: {
+    name: "Monthly Habit",
+    description: "30 days of consistency",
+    icon: "calendar",
+    category: "consistency",
+  },
+  quarterly_champion: {
+    name: "Quarterly Champion",
+    description: "90 days of consistency",
+    icon: "trophy",
+    category: "consistency",
+  },
 
-// Badge definitions
-export const BADGE_DEFINITIONS: Record<
-  string,
-  Omit<IBadge, "earnedAt" | "id">
-> = {
+  // Nutrition badges
+  balanced_week: {
+    name: "Balanced Week",
+    description: "Hit macro goals 5+ days this week",
+    icon: "scale",
+    category: "nutrition",
+  },
+  protein_pro: {
+    name: "Protein Pro",
+    description: "Hit protein goal 7 days in a row",
+    icon: "dumbbell",
+    category: "nutrition",
+  },
+  veggie_lover: {
+    name: "Veggie Lover",
+    description: "Logged vegetables for 10 days",
+    icon: "leaf",
+    category: "nutrition",
+  },
+
+  // Hydration badges
+  hydration_habit: {
+    name: "Hydration Habit",
+    description: "Hit water goal for 7 days",
+    icon: "droplet",
+    category: "hydration",
+  },
+  hydration_master: {
+    name: "Hydration Master",
+    description: "Hit water goal for 30 days",
+    icon: "droplets",
+    category: "hydration",
+  },
+
+  // Milestone badges
   first_meal: {
-    name: "First Bite",
+    name: "First Step",
     description: "Logged your first meal",
     icon: "utensils",
     category: "milestone",
   },
-  streak_7: {
-    name: "Week Warrior",
-    description: "Maintained a 7-day streak",
-    icon: "flame",
-    category: "streak",
-  },
-  streak_30: {
-    name: "Monthly Master",
-    description: "Maintained a 30-day streak",
-    icon: "calendar",
-    category: "streak",
-  },
-  streak_100: {
-    name: "Century Champion",
-    description: "Maintained a 100-day streak",
-    icon: "trophy",
-    category: "streak",
-  },
-  meals_50: {
-    name: "Meal Tracker",
-    description: "Logged 50 meals",
-    icon: "check-circle",
-    category: "meals",
+  first_goal: {
+    name: "Goal Getter",
+    description: "Achieved your first personal goal",
+    icon: "target",
+    category: "milestone",
   },
   meals_100: {
-    name: "Nutrition Ninja",
+    name: "Dedicated Tracker",
     description: "Logged 100 meals",
-    icon: "award",
-    category: "meals",
-  },
-  meals_500: {
-    name: "Food Chronicler",
-    description: "Logged 500 meals",
-    icon: "book-open",
-    category: "meals",
-  },
-  perfect_week: {
-    name: "Perfect Week",
-    description: "Completed all meals for 7 days straight",
-    icon: "star",
-    category: "nutrition",
-  },
-  hydration_hero: {
-    name: "Hydration Hero",
-    description: "Hit water goal for 7 days straight",
-    icon: "droplet",
-    category: "nutrition",
+    icon: "check-circle",
+    category: "milestone",
   },
 };
+
+// Legacy XP rewards (kept for backward compatibility during migration)
+export const XP_REWARDS = {
+  MEAL_LOGGED: 10,
+  BALANCED_MEAL: 20,
+  COMPLETE_DAY: 50,
+  WATER_GOAL: 15,
+  WORKOUT_COMPLETED: 25,
+  STREAK_MILESTONE_7: 100,
+  STREAK_MILESTONE_30: 500,
+  STREAK_MILESTONE_100: 2000,
+  FIRST_MEAL: 50,
+} as const;
+
+// Legacy badge definitions (for migration)
+export const BADGE_DEFINITIONS = HABIT_BADGES;
 
 @Injectable()
 export class EngagementService {
@@ -87,37 +118,6 @@ export class EngagementService {
     @InjectModel(DailyProgress.name)
     private progressModel: Model<IDailyProgress>
   ) {}
-
-  /**
-   * Calculate level from XP using sqrt formula
-   * Level 1: 0-99 XP
-   * Level 2: 100-399 XP
-   * Level 3: 400-899 XP
-   * etc.
-   */
-  calculateLevel(xp: number): number {
-    return Math.floor(Math.sqrt(xp / 100)) + 1;
-  }
-
-  /**
-   * Calculate XP required for a specific level
-   */
-  xpForLevel(level: number): number {
-    return Math.pow(level - 1, 2) * 100;
-  }
-
-  /**
-   * Calculate XP required to reach next level
-   */
-  xpToNextLevel(currentXp: number): { current: number; required: number } {
-    const currentLevel = this.calculateLevel(currentXp);
-    const nextLevelXp = this.xpForLevel(currentLevel + 1);
-    const currentLevelXp = this.xpForLevel(currentLevel);
-    return {
-      current: currentXp - currentLevelXp,
-      required: nextLevelXp - currentLevelXp,
-    };
-  }
 
   /**
    * Get local date key in YYYY-MM-DD format
@@ -130,10 +130,151 @@ export class EngagementService {
   }
 
   /**
+   * Calculate Habit Score (0-100) based on:
+   * - Recent consistency (last 7 days): 40%
+   * - Streak length: 30%
+   * - Goal achievement rate: 30%
+   */
+  async calculateHabitScore(userId: string): Promise<number> {
+    const user = await this.userModel.findById(userId);
+    if (!user) return 0;
+
+    // Get recent activity (last 7 days)
+    const recentDays = await this.getRecentActivityDays(userId, 7);
+    const consistencyScore = (recentDays / 7) * 40;
+
+    // Streak score (maxes out at 30 days)
+    const streak = (user as any).engagement?.streakDays || 0;
+    const streakScore = Math.min(streak / 30, 1) * 30;
+
+    // Goal achievement rate (last 7 days)
+    const goalRate = await this.getGoalAchievementRate(userId, 7);
+    const goalScore = goalRate * 30;
+
+    const habitScore = Math.round(consistencyScore + streakScore + goalScore);
+    return Math.min(100, Math.max(0, habitScore));
+  }
+
+  /**
+   * Get number of active days in the last N days
+   */
+  async getRecentActivityDays(userId: string, days: number): Promise<number> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const startDate = new Date(today);
+    startDate.setDate(startDate.getDate() - days + 1);
+
+    const progressRecords = await this.progressModel
+      .find({
+        userId,
+        dateKey: {
+          $gte: this.getLocalDateKey(startDate),
+          $lte: this.getLocalDateKey(today),
+        },
+      })
+      .select("dateKey meals")
+      .lean();
+
+    // Count days with at least one completed meal
+    const activeDays = progressRecords.filter((p: any) => {
+      const meals = p.meals;
+      return (
+        meals?.breakfast?.done ||
+        meals?.lunch?.done ||
+        meals?.dinner?.done ||
+        meals?.snacks?.some((s: any) => s.done)
+      );
+    });
+
+    return activeDays.length;
+  }
+
+  /**
+   * Get goal achievement rate (percentage of days where calorie goal was hit)
+   */
+  async getGoalAchievementRate(userId: string, days: number): Promise<number> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const startDate = new Date(today);
+    startDate.setDate(startDate.getDate() - days + 1);
+
+    const progressRecords = await this.progressModel
+      .find({
+        userId,
+        dateKey: {
+          $gte: this.getLocalDateKey(startDate),
+          $lte: this.getLocalDateKey(today),
+        },
+      })
+      .select("caloriesConsumed caloriesGoal")
+      .lean();
+
+    if (progressRecords.length === 0) return 0;
+
+    // Count days where calories were within 10% of goal
+    const successDays = progressRecords.filter((p: any) => {
+      if (!p.caloriesGoal || p.caloriesGoal === 0) return false;
+      const ratio = p.caloriesConsumed / p.caloriesGoal;
+      return ratio >= 0.85 && ratio <= 1.15; // Within 15% of goal
+    });
+
+    return successDays.length / days;
+  }
+
+  /**
+   * Update weekly consistency metrics
+   */
+  async updateWeeklyMetrics(userId: string): Promise<{
+    weeklyConsistency: number;
+    weeklyGoalsHit: number;
+  }> {
+    const recentDays = await this.getRecentActivityDays(userId, 7);
+    const weeklyConsistency = Math.round((recentDays / 7) * 100);
+
+    // Count goals hit this week
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const startDate = new Date(today);
+    startDate.setDate(startDate.getDate() - 6); // Last 7 days
+
+    const progressRecords = await this.progressModel
+      .find({
+        userId,
+        dateKey: {
+          $gte: this.getLocalDateKey(startDate),
+          $lte: this.getLocalDateKey(today),
+        },
+      })
+      .select("caloriesConsumed caloriesGoal water")
+      .lean();
+
+    let weeklyGoalsHit = 0;
+    for (const p of progressRecords as any[]) {
+      // Calorie goal hit
+      if (p.caloriesGoal && p.caloriesConsumed >= p.caloriesGoal * 0.9) {
+        weeklyGoalsHit++;
+      }
+      // Water goal hit
+      if (p.water?.goal && p.water.consumed >= p.water.goal) {
+        weeklyGoalsHit++;
+      }
+    }
+
+    // Update user
+    await this.userModel.findByIdAndUpdate(userId, {
+      $set: {
+        "engagement.weeklyConsistency": weeklyConsistency,
+        "engagement.weeklyGoalsHit": weeklyGoalsHit,
+      },
+    });
+
+    return { weeklyConsistency, weeklyGoalsHit };
+  }
+
+  /**
    * Calculate streak from progress records
-   * Uses the "no punishment" rule:
-   * - 1 missed day = freeze (no change)
-   * - 2+ missed days = decrement by 1 (not reset)
    */
   async calculateStreak(userId: string): Promise<{
     currentStreak: number;
@@ -144,7 +285,6 @@ export class EngagementService {
     today.setHours(0, 0, 0, 0);
     const todayKey = this.getLocalDateKey(today);
 
-    // Get all progress records sorted by date descending
     const progressRecords = await this.progressModel
       .find({ userId })
       .sort({ dateKey: -1 })
@@ -171,15 +311,6 @@ export class EngagementService {
     }
 
     const lastActiveDate = activeDays[0].dateKey;
-
-    // Calculate days since last activity
-    const lastActive = new Date(lastActiveDate);
-    lastActive.setHours(0, 0, 0, 0);
-    const daysDiff = Math.floor(
-      (today.getTime() - lastActive.getTime()) / (1000 * 60 * 60 * 24)
-    );
-
-    // Build a set of active date keys for streak calculation
     const activeDateSet = new Set(activeDays.map((p: any) => p.dateKey));
 
     // Calculate current streak
@@ -187,7 +318,6 @@ export class EngagementService {
     let checkDate = new Date(today);
     let missedDays = 0;
 
-    // Start from today or yesterday if today has no activity
     if (!activeDateSet.has(todayKey)) {
       checkDate.setDate(checkDate.getDate() - 1);
     }
@@ -199,28 +329,16 @@ export class EngagementService {
         missedDays = 0;
       } else {
         missedDays++;
-        // Don't count the day we started if it's a miss
         if (currentStreak === 0 && missedDays === 1) {
           checkDate.setDate(checkDate.getDate() - 1);
           continue;
         }
       }
       checkDate.setDate(checkDate.getDate() - 1);
-
-      // Safety check to prevent infinite loop
       if (checkDate < new Date("2020-01-01")) break;
     }
 
-    // Apply no-punishment rule
-    if (daysDiff === 1 && !activeDateSet.has(todayKey)) {
-      // 1 missed day (today) - freeze streak at current value
-      // No change needed
-    } else if (daysDiff >= 2 && !activeDateSet.has(todayKey)) {
-      // 2+ missed days - decrement by 1 but don't go below 0
-      currentStreak = Math.max(0, currentStreak - 1);
-    }
-
-    // Calculate longest streak historically
+    // Calculate longest streak
     let longestStreak = currentStreak;
     let tempStreak = 0;
     let lastKey: string | null = null;
@@ -252,7 +370,175 @@ export class EngagementService {
   }
 
   /**
-   * Award XP to user and handle level ups
+   * Process meal completion - update habit score and check milestones
+   */
+  async onMealCompleted(
+    userId: string,
+    mealType: string,
+    isBalanced: boolean = false
+  ): Promise<{
+    habitScore: number;
+    newBadges: IBadge[];
+    streak: number;
+    milestoneReached: string | null;
+    // Legacy fields for compatibility
+    xpAwarded: number;
+    totalXp: number;
+    level: number;
+    leveledUp: boolean;
+  }> {
+    const user = await this.userModel.findById(userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Initialize engagement if not exists
+    if (!user.engagement) {
+      (user as any).engagement = {
+        xp: 0,
+        level: 1,
+        habitScore: 0,
+        streakDays: 0,
+        longestStreak: 0,
+        lastActiveDate: null,
+        weeklyConsistency: 0,
+        weeklyGoalsHit: 0,
+        totalMealsLogged: 0,
+        totalDaysTracked: 0,
+        badges: [],
+        streakFreezeAvailable: true,
+        streakFreezeUsedAt: null,
+        lastWeeklySummary: null,
+        weeklySummaries: [],
+      };
+    }
+
+    const newBadges: IBadge[] = [];
+    let milestoneReached: string | null = null;
+    const todayKey = this.getLocalDateKey(new Date());
+
+    // Check if first meal ever
+    const isFirstMeal = (user as any).engagement.totalMealsLogged === 0;
+    if (isFirstMeal && !this.hasBadge(user, "first_meal")) {
+      const badge = this.createBadge("first_meal");
+      if (badge) {
+        newBadges.push(badge);
+        (user as any).engagement.badges.push(badge);
+        milestoneReached = "First Step - You logged your first meal!";
+      }
+    }
+
+    // Update stats
+    (user as any).engagement.totalMealsLogged += 1;
+    (user as any).engagement.lastActiveDate = todayKey;
+
+    // Calculate and update streak
+    const streakData = await this.calculateStreak(userId);
+    (user as any).engagement.streakDays = streakData.currentStreak;
+    if (streakData.longestStreak > (user as any).engagement.longestStreak) {
+      (user as any).engagement.longestStreak = streakData.longestStreak;
+    }
+
+    // Check for consistency milestones
+    const streak = streakData.currentStreak;
+
+    if (streak === 7 && !this.hasBadge(user, "first_week")) {
+      const badge = this.createBadge("first_week");
+      if (badge) {
+        newBadges.push(badge);
+        (user as any).engagement.badges.push(badge);
+        milestoneReached = "First Week - 7 days of consistent tracking!";
+      }
+    }
+    if (streak === 14 && !this.hasBadge(user, "two_weeks")) {
+      const badge = this.createBadge("two_weeks");
+      if (badge) {
+        newBadges.push(badge);
+        (user as any).engagement.badges.push(badge);
+        milestoneReached = "Two Weeks Strong - Keep building that habit!";
+      }
+    }
+    if (streak === 21 && !this.hasBadge(user, "habit_formed")) {
+      const badge = this.createBadge("habit_formed");
+      if (badge) {
+        newBadges.push(badge);
+        (user as any).engagement.badges.push(badge);
+        milestoneReached = "Habit Formed - 21 days! This is now part of your routine!";
+      }
+    }
+    if (streak === 30 && !this.hasBadge(user, "monthly_habit")) {
+      const badge = this.createBadge("monthly_habit");
+      if (badge) {
+        newBadges.push(badge);
+        (user as any).engagement.badges.push(badge);
+        milestoneReached = "Monthly Habit - One month of healthy tracking!";
+      }
+    }
+    if (streak === 90 && !this.hasBadge(user, "quarterly_champion")) {
+      const badge = this.createBadge("quarterly_champion");
+      if (badge) {
+        newBadges.push(badge);
+        (user as any).engagement.badges.push(badge);
+        milestoneReached = "Quarterly Champion - 90 days of dedication!";
+      }
+    }
+
+    // Check for meal count milestone
+    const mealCount = (user as any).engagement.totalMealsLogged;
+    if (mealCount === 100 && !this.hasBadge(user, "meals_100")) {
+      const badge = this.createBadge("meals_100");
+      if (badge) {
+        newBadges.push(badge);
+        (user as any).engagement.badges.push(badge);
+        if (!milestoneReached) {
+          milestoneReached = "Dedicated Tracker - 100 meals logged!";
+        }
+      }
+    }
+
+    // Calculate habit score
+    const habitScore = await this.calculateHabitScore(userId);
+    (user as any).engagement.habitScore = habitScore;
+
+    // Update weekly metrics
+    await this.updateWeeklyMetrics(userId);
+
+    // Legacy: Also update XP for backward compatibility
+    const xpAmount = XP_REWARDS.MEAL_LOGGED + (isBalanced ? XP_REWARDS.BALANCED_MEAL : 0);
+    const oldLevel = (user as any).engagement.level || 1;
+    (user as any).engagement.xp = ((user as any).engagement.xp || 0) + xpAmount;
+    const newLevel = this.calculateLevel((user as any).engagement.xp);
+    (user as any).engagement.level = newLevel;
+
+    user.markModified("engagement");
+    await user.save();
+
+    logger.info(
+      `[EngagementService] Meal completed for user ${userId}. Habit Score: ${habitScore}, Streak: ${streak}`
+    );
+
+    return {
+      habitScore,
+      newBadges,
+      streak: streakData.currentStreak,
+      milestoneReached,
+      // Legacy compatibility
+      xpAwarded: xpAmount,
+      totalXp: (user as any).engagement.xp,
+      level: newLevel,
+      leveledUp: newLevel > oldLevel,
+    };
+  }
+
+  /**
+   * Legacy: Calculate level from XP (kept for backward compatibility)
+   */
+  calculateLevel(xp: number): number {
+    return Math.floor(Math.sqrt(xp / 100)) + 1;
+  }
+
+  /**
+   * Legacy: Award XP (kept for backward compatibility)
    */
   async awardXP(
     userId: string,
@@ -270,14 +556,16 @@ export class EngagementService {
       throw new Error("User not found");
     }
 
-    // Initialize engagement if not exists
     if (!user.engagement) {
       (user as any).engagement = {
         xp: 0,
         level: 1,
+        habitScore: 0,
         streakDays: 0,
         longestStreak: 0,
         lastActiveDate: null,
+        weeklyConsistency: 0,
+        weeklyGoalsHit: 0,
         totalMealsLogged: 0,
         totalDaysTracked: 0,
         badges: [],
@@ -291,55 +579,59 @@ export class EngagementService {
     const newLevel = this.calculateLevel((user as any).engagement.xp);
     (user as any).engagement.level = newLevel;
 
-    const leveledUp = newLevel > oldLevel;
-    const newBadges: IBadge[] = [];
-
-    // Check for level-up badges could go here
-
     user.markModified("engagement");
     await user.save();
-
-    logger.info(
-      `[EngagementService] Awarded ${amount} XP to user ${userId} for ${reason}. Total: ${(user as any).engagement.xp}, Level: ${newLevel}`
-    );
 
     return {
       xpAwarded: amount,
       totalXp: (user as any).engagement.xp,
       level: newLevel,
-      leveledUp,
-      newBadges,
+      leveledUp: newLevel > oldLevel,
+      newBadges: [],
     };
   }
 
   /**
-   * Process meal completion - award XP and update stats
+   * Award a specific badge to a user
    */
-  async onMealCompleted(
-    userId: string,
-    mealType: string,
-    isBalanced: boolean = false
-  ): Promise<{
-    xpAwarded: number;
-    totalXp: number;
-    level: number;
-    leveledUp: boolean;
-    newBadges: IBadge[];
-    streak: number;
-  }> {
+  async awardBadge(userId: string, badgeId: string): Promise<IBadge | null> {
     const user = await this.userModel.findById(userId);
     if (!user) {
       throw new Error("User not found");
     }
 
-    // Initialize engagement if not exists
+    // Check if badge exists in our definitions
+    const badgeDefinition = HABIT_BADGES[badgeId];
+    if (!badgeDefinition) {
+      logger.warn(`[Engagement] Badge not found: ${badgeId}`);
+      return null;
+    }
+
+    // Check if user already has this badge
+    const existingBadges = (user as any).engagement?.badges || [];
+    if (existingBadges.some((b: IBadge) => b.id === badgeId)) {
+      logger.info(`[Engagement] User ${userId} already has badge: ${badgeId}`);
+      return null;
+    }
+
+    // Create badge
+    const newBadge: IBadge = {
+      id: badgeId,
+      ...badgeDefinition,
+      earnedAt: new Date(),
+    };
+
+    // Add badge to user
     if (!user.engagement) {
       (user as any).engagement = {
         xp: 0,
         level: 1,
+        habitScore: 0,
         streakDays: 0,
         longestStreak: 0,
         lastActiveDate: null,
+        weeklyConsistency: 0,
+        weeklyGoalsHit: 0,
         totalMealsLogged: 0,
         totalDaysTracked: 0,
         badges: [],
@@ -348,114 +640,16 @@ export class EngagementService {
       };
     }
 
-    let totalXpAwarded = 0;
-    const newBadges: IBadge[] = [];
-    const todayKey = this.getLocalDateKey(new Date());
-
-    // Base XP for logging a meal
-    totalXpAwarded += XP_REWARDS.MEAL_LOGGED;
-
-    // Bonus for balanced meal
-    if (isBalanced) {
-      totalXpAwarded += XP_REWARDS.BALANCED_MEAL;
-    }
-
-    // Check if this is the first meal ever
-    const isFirstMeal = (user as any).engagement.totalMealsLogged === 0;
-    if (isFirstMeal) {
-      totalXpAwarded += XP_REWARDS.FIRST_MEAL;
-      const badge = this.createBadge("first_meal");
-      if (badge) {
-        newBadges.push(badge);
-        (user as any).engagement.badges.push(badge);
-      }
-    }
-
-    // Update stats
-    (user as any).engagement.totalMealsLogged += 1;
-    (user as any).engagement.lastActiveDate = todayKey;
-
-    // Check for meal milestone badges
-    const mealCount = (user as any).engagement.totalMealsLogged;
-    if (mealCount === 50 && !this.hasBadge(user, "meals_50")) {
-      const badge = this.createBadge("meals_50");
-      if (badge) {
-        newBadges.push(badge);
-        (user as any).engagement.badges.push(badge);
-      }
-    } else if (mealCount === 100 && !this.hasBadge(user, "meals_100")) {
-      const badge = this.createBadge("meals_100");
-      if (badge) {
-        newBadges.push(badge);
-        (user as any).engagement.badges.push(badge);
-      }
-    } else if (mealCount === 500 && !this.hasBadge(user, "meals_500")) {
-      const badge = this.createBadge("meals_500");
-      if (badge) {
-        newBadges.push(badge);
-        (user as any).engagement.badges.push(badge);
-      }
-    }
-
-    // Calculate and update streak
-    const streakData = await this.calculateStreak(userId);
-    (user as any).engagement.streakDays = streakData.currentStreak;
-    if (streakData.longestStreak > (user as any).engagement.longestStreak) {
-      (user as any).engagement.longestStreak = streakData.longestStreak;
-    }
-
-    // Check for streak milestone badges
-    const streak = streakData.currentStreak;
-    if (streak >= 7 && !this.hasBadge(user, "streak_7")) {
-      totalXpAwarded += XP_REWARDS.STREAK_MILESTONE_7;
-      const badge = this.createBadge("streak_7");
-      if (badge) {
-        newBadges.push(badge);
-        (user as any).engagement.badges.push(badge);
-      }
-    }
-    if (streak >= 30 && !this.hasBadge(user, "streak_30")) {
-      totalXpAwarded += XP_REWARDS.STREAK_MILESTONE_30;
-      const badge = this.createBadge("streak_30");
-      if (badge) {
-        newBadges.push(badge);
-        (user as any).engagement.badges.push(badge);
-      }
-    }
-    if (streak >= 100 && !this.hasBadge(user, "streak_100")) {
-      totalXpAwarded += XP_REWARDS.STREAK_MILESTONE_100;
-      const badge = this.createBadge("streak_100");
-      if (badge) {
-        newBadges.push(badge);
-        (user as any).engagement.badges.push(badge);
-      }
-    }
-
-    // Apply XP
-    const oldLevel = (user as any).engagement.level;
-    (user as any).engagement.xp += totalXpAwarded;
-    const newLevel = this.calculateLevel((user as any).engagement.xp);
-    (user as any).engagement.level = newLevel;
-
+    (user as any).engagement.badges.push(newBadge);
     user.markModified("engagement");
     await user.save();
 
-    logger.info(
-      `[EngagementService] Meal completed for user ${userId}. XP: +${totalXpAwarded}, Total: ${(user as any).engagement.xp}, Level: ${newLevel}, Streak: ${streak}`
-    );
-
-    return {
-      xpAwarded: totalXpAwarded,
-      totalXp: (user as any).engagement.xp,
-      level: newLevel,
-      leveledUp: newLevel > oldLevel,
-      newBadges,
-      streak: streakData.currentStreak,
-    };
+    logger.info(`[Engagement] Badge awarded: ${badgeId} to user ${userId}`);
+    return newBadge;
   }
 
   /**
-   * Process day completion - check if all meals completed
+   * Check day completion
    */
   async checkDayCompletion(userId: string): Promise<{
     completed: boolean;
@@ -477,41 +671,42 @@ export class EngagementService {
       meals?.breakfast?.done && meals?.lunch?.done && meals?.dinner?.done;
 
     if (allMainMealsComplete) {
-      // Check if we already awarded XP for this day
       const user = await this.userModel.findById(userId);
       if (!user || !user.engagement) return { completed: true, xpAwarded: 0 };
 
-      // Award day completion XP
-      const result = await this.awardXP(
-        userId,
-        XP_REWARDS.COMPLETE_DAY,
-        "complete_day"
-      );
-
       // Update total days tracked
       (user as any).engagement.totalDaysTracked += 1;
+
+      // Legacy XP
+      (user as any).engagement.xp += XP_REWARDS.COMPLETE_DAY;
+
       user.markModified("engagement");
       await user.save();
 
-      return { completed: true, xpAwarded: result.xpAwarded };
+      return { completed: true, xpAwarded: XP_REWARDS.COMPLETE_DAY };
     }
 
     return { completed: false, xpAwarded: 0 };
   }
 
   /**
-   * Get user's engagement stats
+   * Get user's engagement stats (habit-focused)
    */
   async getEngagementStats(userId: string): Promise<{
-    xp: number;
-    level: number;
-    xpProgress: { current: number; required: number };
+    // Habit-focused stats
+    habitScore: number;
     streak: number;
     longestStreak: number;
+    weeklyConsistency: number;
+    weeklyGoalsHit: number;
     totalMealsLogged: number;
     totalDaysTracked: number;
     badges: IBadge[];
     streakFreezeAvailable: boolean;
+    // Legacy fields for compatibility
+    xp: number;
+    level: number;
+    xpProgress: { current: number; required: number };
   }> {
     const user = await this.userModel.findById(userId);
     if (!user) {
@@ -523,9 +718,12 @@ export class EngagementService {
       (user as any).engagement = {
         xp: 0,
         level: 1,
+        habitScore: 0,
         streakDays: 0,
         longestStreak: 0,
         lastActiveDate: null,
+        weeklyConsistency: 0,
+        weeklyGoalsHit: 0,
         totalMealsLogged: 0,
         totalDaysTracked: 0,
         badges: [],
@@ -536,28 +734,47 @@ export class EngagementService {
       await user.save();
     }
 
-    // Recalculate streak to ensure accuracy
+    // Recalculate streak and habit score
     const streakData = await this.calculateStreak(userId);
+    const habitScore = await this.calculateHabitScore(userId);
+
+    // Update weekly metrics
+    const weeklyMetrics = await this.updateWeeklyMetrics(userId);
 
     const engagement = (user as any).engagement;
+
+    // Legacy XP progress calculation
+    const currentLevel = engagement.level || 1;
+    const nextLevelXp = Math.pow(currentLevel, 2) * 100;
+    const currentLevelXp = Math.pow(currentLevel - 1, 2) * 100;
+    const xpProgress = {
+      current: (engagement.xp || 0) - currentLevelXp,
+      required: nextLevelXp - currentLevelXp,
+    };
+
     return {
-      xp: engagement.xp,
-      level: engagement.level,
-      xpProgress: this.xpToNextLevel(engagement.xp),
+      // Habit-focused
+      habitScore,
       streak: streakData.currentStreak,
       longestStreak: Math.max(
-        engagement.longestStreak,
+        engagement.longestStreak || 0,
         streakData.longestStreak
       ),
-      totalMealsLogged: engagement.totalMealsLogged,
-      totalDaysTracked: engagement.totalDaysTracked,
-      badges: engagement.badges,
-      streakFreezeAvailable: engagement.streakFreezeAvailable,
+      weeklyConsistency: weeklyMetrics.weeklyConsistency,
+      weeklyGoalsHit: weeklyMetrics.weeklyGoalsHit,
+      totalMealsLogged: engagement.totalMealsLogged || 0,
+      totalDaysTracked: engagement.totalDaysTracked || 0,
+      badges: engagement.badges || [],
+      streakFreezeAvailable: engagement.streakFreezeAvailable ?? true,
+      // Legacy
+      xp: engagement.xp || 0,
+      level: engagement.level || 1,
+      xpProgress,
     };
   }
 
   /**
-   * Use streak freeze to save streak
+   * Use streak freeze
    */
   async useStreakFreeze(userId: string): Promise<{
     success: boolean;
@@ -585,7 +802,7 @@ export class EngagementService {
   }
 
   /**
-   * Reset streak freeze availability (call monthly via cron)
+   * Reset streak freeze availability (monthly)
    */
   async resetStreakFreezeForAllUsers(): Promise<void> {
     await this.userModel.updateMany(
@@ -605,7 +822,7 @@ export class EngagementService {
   }
 
   private createBadge(badgeId: string): IBadge | null {
-    const definition = BADGE_DEFINITIONS[badgeId];
+    const definition = HABIT_BADGES[badgeId];
     if (!definition) return null;
 
     return {
