@@ -11,6 +11,7 @@ import { Goal } from "../goals/goal.model";
 import { DailyProgress } from "../progress/progress.model";
 import { ShoppingList } from "../shopping/shopping-list.model";
 import aiService from "./generate.service";
+import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 import logger from "../utils/logger";
 import {
   IPlan,
@@ -53,7 +54,8 @@ export class GeneratorService {
     @InjectModel(DailyProgress.name)
     private progressModel: Model<IDailyProgress>,
     @InjectModel(ShoppingList.name)
-    private shoppingListModel: Model<IShoppingList>
+    private shoppingListModel: Model<IShoppingList>,
+    private usdaNutritionService: UsdaNutritionService
   ) {}
 
   /**
@@ -913,8 +915,10 @@ export class GeneratorService {
     const targetCalories = mealCriteria.targetCalories || 500;
 
     // Extract meal name from aiRules if it looks like a meal name query
-    // aiRules can contain free-text like "chicken salad" or "make me a pasta dish"
+    // aiRules can contain free-text like "beef steak" or "chicken salad"
     let mealNameFromRules: string | undefined;
+    let isMealNameRequest = false;
+    
     if (mealCriteria.aiRules && mealCriteria.aiRules.trim()) {
       const rulesLower = mealCriteria.aiRules.toLowerCase().trim();
       // If aiRules is short and doesn't contain common instruction words, treat it as meal name
@@ -936,8 +940,9 @@ export class GeneratorService {
       // If it's short (< 50 chars) and doesn't look like an instruction, treat as meal name
       if (!isInstruction && mealCriteria.aiRules.length < 50) {
         mealNameFromRules = mealCriteria.aiRules.trim();
+        isMealNameRequest = true;
         logger.info(
-          `[generateMealSuggestions] Extracted meal name from aiRules: "${mealNameFromRules}"`
+          `[generateMealSuggestions] PRIORITY: User requested meal variations of "${mealNameFromRules}"`
         );
       }
     }
@@ -960,59 +965,70 @@ export class GeneratorService {
       }
     }
 
-    // STEP 1: Query meals from database first (saves AI costs and time)
-    logger.info(
-      `[generateMealSuggestions] Querying DB for meals matching criteria: category=${mealCriteria.category}, calories=${targetCalories}${mealNameFromRules ? `, name="${mealNameFromRules}"` : ""}`
-    );
+    let allMeals: IMeal[] = [];
+    let dbCount = 0;
+    let aiCount = 0;
 
-    const dbMeals = await this.findMatchingMeals(
-      mealCriteria.category,
-      targetCalories,
-      user as IUserData,
-      numberOfSuggestions,
-      mealNameFromRules // Pass extracted name for free-text search
-    );
-
-    logger.info(
-      `[generateMealSuggestions] Found ${dbMeals.length} meals from DB, need ${numberOfSuggestions} total`
-    );
-
-    // Convert DB meals to IMeal format
-    const dbMealsFormatted: IMeal[] = dbMeals.map((meal: any) => ({
-      _id: meal._id.toString(),
-      name: meal.name,
-      calories: meal.calories,
-      macros: meal.macros || { protein: 0, carbs: 0, fat: 0 },
-      category: meal.category,
-      prepTime: parsePrepTime(meal.prepTime),
-      ingredients: meal.ingredients || [],
-    }));
-
-    // STEP 2: Fill remaining slots with AI-generated meals (if needed)
-    const remainingSlots = Math.max(
-      0,
-      numberOfSuggestions - dbMealsFormatted.length
-    );
-    let aiMeals: IMeal[] = [];
-
-    if (remainingSlots > 0) {
+    // PRIORITY FLOW: If user requested a specific meal (e.g., "beef steak"), generate variations FIRST
+    if (isMealNameRequest && mealNameFromRules) {
       logger.info(
-        `[generateMealSuggestions] Generating ${remainingSlots} meals via AI to fill remaining slots`
+        `[generateMealSuggestions] PRIORITY MODE: Generating ${numberOfSuggestions} variations of "${mealNameFromRules}"`
       );
 
-      // Generate only the remaining number of meals needed
+      // Generate variations of the requested meal via AI
       const aiCriteria = {
         ...mealCriteria,
-        numberOfSuggestions: remainingSlots,
+        numberOfSuggestions,
+        aiRules: `Generate ${numberOfSuggestions} different variations of "${mealNameFromRules}". Each variation should be unique (e.g., different cooking methods, seasonings, sides, or preparations) but all based on "${mealNameFromRules}". Examples: "Grilled ${mealNameFromRules}", "Pan-Seared ${mealNameFromRules}", "${mealNameFromRules} with Herbs", etc.`,
       };
 
-      aiMeals = await aiService.generateMealSuggestions(aiCriteria, language);
+      const aiMeals = await aiService.generateMealSuggestions(aiCriteria, language);
+
+      // Calculate nutrition using USDA for each generated meal
+      const mealsWithUsdaNutrition: IMeal[] = [];
+      for (const meal of aiMeals) {
+        try {
+          // If meal has ingredients, calculate nutrition from USDA
+          if (meal.ingredients && meal.ingredients.length > 0) {
+            const ingredientPairs: Array<[string, string]> = meal.ingredients.map((ing) => {
+              if (Array.isArray(ing)) {
+                return [ing[0] || "", ing[1] || "100g"];
+              }
+              return [String(ing), "100g"];
+            });
+
+            const usdaNutrition = await this.usdaNutritionService.calculateMealNutrition(
+              ingredientPairs
+            );
+
+            // Use USDA nutrition if available and reasonable
+            if (usdaNutrition.source !== "estimated" && usdaNutrition.calories > 0) {
+              meal.calories = usdaNutrition.calories;
+              meal.macros = usdaNutrition.macros;
+              logger.debug(
+                `[generateMealSuggestions] Used USDA nutrition for "${meal.name}": ${meal.calories} cal`
+              );
+            }
+          }
+        } catch (error) {
+          logger.warn(
+            `[generateMealSuggestions] Failed to calculate USDA nutrition for "${meal.name}": ${error instanceof Error ? error.message : String(error)}`
+          );
+          // Keep AI-generated nutrition as fallback
+        }
+
+        mealsWithUsdaNutrition.push(meal);
+      }
+
+      allMeals = mealsWithUsdaNutrition;
+      aiCount = allMeals.length;
+      dbCount = 0;
 
       // Save AI-generated meals to database for future reuse
-      if (aiMeals.length > 0) {
+      if (allMeals.length > 0) {
         try {
           await this.mealModel.insertMany(
-            aiMeals.map((meal) => ({
+            allMeals.map((meal) => ({
               ...meal,
               aiGenerated: true,
               analytics: {
@@ -1021,40 +1037,141 @@ export class GeneratorService {
             }))
           );
           logger.info(
-            `[generateMealSuggestions] Saved ${aiMeals.length} AI-generated meals to DB`
+            `[generateMealSuggestions] Saved ${allMeals.length} meal variations to DB`
           );
         } catch (error) {
           logger.warn(
-            `[generateMealSuggestions] Failed to save some AI meals to DB: ${error instanceof Error ? error.message : String(error)}`
+            `[generateMealSuggestions] Failed to save some meals to DB: ${error instanceof Error ? error.message : String(error)}`
           );
         }
       }
     } else {
+      // STANDARD FLOW: Query DB first, then fill with AI if needed
       logger.info(
-        `[generateMealSuggestions] All ${numberOfSuggestions} meals found in DB, no AI generation needed!`
+        `[generateMealSuggestions] Standard mode: Querying DB first for category=${mealCriteria.category}, calories=${targetCalories}`
       );
-    }
 
-    // STEP 3: Combine DB meals and AI meals, prioritizing DB meals
-    const allMeals = [...dbMealsFormatted, ...aiMeals].slice(
-      0,
-      numberOfSuggestions
-    );
+      const dbMeals = await this.findMatchingMeals(
+        mealCriteria.category,
+        targetCalories,
+        user as IUserData,
+        numberOfSuggestions,
+        mealNameFromRules
+      );
 
-    // Update usage count for DB meals
-    for (const meal of dbMealsFormatted) {
-      try {
-        await this.mealModel.findByIdAndUpdate(meal._id, {
-          $inc: { "analytics.timesGenerated": 1 },
-        });
-      } catch (error) {
-        // Ignore errors updating analytics
+      logger.info(
+        `[generateMealSuggestions] Found ${dbMeals.length} meals from DB, need ${numberOfSuggestions} total`
+      );
+
+      // Convert DB meals to IMeal format
+      const dbMealsFormatted: IMeal[] = dbMeals.map((meal: any) => ({
+        _id: meal._id.toString(),
+        name: meal.name,
+        calories: meal.calories,
+        macros: meal.macros || { protein: 0, carbs: 0, fat: 0 },
+        category: meal.category,
+        prepTime: parsePrepTime(meal.prepTime),
+        ingredients: meal.ingredients || [],
+      }));
+
+      // Fill remaining slots with AI-generated meals (if needed)
+      const remainingSlots = Math.max(
+        0,
+        numberOfSuggestions - dbMealsFormatted.length
+      );
+      let aiMeals: IMeal[] = [];
+
+      if (remainingSlots > 0) {
+        logger.info(
+          `[generateMealSuggestions] Generating ${remainingSlots} meals via AI to fill remaining slots`
+        );
+
+        const aiCriteria = {
+          ...mealCriteria,
+          numberOfSuggestions: remainingSlots,
+        };
+
+        aiMeals = await aiService.generateMealSuggestions(aiCriteria, language);
+
+        // Calculate USDA nutrition for AI-generated meals
+        for (const meal of aiMeals) {
+          try {
+            if (meal.ingredients && meal.ingredients.length > 0) {
+              const ingredientPairs: Array<[string, string]> = meal.ingredients.map((ing) => {
+                if (Array.isArray(ing)) {
+                  return [ing[0] || "", ing[1] || "100g"];
+                }
+                return [String(ing), "100g"];
+              });
+
+              const usdaNutrition = await this.usdaNutritionService.calculateMealNutrition(
+                ingredientPairs
+              );
+
+              if (usdaNutrition.source !== "estimated" && usdaNutrition.calories > 0) {
+                meal.calories = usdaNutrition.calories;
+                meal.macros = usdaNutrition.macros;
+              }
+            }
+          } catch (error) {
+            // Keep AI nutrition as fallback
+          }
+        }
+
+        // Save AI-generated meals to database
+        if (aiMeals.length > 0) {
+          try {
+            await this.mealModel.insertMany(
+              aiMeals.map((meal) => ({
+                ...meal,
+                aiGenerated: true,
+                analytics: {
+                  timesGenerated: 1,
+                },
+              }))
+            );
+            logger.info(
+              `[generateMealSuggestions] Saved ${aiMeals.length} AI-generated meals to DB`
+            );
+          } catch (error) {
+            logger.warn(
+              `[generateMealSuggestions] Failed to save some AI meals to DB: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
+      } else {
+        logger.info(
+          `[generateMealSuggestions] All ${numberOfSuggestions} meals found in DB, no AI generation needed!`
+        );
+      }
+
+      // Combine DB meals and AI meals, prioritizing DB meals
+      allMeals = [...dbMealsFormatted, ...aiMeals].slice(
+        0,
+        numberOfSuggestions
+      );
+
+      // Track counts
+      dbCount = dbMealsFormatted.length;
+      aiCount = aiMeals.length;
+
+      // Update usage count for DB meals
+      for (const meal of dbMealsFormatted) {
+        try {
+          await this.mealModel.findByIdAndUpdate(meal._id, {
+            $inc: { "analytics.timesGenerated": 1 },
+          });
+        } catch (error) {
+          // Ignore errors updating analytics
+        }
       }
     }
 
     return {
       success: true,
-      message: `Generated ${allMeals.length} meal suggestions (${dbMealsFormatted.length} from DB, ${aiMeals.length} from AI)`,
+      message: isMealNameRequest
+        ? `Generated ${allMeals.length} variations of "${mealNameFromRules}"`
+        : `Generated ${allMeals.length} meal suggestions (${dbCount} from DB, ${aiCount} from AI)`,
       data: {
         meals: allMeals,
         criteria: {
@@ -1063,8 +1180,9 @@ export class GeneratorService {
           numberOfSuggestions: numberOfSuggestions,
         },
         source: {
-          fromDatabase: dbMealsFormatted.length,
-          fromAI: aiMeals.length,
+          fromDatabase: dbCount,
+          fromAI: aiCount,
+          priority: isMealNameRequest ? "aiRules" : "standard",
         },
       },
     };
