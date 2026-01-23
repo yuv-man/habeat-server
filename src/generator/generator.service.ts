@@ -971,7 +971,7 @@ export class GeneratorService {
 
     // PRIORITY FLOW: If user requested a specific meal (e.g., "beef steak"), generate variations FIRST
     if (isMealNameRequest && mealNameFromRules) {
-      logger.info(
+    logger.info(
         `[generateMealSuggestions] PRIORITY MODE: Generating ${numberOfSuggestions} variations of "${mealNameFromRules}"`
       );
 
@@ -1020,7 +1020,75 @@ export class GeneratorService {
         mealsWithUsdaNutrition.push(meal);
       }
 
-      allMeals = mealsWithUsdaNutrition;
+      // Validate that all meals actually contain the requested meal name
+      const mealNameLower = mealNameFromRules.toLowerCase();
+      const validatedMeals = mealsWithUsdaNutrition.filter((meal) => {
+        const mealName = meal.name.toLowerCase();
+        // Check if meal name contains the requested meal name
+        const containsRequestedMeal = mealName.includes(mealNameLower);
+        if (!containsRequestedMeal) {
+          logger.warn(
+            `[generateMealSuggestions] Filtered out meal "${meal.name}" - doesn't contain requested "${mealNameFromRules}"`
+          );
+        }
+        return containsRequestedMeal;
+      });
+
+      // If we filtered out meals, log warning
+      if (validatedMeals.length < mealsWithUsdaNutrition.length) {
+        logger.warn(
+          `[generateMealSuggestions] Filtered out ${mealsWithUsdaNutrition.length - validatedMeals.length} meals that didn't match "${mealNameFromRules}"`
+        );
+      }
+
+      // If we don't have enough meals after validation, generate more
+      if (validatedMeals.length < numberOfSuggestions) {
+        logger.info(
+          `[generateMealSuggestions] Only ${validatedMeals.length} valid meals found, need ${numberOfSuggestions}. Generating more...`
+        );
+        const needed = numberOfSuggestions - validatedMeals.length;
+        const additionalCriteria = {
+          ...mealCriteria,
+          numberOfSuggestions: needed,
+          aiRules: `Generate ${needed} different variations of "${mealNameFromRules}". Each variation MUST include "${mealNameFromRules}" in the name. Examples: "Grilled ${mealNameFromRules}", "Pan-Seared ${mealNameFromRules}", "${mealNameFromRules} with Herbs".`,
+        };
+        
+        const additionalMeals = await aiService.generateMealSuggestions(additionalCriteria, language);
+        
+        // Validate and add additional meals
+        for (const meal of additionalMeals) {
+          const mealName = meal.name.toLowerCase();
+          if (mealName.includes(mealNameLower)) {
+            // Calculate USDA nutrition
+            try {
+              if (meal.ingredients && meal.ingredients.length > 0) {
+                const ingredientPairs: Array<[string, string]> = meal.ingredients.map((ing) => {
+                  if (Array.isArray(ing)) {
+                    return [ing[0] || "", ing[1] || "100g"];
+                  }
+                  return [String(ing), "100g"];
+                });
+
+                const usdaNutrition = await this.usdaNutritionService.calculateMealNutrition(
+                  ingredientPairs
+                );
+
+                if (usdaNutrition.source !== "estimated" && usdaNutrition.calories > 0) {
+                  meal.calories = usdaNutrition.calories;
+                  meal.macros = usdaNutrition.macros;
+                }
+              }
+            } catch (error) {
+              // Keep AI nutrition as fallback
+            }
+            
+            validatedMeals.push(meal);
+            if (validatedMeals.length >= numberOfSuggestions) break;
+          }
+        }
+      }
+
+      allMeals = validatedMeals.slice(0, numberOfSuggestions);
       aiCount = allMeals.length;
       dbCount = 0;
 
@@ -1049,49 +1117,49 @@ export class GeneratorService {
       // STANDARD FLOW: Query DB first, then fill with AI if needed
       logger.info(
         `[generateMealSuggestions] Standard mode: Querying DB first for category=${mealCriteria.category}, calories=${targetCalories}`
-      );
+    );
 
-      const dbMeals = await this.findMatchingMeals(
-        mealCriteria.category,
-        targetCalories,
-        user as IUserData,
-        numberOfSuggestions,
+    const dbMeals = await this.findMatchingMeals(
+      mealCriteria.category,
+      targetCalories,
+      user as IUserData,
+      numberOfSuggestions,
         mealNameFromRules
-      );
+    );
 
-      logger.info(
-        `[generateMealSuggestions] Found ${dbMeals.length} meals from DB, need ${numberOfSuggestions} total`
-      );
+    logger.info(
+      `[generateMealSuggestions] Found ${dbMeals.length} meals from DB, need ${numberOfSuggestions} total`
+    );
 
-      // Convert DB meals to IMeal format
-      const dbMealsFormatted: IMeal[] = dbMeals.map((meal: any) => ({
-        _id: meal._id.toString(),
-        name: meal.name,
-        calories: meal.calories,
-        macros: meal.macros || { protein: 0, carbs: 0, fat: 0 },
-        category: meal.category,
-        prepTime: parsePrepTime(meal.prepTime),
-        ingredients: meal.ingredients || [],
-      }));
+    // Convert DB meals to IMeal format
+    const dbMealsFormatted: IMeal[] = dbMeals.map((meal: any) => ({
+      _id: meal._id.toString(),
+      name: meal.name,
+      calories: meal.calories,
+      macros: meal.macros || { protein: 0, carbs: 0, fat: 0 },
+      category: meal.category,
+      prepTime: parsePrepTime(meal.prepTime),
+      ingredients: meal.ingredients || [],
+    }));
 
       // Fill remaining slots with AI-generated meals (if needed)
-      const remainingSlots = Math.max(
-        0,
-        numberOfSuggestions - dbMealsFormatted.length
+    const remainingSlots = Math.max(
+      0,
+      numberOfSuggestions - dbMealsFormatted.length
+    );
+    let aiMeals: IMeal[] = [];
+
+    if (remainingSlots > 0) {
+      logger.info(
+        `[generateMealSuggestions] Generating ${remainingSlots} meals via AI to fill remaining slots`
       );
-      let aiMeals: IMeal[] = [];
 
-      if (remainingSlots > 0) {
-        logger.info(
-          `[generateMealSuggestions] Generating ${remainingSlots} meals via AI to fill remaining slots`
-        );
+      const aiCriteria = {
+        ...mealCriteria,
+        numberOfSuggestions: remainingSlots,
+      };
 
-        const aiCriteria = {
-          ...mealCriteria,
-          numberOfSuggestions: remainingSlots,
-        };
-
-        aiMeals = await aiService.generateMealSuggestions(aiCriteria, language);
+      aiMeals = await aiService.generateMealSuggestions(aiCriteria, language);
 
         // Calculate USDA nutrition for AI-generated meals
         for (const meal of aiMeals) {
@@ -1119,50 +1187,50 @@ export class GeneratorService {
         }
 
         // Save AI-generated meals to database
-        if (aiMeals.length > 0) {
-          try {
-            await this.mealModel.insertMany(
-              aiMeals.map((meal) => ({
-                ...meal,
-                aiGenerated: true,
-                analytics: {
-                  timesGenerated: 1,
-                },
-              }))
-            );
-            logger.info(
-              `[generateMealSuggestions] Saved ${aiMeals.length} AI-generated meals to DB`
-            );
-          } catch (error) {
-            logger.warn(
-              `[generateMealSuggestions] Failed to save some AI meals to DB: ${error instanceof Error ? error.message : String(error)}`
-            );
-          }
+      if (aiMeals.length > 0) {
+        try {
+          await this.mealModel.insertMany(
+            aiMeals.map((meal) => ({
+              ...meal,
+              aiGenerated: true,
+              analytics: {
+                timesGenerated: 1,
+              },
+            }))
+          );
+          logger.info(
+            `[generateMealSuggestions] Saved ${aiMeals.length} AI-generated meals to DB`
+          );
+        } catch (error) {
+          logger.warn(
+            `[generateMealSuggestions] Failed to save some AI meals to DB: ${error instanceof Error ? error.message : String(error)}`
+          );
         }
-      } else {
-        logger.info(
-          `[generateMealSuggestions] All ${numberOfSuggestions} meals found in DB, no AI generation needed!`
-        );
       }
+    } else {
+      logger.info(
+        `[generateMealSuggestions] All ${numberOfSuggestions} meals found in DB, no AI generation needed!`
+      );
+    }
 
       // Combine DB meals and AI meals, prioritizing DB meals
       allMeals = [...dbMealsFormatted, ...aiMeals].slice(
-        0,
-        numberOfSuggestions
-      );
+      0,
+      numberOfSuggestions
+    );
 
       // Track counts
       dbCount = dbMealsFormatted.length;
       aiCount = aiMeals.length;
 
-      // Update usage count for DB meals
-      for (const meal of dbMealsFormatted) {
-        try {
-          await this.mealModel.findByIdAndUpdate(meal._id, {
-            $inc: { "analytics.timesGenerated": 1 },
-          });
-        } catch (error) {
-          // Ignore errors updating analytics
+    // Update usage count for DB meals
+    for (const meal of dbMealsFormatted) {
+      try {
+        await this.mealModel.findByIdAndUpdate(meal._id, {
+          $inc: { "analytics.timesGenerated": 1 },
+        });
+      } catch (error) {
+        // Ignore errors updating analytics
         }
       }
     }

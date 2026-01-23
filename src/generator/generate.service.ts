@@ -1481,7 +1481,92 @@ const generateMealSuggestions = async (
   const numberOfSuggestions = mealCriteria.numberOfSuggestions || 3;
   const targetCalories = mealCriteria.targetCalories || 500;
 
-  const prompt = `You are a professional nutritionist. Generate exactly ${numberOfSuggestions} unique ${mealCriteria.category} meal suggestions.
+  // Check if aiRules contains a meal name request (variations request)
+  const isVariationRequest = mealCriteria.aiRules?.includes("variations of") || 
+                             mealCriteria.aiRules?.includes("variation of") ||
+                             (mealCriteria.aiRules && mealCriteria.aiRules.length < 50 && 
+                              !mealCriteria.aiRules.toLowerCase().includes("make") &&
+                              !mealCriteria.aiRules.toLowerCase().includes("create") &&
+                              !mealCriteria.aiRules.toLowerCase().includes("generate"));
+
+  // Extract meal name if it's a variation request
+  let requestedMeal: string | undefined;
+  if (isVariationRequest && mealCriteria.aiRules) {
+    const mealNameMatch = mealCriteria.aiRules.match(/variations? of ["']?([^"']+)["']?/i) || 
+                         mealCriteria.aiRules.match(/["']?([^"']+)["']?/);
+    requestedMeal = mealNameMatch ? mealNameMatch[1] : mealCriteria.aiRules.trim();
+  }
+
+  // Build prompt with priority handling for meal name requests
+  let prompt = "";
+  
+  if (isVariationRequest && requestedMeal) {
+    // PRIORITY MODE: User requested specific meal variations
+    prompt = `You are a professional nutritionist. Generate exactly ${numberOfSuggestions} UNIQUE VARIATIONS of "${requestedMeal}".
+
+====== CRITICAL REQUIREMENT ======
+ALL ${numberOfSuggestions} meals MUST be variations of "${requestedMeal}".
+Each meal name MUST include "${requestedMeal}" or clearly reference it.
+Examples of valid variations:
+- "Grilled ${requestedMeal}"
+- "Pan-Seared ${requestedMeal}"
+- "${requestedMeal} with Herbs"
+- "Garlic ${requestedMeal}"
+- "Spicy ${requestedMeal}"
+- "${requestedMeal} and Vegetables"
+
+DO NOT generate meals that don't include "${requestedMeal}" in the name.
+DO NOT generate completely different meals.
+ALL meals must be variations of "${requestedMeal}".
+
+## Requirements:
+- Category: ${mealCriteria.category}
+- Target calories per meal: approximately ${targetCalories} calories (±10%)
+- Language for meal names and ingredients: ${language}
+${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
+${mealCriteria.preferences?.length ? `- Preferences (try to include): ${mealCriteria.preferences.join(", ")}` : ""}
+${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
+
+Return a JSON object with a "meals" array containing exactly ${numberOfSuggestions} meal objects.
+
+Each meal MUST have ALL these fields:
+{
+  "meals": [
+    {
+      "name": "Meal Name",
+      "calories": 500,
+      "macros": {
+        "protein": 30,
+        "carbs": 50,
+        "fat": 15
+      },
+      "category": "${mealCriteria.category}",
+      "ingredients": [
+        ["ingredient_name_with_underscores", "100 g"],
+        ["another_ingredient", "50 ml"]
+      ],
+      "prepTime": 20
+    }
+  ]
+}
+
+## Rules:
+1. "name" - descriptive meal name in ${language}
+   ${isVariationRequest && requestedMeal ? `- CRITICAL: MUST include "${requestedMeal}" in the name (e.g., "Grilled ${requestedMeal}", "Pan-Seared ${requestedMeal}")` : ""}
+   - MUST use spaces between words (e.g., "Stuffed Bell Peppers", "Grilled Chicken Salad")
+   - MUST use proper capitalization (Title Case, e.g., "Stuffed Bell Peppers" NOT "stuffed_bell_peppers")
+   - DO NOT use underscores in meal names
+2. "calories" - integer, close to ${targetCalories}
+3. "macros" - protein, carbs, fat in grams (integers), must add up reasonably to calories
+4. "category" - must be "${mealCriteria.category}"
+5. "ingredients" - array of [name, amount] tuples
+   - name: lowercase with underscores (e.g., "chicken_breast", "olive_oil")
+   - amount: number followed by unit (e.g., "200 g", "50 ml", "2 pieces")
+   - NOTE: Ingredient names use underscores, but meal names use spaces!
+6. "prepTime" - preparation time in minutes (integer)`;
+  } else {
+    // STANDARD MODE: General meal suggestions
+    prompt = `You are a professional nutritionist. Generate exactly ${numberOfSuggestions} unique ${mealCriteria.category} meal suggestions.
 
 ## Requirements:
 - Category: ${mealCriteria.category}
@@ -1529,6 +1614,7 @@ Each meal MUST have ALL these fields:
    - amount: number followed by unit (e.g., "200 g", "50 ml", "2 pieces")
    - NOTE: Ingredient names use underscores, but meal names use spaces!
 6. "prepTime" - preparation time in minutes (integer)`;
+  }
 
   const parseResponse = (jsonText: string): IMeal[] => {
     const parsed = JSON.parse(jsonText);
