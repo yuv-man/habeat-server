@@ -51,6 +51,9 @@ export class Challenge {
   @Prop({ required: true, default: 7 })
   daysRequired: number;
 
+  @Prop({ required: true, enum: ["daily", "weekly"], default: "weekly" })
+  period: string;
+
   @Prop({ required: true, enum: ["starter", "building", "established", "easy", "medium", "hard"] })
   difficulty: string;
 

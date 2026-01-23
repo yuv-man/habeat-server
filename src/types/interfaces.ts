@@ -89,6 +89,7 @@ export interface IChallenge {
   target: number; // Goal to achieve
   progress: number; // Current progress
   daysRequired: number; // Duration of the habit challenge
+  period: "daily" | "weekly"; // Daily = can complete in 1 day, Weekly = spans multiple days
   difficulty: ChallengeDifficulty;
   status: ChallengeStatus;
   badgeId?: string; // Badge awarded on completion

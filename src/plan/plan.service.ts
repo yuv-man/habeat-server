@@ -50,6 +50,7 @@ import {
   calculateMacros,
 } from "../utils/healthCalculations";
 import { PATH_WATER_INTAKE, PATH_WORKOUTS_GOAL } from "../enums/enumPaths";
+import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 
 @Injectable()
 export class PlanService {
@@ -61,8 +62,8 @@ export class PlanService {
     @InjectModel(Meal.name) private mealModel: Model<IMeal>,
     @InjectModel(DailyProgress.name)
     private progressModel: Model<IDailyProgress>,
-    private progressService: ProgressService,
-    private generatorService: GeneratorService
+    private generatorService: GeneratorService,
+    private usdaNutritionService: UsdaNutritionService
   ) {}
 
   // ============================================================================
@@ -288,7 +289,53 @@ export class PlanService {
       generatedMeal.ingredients || []
     );
 
-    // Step 3: Save the generated meal to database
+    // Step 3: Calculate nutrition using USDA if ingredients are available
+    let finalCalories = generatedMeal.calories || targetCalories || 400;
+    let finalMacros = generatedMeal.macros || { protein: 20, carbs: 40, fat: 15 };
+
+    // If we have ingredients, try to calculate nutrition from USDA
+    if (mealIngredients && mealIngredients.length > 0) {
+      try {
+        // Convert ingredients to format expected by USDA service: [["name", "amount"], ...]
+        const ingredientPairs: Array<[string, string]> = mealIngredients.map((ing) => {
+          if (Array.isArray(ing)) {
+            return [ing[0] || "", ing[1] || "100g"];
+          }
+          return [String(ing), "100g"];
+        });
+
+        const usdaNutrition = await this.usdaNutritionService.calculateMealNutrition(
+          ingredientPairs
+        );
+
+        // Use USDA nutrition if available and reasonable
+        if (usdaNutrition.source !== "estimated" && usdaNutrition.calories > 0) {
+          finalCalories = usdaNutrition.calories;
+          finalMacros = usdaNutrition.macros;
+          logger.info(
+            `[getOrGenerateMeal] Using USDA nutrition for ${mealName}: ${finalCalories} cal (${usdaNutrition.source})`
+          );
+        } else if (usdaNutrition.calories > 0) {
+          // Even if partially estimated, use it if it's reasonable
+          finalCalories = usdaNutrition.calories;
+          finalMacros = usdaNutrition.macros;
+          logger.info(
+            `[getOrGenerateMeal] Using partial USDA nutrition for ${mealName}: ${finalCalories} cal`
+          );
+        } else {
+          logger.info(
+            `[getOrGenerateMeal] USDA lookup failed for ${mealName}, using AI estimates`
+          );
+        }
+      } catch (error: any) {
+        logger.warn(
+          `[getOrGenerateMeal] Error calculating USDA nutrition: ${error.message}, using AI estimates`
+        );
+        // Fall back to AI estimates if USDA fails
+      }
+    }
+
+    // Step 4: Save the generated meal to database
     const mealSignature = this.calculateMealSignature({
       ...generatedMeal,
       category,
@@ -297,8 +344,8 @@ export class PlanService {
 
     const newMeal = await this.mealModel.create({
       name: generatedMeal.name || mealName,
-      calories: generatedMeal.calories || targetCalories || 400,
-      macros: generatedMeal.macros || { protein: 20, carbs: 40, fat: 15 },
+      calories: finalCalories,
+      macros: finalMacros,
       category: category,
       prepTime: parsePrepTime(generatedMeal.prepTime),
       ingredients: mealIngredients,

@@ -14,12 +14,66 @@ interface HabitChallengeTemplate {
   icon: string;
   target: number;
   daysRequired: number;
+  period: "daily" | "weekly"; // Daily = can complete in 1 day, Weekly = spans multiple days
   difficulty: ChallengeDifficulty;
   badgeId?: string; // Optional badge awarded on completion
 }
 
-// Habit-focused challenge templates organized by difficulty
+// Habit-focused challenge templates organized by difficulty and period
 const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
+  // ========== DAILY CHALLENGES (Quick wins - can complete in 1 day) ==========
+  {
+    type: "daily_logging",
+    title: "Complete Day",
+    description: "Log all meals today",
+    icon: "check-circle",
+    target: 1,
+    daysRequired: 1,
+    period: "daily",
+    difficulty: "starter",
+  },
+  {
+    type: "hydration_habit",
+    title: "Hydration Goal",
+    description: "Hit your water goal today",
+    icon: "droplet",
+    target: 1,
+    daysRequired: 1,
+    period: "daily",
+    difficulty: "starter",
+  },
+  {
+    type: "protein_focus",
+    title: "Protein Power",
+    description: "Hit your protein goal today",
+    icon: "beef",
+    target: 1,
+    daysRequired: 1,
+    period: "daily",
+    difficulty: "starter",
+  },
+  {
+    type: "balanced_eating",
+    title: "Balanced Day",
+    description: "Hit macro balance today",
+    icon: "scale",
+    target: 1,
+    daysRequired: 1,
+    period: "daily",
+    difficulty: "building",
+  },
+  {
+    type: "breakfast_habit",
+    title: "Morning Win",
+    description: "Log breakfast today",
+    icon: "sunrise",
+    target: 1,
+    daysRequired: 1,
+    period: "daily",
+    difficulty: "starter",
+  },
+
+  // ========== WEEKLY CHALLENGES (Long-term - spans multiple days) ==========
   // Starter habits (3-day) - Build initial momentum
   {
     type: "breakfast_habit",
@@ -28,6 +82,7 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     icon: "utensils",
     target: 3,
     daysRequired: 3,
+    period: "weekly",
     difficulty: "starter",
   },
   {
@@ -37,6 +92,7 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     icon: "droplet",
     target: 3,
     daysRequired: 3,
+    period: "weekly",
     difficulty: "starter",
   },
   {
@@ -46,6 +102,7 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     icon: "clipboard-list",
     target: 3,
     daysRequired: 3,
+    period: "weekly",
     difficulty: "starter",
   },
 
@@ -57,6 +114,7 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     icon: "award",
     target: 7,
     daysRequired: 7,
+    period: "weekly",
     difficulty: "building",
   },
   {
@@ -66,6 +124,7 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     icon: "scale",
     target: 5,
     daysRequired: 7,
+    period: "weekly",
     difficulty: "building",
   },
   {
@@ -75,6 +134,7 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     icon: "droplets",
     target: 7,
     daysRequired: 7,
+    period: "weekly",
     difficulty: "building",
     badgeId: "hydration_habit",
   },
@@ -85,6 +145,7 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     icon: "beef",
     target: 5,
     daysRequired: 7,
+    period: "weekly",
     difficulty: "building",
   },
 
@@ -96,6 +157,7 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     icon: "trophy",
     target: 14,
     daysRequired: 14,
+    period: "weekly",
     difficulty: "established",
   },
   {
@@ -105,6 +167,7 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     icon: "star",
     target: 14,
     daysRequired: 14,
+    period: "weekly",
     difficulty: "established",
     badgeId: "two_weeks",
   },
@@ -115,6 +178,7 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     icon: "medal",
     target: 12,
     daysRequired: 14,
+    period: "weekly",
     difficulty: "established",
     badgeId: "protein_pro",
   },
@@ -125,6 +189,7 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     icon: "flame",
     target: 14,
     daysRequired: 14,
+    period: "weekly",
     difficulty: "established",
   },
 ];
@@ -143,9 +208,12 @@ export class ChallengeService {
     // First, expire any challenges that are past their end date
     await this.expireOldChallenges(userId);
 
+    // Ensure we have a good mix of daily and weekly challenges
+    await this.ensureChallengeBalance(userId);
+
     const challenges = await this.challengeModel
       .find({ userId, status: "active" })
-      .sort({ endDate: 1 })
+      .sort({ period: 1, endDate: 1 }) // Daily challenges first, then weekly
       .lean();
 
     return challenges as unknown as IChallenge[];
@@ -179,56 +247,68 @@ export class ChallengeService {
 
   /**
    * Assign new habit challenges to a user
-   * Called when user has fewer than 2 active challenges
+   * Ensures a mix of daily (quick wins) and weekly (long-term) challenges
    */
   async assignChallenges(userId: string): Promise<IChallenge[]> {
     const activeChallenges = await this.getActiveChallenges(userId);
 
-    // User should have 2 active habit challenges at a time (simpler than 3)
-    const needed = 2 - activeChallenges.length;
-    if (needed <= 0) {
+    // Count active challenges by period
+    const dailyChallenges = activeChallenges.filter((c) => c.period === "daily");
+    const weeklyChallenges = activeChallenges.filter((c) => c.period === "weekly");
+
+    // Target: 1-2 daily challenges and 1-2 weekly challenges (total 2-3 active)
+    const targetDaily = 1;
+    const targetWeekly = 1;
+    const neededDaily = Math.max(0, targetDaily - dailyChallenges.length);
+    const neededWeekly = Math.max(0, targetWeekly - weeklyChallenges.length);
+    const totalNeeded = neededDaily + neededWeekly;
+
+    if (totalNeeded <= 0) {
       return activeChallenges;
     }
 
     // Get types of current active challenges to avoid duplicates
     const activeTypes = new Set(activeChallenges.map((c) => c.type));
 
-    // Filter available templates
-    const availableTemplates = HABIT_CHALLENGE_TEMPLATES.filter(
-      (t) => !activeTypes.has(t.type)
-    );
-
-    // Pick random challenges, preferring variety in difficulty
     const newChallenges: IChallenge[] = [];
-    const shuffled = this.shuffleArray([...availableTemplates]);
 
-    // Try to get a mix of difficulties - prefer starter for new users
-    const difficulties: ChallengeDifficulty[] = ["starter", "building", "established"];
-    let difficultyIndex = 0;
+    // Assign daily challenges first (quick wins)
+    if (neededDaily > 0) {
+      const dailyTemplates = HABIT_CHALLENGE_TEMPLATES.filter(
+        (t) => t.period === "daily" && !activeTypes.has(t.type)
+      );
+      const shuffledDaily = this.shuffleArray([...dailyTemplates]);
 
-    for (const template of shuffled) {
-      if (newChallenges.length >= needed) break;
-
-      // Try to match the desired difficulty, but accept any if needed
-      const targetDifficulty = difficulties[difficultyIndex % 3];
-      if (template.difficulty === targetDifficulty || newChallenges.length === needed - 1) {
+      for (let i = 0; i < Math.min(neededDaily, shuffledDaily.length); i++) {
+        const template = shuffledDaily[i];
         const challenge = await this.createHabitChallenge(userId, template);
         newChallenges.push(challenge);
-        difficultyIndex++;
+        activeTypes.add(template.type); // Prevent duplicates
       }
     }
 
-    // If we still need more, just grab any remaining
-    for (const template of shuffled) {
-      if (newChallenges.length >= needed) break;
-      if (!newChallenges.find((c) => c.type === template.type)) {
+    // Assign weekly challenges (long-term goals)
+    if (neededWeekly > 0) {
+      const weeklyTemplates = HABIT_CHALLENGE_TEMPLATES.filter(
+        (t) => t.period === "weekly" && !activeTypes.has(t.type)
+      );
+      const shuffledWeekly = this.shuffleArray([...weeklyTemplates]);
+
+      // Prefer starter difficulty for new users
+      const sortedWeekly = shuffledWeekly.sort((a, b) => {
+        const difficultyOrder = { starter: 0, building: 1, established: 2 };
+        return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
+      });
+
+      for (let i = 0; i < Math.min(neededWeekly, sortedWeekly.length); i++) {
+        const template = sortedWeekly[i];
         const challenge = await this.createHabitChallenge(userId, template);
         newChallenges.push(challenge);
       }
     }
 
     logger.info(
-      `[ChallengeService] Assigned ${newChallenges.length} new habit challenges to user ${userId}`
+      `[ChallengeService] Assigned ${newChallenges.length} new challenges (${neededDaily} daily, ${neededWeekly} weekly) to user ${userId}`
     );
 
     return [...activeChallenges, ...newChallenges];
@@ -242,8 +322,18 @@ export class ChallengeService {
     template: HabitChallengeTemplate
   ): Promise<IChallenge> {
     const now = new Date();
-    const endDate = new Date(now);
-    endDate.setDate(endDate.getDate() + template.daysRequired);
+    let endDate: Date;
+
+    if (template.period === "daily") {
+      // Daily challenges expire at end of today
+      endDate = new Date(now);
+      endDate.setHours(23, 59, 59, 999);
+    } else {
+      // Weekly challenges span multiple days
+      endDate = new Date(now);
+      endDate.setDate(endDate.getDate() + template.daysRequired);
+      endDate.setHours(23, 59, 59, 999);
+    }
 
     const challenge = new this.challengeModel({
       userId,
@@ -254,6 +344,7 @@ export class ChallengeService {
       target: template.target,
       progress: 0,
       daysRequired: template.daysRequired,
+      period: template.period,
       difficulty: template.difficulty,
       badgeId: template.badgeId,
       status: "active",
@@ -335,7 +426,7 @@ export class ChallengeService {
       `[ChallengeService] Habit challenge completed: ${challenge.title}${badgeAwarded ? `, badge: ${badgeAwarded}` : ""} for user ${userId}`
     );
 
-    // Assign new challenges if needed
+    // Assign new challenges if needed (especially daily challenges for quick wins)
     await this.assignChallenges(userId);
 
     return {
@@ -350,16 +441,76 @@ export class ChallengeService {
    */
   private async expireOldChallenges(userId: string): Promise<void> {
     const now = new Date();
+    
+    // Expire weekly challenges that are past their end date
     await this.challengeModel.updateMany(
       {
         userId,
         status: "active",
+        period: "weekly",
         endDate: { $lt: now },
       },
       {
         $set: { status: "expired" },
       }
     );
+
+    // Expire daily challenges that are past end of day
+    const endOfToday = new Date(now);
+    endOfToday.setHours(23, 59, 59, 999);
+    
+    await this.challengeModel.updateMany(
+      {
+        userId,
+        status: "active",
+        period: "daily",
+        endDate: { $lt: endOfToday },
+      },
+      {
+        $set: { status: "expired" },
+      }
+    );
+  }
+
+  /**
+   * Ensure user has a balanced mix of daily and weekly challenges
+   * Auto-assigns new daily challenges if needed
+   */
+  private async ensureChallengeBalance(userId: string): Promise<void> {
+    const activeChallenges = await this.challengeModel.find({
+      userId,
+      status: "active",
+    });
+
+    const dailyChallenges = activeChallenges.filter((c) => c.period === "daily");
+    const weeklyChallenges = activeChallenges.filter((c) => c.period === "weekly");
+
+    // If no daily challenges, assign one (quick win opportunity)
+    if (dailyChallenges.length === 0) {
+      const dailyTemplates = HABIT_CHALLENGE_TEMPLATES.filter(
+        (t) => t.period === "daily"
+      );
+      if (dailyTemplates.length > 0) {
+        const activeTypes = new Set(activeChallenges.map((c) => c.type));
+        const availableDaily = dailyTemplates.filter(
+          (t) => !activeTypes.has(t.type)
+        );
+        
+        if (availableDaily.length > 0) {
+          const shuffled = this.shuffleArray([...availableDaily]);
+          const template = shuffled[0];
+          await this.createHabitChallenge(userId, template);
+          logger.info(
+            `[ChallengeService] Auto-assigned daily challenge "${template.title}" to user ${userId}`
+          );
+        }
+      }
+    }
+
+    // If no weekly challenges, assign one (long-term goal)
+    if (weeklyChallenges.length === 0) {
+      await this.assignChallenges(userId);
+    }
   }
 
   /**

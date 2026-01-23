@@ -8,6 +8,7 @@ import { Meal, MealSchema } from "src/meal/meal.model";
 import { Goal, GoalSchema } from "../goals/goal.model";
 import { DailyProgress, DailyProgressSchema } from "../progress/progress.model";
 import { ShoppingList, ShoppingListSchema } from "../shopping/shopping-list.model";
+import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 
 @Module({
   imports: [
@@ -21,7 +22,7 @@ import { ShoppingList, ShoppingListSchema } from "../shopping/shopping-list.mode
     ]),
   ],
   controllers: [GeneratorController],
-  providers: [GeneratorService],
+  providers: [GeneratorService, UsdaNutritionService],
   exports: [GeneratorService],
 })
 export class GeneratorModule {}

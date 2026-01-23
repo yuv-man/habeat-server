@@ -12,6 +12,7 @@ import { Meal, MealSchema } from "../meal/meal.model";
 import { DailyProgress, DailyProgressSchema } from "../progress/progress.model";
 import { ProgressModule } from "../progress/progress.module";
 import { GeneratorModule } from "../generator/generator.module";
+import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 
 @Module({
   imports: [
@@ -26,7 +27,7 @@ import { GeneratorModule } from "../generator/generator.module";
     forwardRef(() => GeneratorModule),
   ],
   controllers: [PlanController],
-  providers: [PlanService],
+  providers: [PlanService, UsdaNutritionService],
   exports: [PlanService],
 })
 export class PlanModule {}
