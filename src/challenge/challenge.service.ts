@@ -235,6 +235,66 @@ export class ChallengeService {
   }
 
   /**
+   * Get completed/claimed challenges (history)
+   */
+  async getChallengeHistory(userId: string): Promise<IChallenge[]> {
+    const challenges = await this.challengeModel
+      .find({
+        userId,
+        status: { $in: ["completed", "claimed"] },
+        archived: { $ne: true }, // Exclude archived challenges
+      })
+      .sort({ completedAt: -1, claimedAt: -1, createdAt: -1 })
+      .limit(100)
+      .lean();
+
+    return challenges as unknown as IChallenge[];
+  }
+
+  /**
+   * Archive a challenge
+   */
+  async archiveChallenge(userId: string, challengeId: string): Promise<boolean> {
+    const challenge = await this.challengeModel.findOne({
+      _id: challengeId,
+      userId,
+    });
+
+    if (!challenge) {
+      throw new Error("Challenge not found");
+    }
+
+    challenge.archived = true;
+    await challenge.save();
+
+    logger.info(
+      `[ChallengeService] Archived challenge "${challenge.title}" (${challengeId}) for user ${userId}`
+    );
+
+    return true;
+  }
+
+  /**
+   * Delete a challenge
+   */
+  async deleteChallenge(userId: string, challengeId: string): Promise<boolean> {
+    const result = await this.challengeModel.deleteOne({
+      _id: challengeId,
+      userId,
+    });
+
+    if (result.deletedCount === 0) {
+      throw new Error("Challenge not found");
+    }
+
+    logger.info(
+      `[ChallengeService] Deleted challenge ${challengeId} for user ${userId}`
+    );
+
+    return true;
+  }
+
+  /**
    * Get completed but unclaimed challenges
    */
   async getClaimableChallenges(userId: string): Promise<IChallenge[]> {

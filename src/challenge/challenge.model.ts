@@ -78,6 +78,9 @@ export class Challenge {
 
   @Prop()
   claimedAt?: Date;
+
+  @Prop({ default: false })
+  archived?: boolean;
 }
 
 export const ChallengeSchema = SchemaFactory.createForClass(Challenge);

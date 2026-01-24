@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
   Param,
   UseGuards,
   Request,
@@ -48,14 +49,14 @@ export class ChallengeController {
   }
 
   /**
-   * Get all challenges including completed/expired (history)
+   * Get completed/claimed challenges (history)
    */
   @Get("history")
   @UseGuards(AuthGuard("jwt"))
   async getChallengeHistory(@Request() req: any) {
     try {
       const userId = req.user._id.toString();
-      const challenges = await this.challengeService.getAllChallenges(userId);
+      const challenges = await this.challengeService.getChallengeHistory(userId);
 
       return {
         success: true,
@@ -152,6 +153,66 @@ export class ChallengeController {
       throw new HttpException(
         error.message || "Failed to refresh challenges",
         HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  /**
+   * Archive a challenge
+   */
+  @Post(":challengeId/archive")
+  @UseGuards(AuthGuard("jwt"))
+  async archiveChallenge(
+    @Request() req: any,
+    @Param("challengeId") challengeId: string
+  ) {
+    try {
+      const userId = req.user._id.toString();
+      await this.challengeService.archiveChallenge(userId, challengeId);
+
+      return {
+        success: true,
+        data: {
+          success: true,
+        },
+      };
+    } catch (error: any) {
+      logger.error(
+        `[ChallengeController] Error archiving challenge: ${error.message}`
+      );
+      throw new HttpException(
+        error.message || "Failed to archive challenge",
+        HttpStatus.BAD_REQUEST
+      );
+    }
+  }
+
+  /**
+   * Delete a challenge
+   */
+  @Delete(":challengeId")
+  @UseGuards(AuthGuard("jwt"))
+  async deleteChallenge(
+    @Request() req: any,
+    @Param("challengeId") challengeId: string
+  ) {
+    try {
+      const userId = req.user._id.toString();
+      await this.challengeService.deleteChallenge(userId, challengeId);
+
+      return {
+        success: true,
+        data: {
+          success: true,
+        },
+      };
+    } catch (error: any) {
+      logger.error(
+        `[ChallengeController] Error deleting challenge: ${error.message}`
+      );
+      throw new HttpException(
+        error.message || "Failed to delete challenge",
+        HttpStatus.BAD_REQUEST
       );
     }
   }
