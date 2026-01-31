@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# Script to kill all NestJS server processes and free up port 5000
+# Script to kill all NestJS server processes and free up port 5080
 
-PORT=${PORT:-5000}
+PORT=${PORT:-5080}
 
 echo "Killing processes on port $PORT..."
 

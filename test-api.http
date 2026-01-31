@@ -2,7 +2,7 @@
 ### Habeat API Test Suite
 ### ===========================================
 ### Base URL
-@baseUrl = http://localhost:5000/api
+@baseUrl = http://localhost:5080/api
 @token = YOUR_JWT_TOKEN_HERE
 
 ### ===========================================
@@ -447,7 +447,7 @@ Authorization: Bearer {{token}}
 # 1. Replace {{token}} with your actual JWT token from login
 # 2. Replace USER_ID_HERE, MEAL_ID_HERE, RECIPE_ID_HERE, etc. with actual IDs
 # 3. Adjust dates in progress endpoints to current dates
-# 4. The server should be running at http://localhost:5000
+# 4. The server should be running at http://localhost:5080
 #
 # To use this file:
 # - Install REST Client extension in VS Code

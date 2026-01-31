@@ -27,6 +27,8 @@ import {
   convertAIIngredientsToMealFormat,
   convertMealIngredientsToRecipeFormat,
   MealIngredient,
+  cleanIngredientName,
+  assignIngredientCategory,
 } from "../utils/helpers";
 
 // Helper function to extract error message
@@ -433,7 +435,8 @@ const generateMealPlanWithGemini = async (
   planType: "daily" | "weekly",
   language: string,
   apiKey: string,
-  goals: IGoal[] = []
+  goals: IGoal[] = [],
+  planTemplate?: string
 ): Promise<MealPlanResponse> => {
   if (!apiKey.startsWith("AIza") || apiKey.length < 39) {
     logger.warn(
@@ -473,7 +476,7 @@ const generateMealPlanWithGemini = async (
   logger.info(`[Gemini] Will try models in order: ${modelsToTry.join(", ")}`);
 
   const { prompt, dayToName, nameToDay, dates, activeDays, workoutDays } =
-    buildPrompt(userData, planType, language, weekStartDate, goals);
+    buildPrompt(userData, planType, language, weekStartDate, goals, planTemplate);
 
   // Helper to get day name from date string
   const getDayNameFromDate = (dateStr: string): string => {
@@ -805,7 +808,8 @@ const generateMealPlanWithAI = async (
   planType: "daily" | "weekly" = "daily",
   language: string = "en",
   useMock: boolean = false,
-  goals: IGoal[] = []
+  goals: IGoal[] = [],
+  planTemplate?: string
 ): Promise<MealPlanResponse> => {
   try {
     if (useMock) {
@@ -835,7 +839,8 @@ const generateMealPlanWithAI = async (
           planType,
           language,
           apiKey,
-          goals
+          goals,
+          planTemplate
         );
       } catch (geminiError: unknown) {
         logger.warn(
@@ -855,7 +860,8 @@ const generateMealPlanWithAI = async (
         planType,
         language,
         false,
-        goals
+        goals,
+        planTemplate
       );
     } catch (llamaError: unknown) {
       throw new Error(
@@ -969,12 +975,56 @@ const getGoalBasedAdjustments = (
   };
 };
 
+// Predefined plan template prompt styles
+const PLAN_TEMPLATE_STYLES: Record<string, string> = {
+  "red-carpet-balance": `PLAN STYLE: Red Carpet Balance
+- Focus on balanced whole foods with flexibility (80/20 approach)
+- Include satisfying, feel-good meals that are still nutritious
+- Allow room for comfort/social meals
+- Balance carbs, protein, and fats evenly
+- Simple breakfasts, satisfying dinners
+- No extreme restrictions or rigid rules`,
+
+  "high-performance-fuel": `PLAN STYLE: High-Performance Fuel
+- Emphasize higher protein in every meal
+- Use complex carbs for sustained energy
+- Include energy-focused snacks (pre/post workout style)
+- Recovery-friendly dinners with protein + anti-inflammatory foods
+- Nutrient timing: carb-heavier meals around active hours
+- Performance-driven ingredient choices`,
+
+  "plant-forward-glow": `PLAN STYLE: Plant-Forward Glow
+- Center meals around vegetables, fruits, grains, legumes, plant proteins
+- Prioritize fiber-rich, colorful meals
+- Include anti-inflammatory ingredients (turmeric, ginger, leafy greens, berries)
+- Light but filling recipes
+- Optional dairy/eggs allowed unless restricted
+- Minimize processed foods`,
+
+  "mindful-living": `PLAN STYLE: Mindful Living
+- Focus on gentle, nourishing, easy-to-digest foods
+- Comfort-focused meals with simple ingredients
+- Routine-friendly portions (consistent meal sizes)
+- Avoid heavy, complex, or overly rich meals
+- Include calming foods (warm soups, whole grains, herbal-friendly pairings)
+- Support digestive health`,
+
+  "modern-comfort": `PLAN STYLE: Modern Comfort
+- Familiar, comforting meals made with healthier swaps
+- No "forbidden foods" — include pizza, burgers, pasta etc. in healthier versions
+- Focus on familiar flavors and accessible ingredients
+- Zero food guilt approach
+- Comfort food with better nutritional balance
+- Simple cooking methods, no exotic ingredients`,
+};
+
 const buildPrompt = (
   userData: IUserData,
   planType: "daily" | "weekly",
   language: string,
   weekStartDate: Date,
-  goals: IGoal[] = []
+  goals: IGoal[] = [],
+  planTemplate?: string
 ): {
   prompt: string;
   dayToName: Record<number, string>;
@@ -984,7 +1034,10 @@ const buildPrompt = (
   workoutDays: number[];
 } => {
   // --- 1. CALCULATIONS & SETUP ---
-  const goalAdjustments = getGoalBasedAdjustments(goals);
+  // For predefined plans, skip goal-based adjustments
+  const goalAdjustments = planTemplate
+    ? getGoalBasedAdjustments([])
+    : getGoalBasedAdjustments(goals);
 
   const bmr = calculateBMR(
     userData.weight,
@@ -1118,9 +1171,12 @@ const buildPrompt = (
     pathGuidelines.custom;
 
   // Goal & Preference Sections
-  const goalContext = goalAdjustments.goalDescription
-    ? `ACTIVE GOAL: ${goalAdjustments.goalDescription}\n  (Adjust meals/macros/workouts to achieve this)`
-    : "GOAL: Maintain healthy lifestyle";
+  // For predefined plans, use the plan template style instead of goal context
+  const goalContext = planTemplate && PLAN_TEMPLATE_STYLES[planTemplate]
+    ? PLAN_TEMPLATE_STYLES[planTemplate]
+    : goalAdjustments.goalDescription
+      ? `ACTIVE GOAL: ${goalAdjustments.goalDescription}\n  (Adjust meals/macros/workouts to achieve this)`
+      : "GOAL: Maintain healthy lifestyle";
 
   const foodPrefs = userData.foodPreferences?.length
     ? `PREFERENCES: ${userData.foodPreferences.join(", ")}`
@@ -1194,7 +1250,11 @@ MEAL FRAMEWORKS (Approximate):
 ====== DATA STRUCTURE RULES ======
 1. Return ONLY valid JSON. Do not include markdown formatting (like \`\`\`json).
 2. Follow this schedule keys exactly: ${dailyScheduleManifest}
-3. INGREDIENTS: Format as "ingredient|amount|unit|category" using RAW amounts.
+3. INGREDIENTS: Format as "ingredient|amount|unit|category" using RAW ingredient names and amounts.
+   - CRITICAL: ingredient name MUST be RAW only (no preparation words)
+   - DO NOT include: "chopped", "diced", "minced", "fresh", "dried", "sliced", "grated", "crushed", "whole", "ground", "cubed", "julienned"
+   - Examples: "ginger" (NOT "chopped fresh ginger"), "chicken_breast" (NOT "diced chicken breast"), "onion" (NOT "sliced onion")
+   - Category must be one of: Proteins, Vegetables, Fruits, Grains, Dairy, Pantry, Spices
 4. MATH: Ensure (Protein*4 + Carbs*4 + Fat*9) matches the calorie total for each meal.
 
 ====== OUTPUT SCHEMA ======
@@ -1232,7 +1292,8 @@ const generateMealPlanWithLlama2 = async (
   planType: "daily" | "weekly" = "daily",
   language: string = "en",
   useMock: boolean = false,
-  goals: IGoal[] = []
+  goals: IGoal[] = [],
+  planTemplate?: string
 ): Promise<MealPlanResponse> => {
   try {
     if (useMock) {
@@ -1247,7 +1308,7 @@ const generateMealPlanWithLlama2 = async (
     }
 
     const { prompt, dayToName, nameToDay, dates, activeDays, workoutDays } =
-      buildPrompt(userData, planType, language, weekStartDate, goals);
+      buildPrompt(userData, planType, language, weekStartDate, goals, planTemplate);
 
     const ollamaModel = process.env.OLLAMA_MODEL || "phi";
     logger.info(`[Llama] Using model: ${ollamaModel}`);
@@ -1447,10 +1508,41 @@ ${aiRules ? `- Additional rules: ${aiRules}` : ""}
   "category": "${category}",
   "ingredients": [["ingredient_name", "100 g"]],
   "prepTime": 20
-}`;
+}
+
+## Ingredient Rules:
+- CRITICAL: ingredient_name MUST be the RAW ingredient name only (no preparation words)
+- DO NOT include words like: "chopped", "diced", "minced", "fresh", "dried", "sliced", "grated", "crushed", "whole", "ground", "cubed", "julienned"
+- Examples:
+  * CORRECT: "ginger" (NOT "chopped fresh ginger")
+  * CORRECT: "chicken_breast" (NOT "diced chicken breast")
+  * CORRECT: "onion" (NOT "sliced onion")
+  * CORRECT: "garlic" (NOT "minced garlic")
+- Use lowercase with underscores (e.g., "chicken_breast", "olive_oil", "ginger")`;
 
   const parseResponse = (jsonText: string) => {
     const mealData = JSON.parse(jsonText);
+    
+    // Clean ingredients if they exist
+    if (mealData.ingredients && Array.isArray(mealData.ingredients)) {
+      mealData.ingredients = mealData.ingredients.map((ing: any) => {
+        if (Array.isArray(ing)) {
+          const rawName = String(ing[0] || "");
+          const amount = String(ing[1] || "");
+          const cleanedName = cleanIngredientName(rawName);
+          const category = assignIngredientCategory(cleanedName);
+          return category 
+            ? [cleanedName, amount, category]
+            : [cleanedName, amount];
+        }
+        const cleanedName = cleanIngredientName(String(ing));
+        const category = assignIngredientCategory(cleanedName);
+        return category 
+          ? [cleanedName, "", category]
+          : [cleanedName, ""];
+      });
+    }
+    
     return {
       _id: new mongoose.Types.ObjectId(),
       ...mealData,
@@ -1610,7 +1702,14 @@ Each meal MUST have ALL these fields:
 3. "macros" - protein, carbs, fat in grams (integers), must add up reasonably to calories
 4. "category" - must be "${mealCriteria.category}"
 5. "ingredients" - array of [name, amount] tuples
-   - name: lowercase with underscores (e.g., "chicken_breast", "olive_oil")
+   - CRITICAL: name MUST be the RAW ingredient name only (no preparation words)
+   - DO NOT include words like: "chopped", "diced", "minced", "fresh", "dried", "sliced", "grated", "crushed", "whole", "ground", "cubed", "julienned"
+   - Examples:
+     * CORRECT: "ginger" (NOT "chopped fresh ginger")
+     * CORRECT: "chicken_breast" (NOT "diced chicken breast")
+     * CORRECT: "onion" (NOT "sliced onion")
+     * CORRECT: "garlic" (NOT "minced garlic")
+   - name: lowercase with underscores (e.g., "chicken_breast", "olive_oil", "ginger")
    - amount: number followed by unit (e.g., "200 g", "50 ml", "2 pieces")
    - NOTE: Ingredient names use underscores, but meal names use spaces!
 6. "prepTime" - preparation time in minutes (integer)`;
@@ -1635,9 +1734,26 @@ Each meal MUST have ALL these fields:
         ingredients: Array.isArray(meal.ingredients)
           ? meal.ingredients.map((ing: any) => {
               if (Array.isArray(ing)) {
-                return [String(ing[0] || ""), String(ing[1] || "")];
+                const rawName = String(ing[0] || "");
+                const amount = String(ing[1] || "");
+                
+                // Clean ingredient name (remove preparation words)
+                const cleanedName = cleanIngredientName(rawName);
+                
+                // Assign category based on ingredient name
+                const category = assignIngredientCategory(cleanedName);
+                
+                // Return with category if assigned
+                return category 
+                  ? [cleanedName, amount, category]
+                  : [cleanedName, amount];
               }
-              return [String(ing), ""];
+              // Handle string format
+              const cleanedName = cleanIngredientName(String(ing));
+              const category = assignIngredientCategory(cleanedName);
+              return category 
+                ? [cleanedName, "", category]
+                : [cleanedName, ""];
             })
           : [],
         prepTime: Math.round(meal.prepTime || 30),
@@ -1756,9 +1872,19 @@ Return ONLY valid JSON:
       ingredients: Array.isArray(mealData.ingredients)
         ? mealData.ingredients.map((ing: any) => {
             if (Array.isArray(ing)) {
-              return [String(ing[0] || ""), String(ing[1] || "")];
+              const rawName = String(ing[0] || "");
+              const amount = String(ing[1] || "");
+              const cleanedName = cleanIngredientName(rawName);
+              const category = assignIngredientCategory(cleanedName);
+              return category 
+                ? [cleanedName, amount, category]
+                : [cleanedName, amount];
             }
-            return [String(ing), ""];
+            const cleanedName = cleanIngredientName(String(ing));
+            const category = assignIngredientCategory(cleanedName);
+            return category 
+              ? [cleanedName, "", category]
+              : [cleanedName, ""];
           })
         : [],
       prepTime,

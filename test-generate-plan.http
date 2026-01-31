@@ -4,7 +4,7 @@
 # Replace with your actual server URL and user credentials
 
 ### 1. Login to get JWT token
-POST http://localhost:5000/api/auth/login
+POST http://localhost:5080/api/auth/login
 Content-Type: application/json
 
 {
@@ -13,7 +13,7 @@ Content-Type: application/json
 }
 
 ### 2. Generate Meal Plan (use the token from login response)
-POST http://localhost:5000/api/plan/generate
+POST http://localhost:5080/api/plan/generate
 Content-Type: application/json
 Authorization: Bearer YOUR_JWT_TOKEN_HERE
 
@@ -33,7 +33,7 @@ Authorization: Bearer YOUR_JWT_TOKEN_HERE
 }
 
 ### 3. Alternative: Generate Plan for Weight Loss
-POST http://localhost:5000/api/plan/generate
+POST http://localhost:5080/api/plan/generate
 Content-Type: application/json
 Authorization: Bearer YOUR_JWT_TOKEN_HERE
 
@@ -53,7 +53,7 @@ Authorization: Bearer YOUR_JWT_TOKEN_HERE
 }
 
 ### 4. Alternative: Generate Plan for Muscle Building
-POST http://localhost:5000/api/plan/generate
+POST http://localhost:5080/api/plan/generate
 Content-Type: application/json
 Authorization: Bearer YOUR_JWT_TOKEN_HERE
 
@@ -73,7 +73,7 @@ Authorization: Bearer YOUR_JWT_TOKEN_HERE
 }
 
 ### 5. Alternative: Generate Keto Plan
-POST http://localhost:5000/api/plan/generate
+POST http://localhost:5080/api/plan/generate
 Content-Type: application/json
 Authorization: Bearer YOUR_JWT_TOKEN_HERE
 
@@ -93,7 +93,7 @@ Authorization: Bearer YOUR_JWT_TOKEN_HERE
 }
 
 ### 6. Alternative: Generate Fasting Plan
-POST http://localhost:5000/api/plan/generate
+POST http://localhost:5080/api/plan/generate
 Content-Type: application/json
 Authorization: Bearer YOUR_JWT_TOKEN_HERE
 
@@ -113,7 +113,7 @@ Authorization: Bearer YOUR_JWT_TOKEN_HERE
 }
 
 ### 7. Alternative: Generate Custom Plan
-POST http://localhost:5000/api/plan/generate
+POST http://localhost:5080/api/plan/generate
 Content-Type: application/json
 Authorization: Bearer YOUR_JWT_TOKEN_HERE
 
@@ -134,7 +134,7 @@ Authorization: Bearer YOUR_JWT_TOKEN_HERE
 
 ### Notes:
 # - Replace YOUR_JWT_TOKEN_HERE with the actual token from login
-# - Adjust the server URL if different from localhost:5000
+# - Adjust the server URL if different from localhost:5080
 # - Modify userData values according to your test needs
 # - The path field determines the type of meal plan generated
 # - All requests require authentication (JWT token in Authorization header)

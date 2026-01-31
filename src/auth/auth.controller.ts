@@ -43,7 +43,7 @@ export class AuthController {
     } else if (data.provider === "facebook" && data.idToken) {
       return this.authService.facebookSignup(
         data.idToken,
-        data.userData as any
+        data.userData as any,
       );
     } else {
       // Regular signup
@@ -130,7 +130,7 @@ export class AuthController {
     @Request() req: any,
     @Res() res: Response,
     @Query("format") format?: string,
-    @Query("prompt") prompt?: string
+    @Query("prompt") prompt?: string,
   ) {
     if (!redirectUri) {
       throw new BadRequestException("redirectUri query parameter is required");
@@ -138,7 +138,7 @@ export class AuthController {
 
     if (!frontendRedirectUri) {
       throw new BadRequestException(
-        "frontendRedirectUri query parameter is required"
+        "frontendRedirectUri query parameter is required",
       );
     }
 
@@ -156,7 +156,7 @@ export class AuthController {
       }
     } catch (e) {
       const protocol = req.protocol || "https"; // Default to https for production
-      const host = req.get("host") || "localhost:5000";
+      const host = req.get("host") || "localhost:5080";
       redirectUri = `${protocol}://${host}/api/auth/google/callback`;
       logger.info(
         "Constructed redirectUri from request in initiateGoogleSignup",
@@ -165,7 +165,7 @@ export class AuthController {
           constructed: redirectUri,
           protocol,
           host,
-        }
+        },
       );
     }
 
@@ -194,11 +194,11 @@ export class AuthController {
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader(
         "Access-Control-Allow-Methods",
-        "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+        "GET, POST, PUT, DELETE, PATCH, OPTIONS",
       );
       res.setHeader(
         "Access-Control-Allow-Headers",
-        "Content-Type, Authorization, Accept"
+        "Content-Type, Authorization, Accept",
       );
     }
 
@@ -206,7 +206,7 @@ export class AuthController {
       redirectUri,
       frontendRedirectUri,
       prompt,
-      "signup" // This is the signup endpoint
+      "signup", // This is the signup endpoint
     );
 
     // Check if this is an AJAX request
@@ -249,7 +249,7 @@ export class AuthController {
     @Request() req: any,
     @Res() res: Response,
     @Query("format") format?: string,
-    @Query("prompt") prompt?: string
+    @Query("prompt") prompt?: string,
   ) {
     if (!redirectUri) {
       throw new BadRequestException("redirectUri query parameter is required");
@@ -257,7 +257,7 @@ export class AuthController {
 
     if (!frontendRedirectUri) {
       throw new BadRequestException(
-        "frontendRedirectUri query parameter is required"
+        "frontendRedirectUri query parameter is required",
       );
     }
 
@@ -278,7 +278,7 @@ export class AuthController {
     } catch (e) {
       // If redirectUri is not a valid URL, construct it from the request
       const protocol = req.protocol || "https"; // Default to https for production
-      const host = req.get("host") || "localhost:5000";
+      const host = req.get("host") || "localhost:5080";
       redirectUri = `${protocol}://${host}/api/auth/google/callback`;
       logger.info(
         "Constructed redirectUri from request in initiateGoogleSignin",
@@ -287,7 +287,7 @@ export class AuthController {
           constructed: redirectUri,
           protocol,
           host,
-        }
+        },
       );
     }
 
@@ -316,11 +316,11 @@ export class AuthController {
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader(
         "Access-Control-Allow-Methods",
-        "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+        "GET, POST, PUT, DELETE, PATCH, OPTIONS",
       );
       res.setHeader(
         "Access-Control-Allow-Headers",
-        "Content-Type, Authorization, Accept"
+        "Content-Type, Authorization, Accept",
       );
     }
 
@@ -328,7 +328,7 @@ export class AuthController {
       redirectUri,
       frontendRedirectUri,
       prompt,
-      "signin" // This is the signin endpoint
+      "signin", // This is the signin endpoint
     );
 
     // Check if this is an AJAX request (via Accept header or format query param)
@@ -373,7 +373,7 @@ export class AuthController {
     @Request() req: any,
     @Res() res: Response,
     @Query("format") format?: string,
-    @Query("prompt") prompt?: string
+    @Query("prompt") prompt?: string,
   ) {
     if (!redirectUri) {
       throw new BadRequestException("redirectUri query parameter is required");
@@ -381,7 +381,7 @@ export class AuthController {
 
     if (!frontendRedirectUri) {
       throw new BadRequestException(
-        "frontendRedirectUri query parameter is required"
+        "frontendRedirectUri query parameter is required",
       );
     }
 
@@ -399,7 +399,7 @@ export class AuthController {
       }
     } catch (e) {
       const protocol = req.protocol || "https";
-      const host = req.get("host") || "localhost:5000";
+      const host = req.get("host") || "localhost:5080";
       redirectUri = `${protocol}://${host}/api/auth/google/callback`;
       logger.info(
         "Constructed redirectUri from request in initiateGoogleMobileSignup",
@@ -408,7 +408,7 @@ export class AuthController {
           constructed: redirectUri,
           protocol,
           host,
-        }
+        },
       );
     }
 
@@ -416,7 +416,7 @@ export class AuthController {
       redirectUri,
       frontendRedirectUri,
       prompt,
-      "signup" // This is the signup endpoint
+      "signup", // This is the signup endpoint
     );
 
     // Check if this is an AJAX request
@@ -488,7 +488,7 @@ export class AuthController {
     body: {
       idToken: string;
       userData?: Partial<IUserData>;
-    }
+    },
   ) {
     if (!body.idToken) {
       throw new BadRequestException("Google ID token is required");
@@ -522,7 +522,7 @@ export class AuthController {
     @Request() req: any,
     @Res() res: Response,
     @Query("format") format?: string,
-    @Query("prompt") prompt?: string
+    @Query("prompt") prompt?: string,
   ) {
     if (!redirectUri) {
       throw new BadRequestException("redirectUri query parameter is required");
@@ -530,7 +530,7 @@ export class AuthController {
 
     if (!frontendRedirectUri) {
       throw new BadRequestException(
-        "frontendRedirectUri query parameter is required"
+        "frontendRedirectUri query parameter is required",
       );
     }
 
@@ -548,7 +548,7 @@ export class AuthController {
       }
     } catch (e) {
       const protocol = req.protocol || "https";
-      const host = req.get("host") || "localhost:5000";
+      const host = req.get("host") || "localhost:5080";
       redirectUri = `${protocol}://${host}/api/auth/google/callback`;
       logger.info(
         "Constructed redirectUri from request in initiateGoogleMobileSignin",
@@ -557,7 +557,7 @@ export class AuthController {
           constructed: redirectUri,
           protocol,
           host,
-        }
+        },
       );
     }
 
@@ -565,7 +565,7 @@ export class AuthController {
       redirectUri,
       frontendRedirectUri,
       prompt,
-      "signin" // This is the signin endpoint
+      "signin", // This is the signin endpoint
     );
 
     // Check if this is an AJAX request
@@ -684,7 +684,7 @@ export class AuthController {
     body: {
       accessToken: string;
       userData?: Partial<IUserData>;
-    }
+    },
   ) {
     if (!body.accessToken) {
       throw new BadRequestException("Google ID token is required");
@@ -742,7 +742,7 @@ export class AuthController {
       accessToken: string;
     },
     @Request() req: any,
-    @Res() res: Response
+    @Res() res: Response,
   ) {
     // Set CORS headers
     const allowedOrigins = [
@@ -765,11 +765,11 @@ export class AuthController {
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader(
         "Access-Control-Allow-Methods",
-        "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+        "GET, POST, PUT, DELETE, PATCH, OPTIONS",
       );
       res.setHeader(
         "Access-Control-Allow-Headers",
-        "Content-Type, Authorization, Accept"
+        "Content-Type, Authorization, Accept",
       );
     }
 
@@ -822,7 +822,7 @@ export class AuthController {
     @Query("state") state: string,
     @Query("redirectUri") redirectUri: string,
     @Request() req: any,
-    @Res() res: Response
+    @Res() res: Response,
   ) {
     // Set CORS headers before redirect
     // Always allow localhost for local development/testing
@@ -849,11 +849,11 @@ export class AuthController {
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader(
         "Access-Control-Allow-Methods",
-        "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+        "GET, POST, PUT, DELETE, PATCH, OPTIONS",
       );
       res.setHeader(
         "Access-Control-Allow-Headers",
-        "Content-Type, Authorization, Accept"
+        "Content-Type, Authorization, Accept",
       );
     }
 
@@ -865,7 +865,7 @@ export class AuthController {
     // This ensures it always includes the /api prefix
     if (!redirectUri) {
       const protocol = req.protocol || "https"; // Default to https for production
-      const host = req.get("host") || "localhost:5000";
+      const host = req.get("host") || "localhost:5080";
       redirectUri = `${protocol}://${host}/api/auth/google/callback`;
       logger.info("Constructed redirectUri from request", {
         redirectUri,
@@ -895,7 +895,7 @@ export class AuthController {
       const redirectUrl = await this.authService.handleGoogleCallback(
         code,
         redirectUri,
-        state
+        state,
       );
       res.redirect(redirectUrl);
     } catch (error: any) {
@@ -935,7 +935,7 @@ export class AuthController {
       errorUrl.searchParams.set("error", "authentication_failed");
       errorUrl.searchParams.set(
         "error_description",
-        error?.message || "OAuth authentication failed"
+        error?.message || "OAuth authentication failed",
       );
       res.redirect(errorUrl.toString());
     }

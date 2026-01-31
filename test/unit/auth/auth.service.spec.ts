@@ -158,7 +158,7 @@ describe("AuthService", () => {
       };
 
       await expect(service.register(userData)).rejects.toThrow(
-        ConflictException
+        ConflictException,
       );
     });
   });
@@ -187,7 +187,7 @@ describe("AuthService", () => {
       mockUserModel.findOne.mockResolvedValue(userWithCompare);
 
       await expect(
-        service.login("test@example.com", "wrongpassword")
+        service.login("test@example.com", "wrongpassword"),
       ).rejects.toThrow(UnauthorizedException);
     });
 
@@ -195,7 +195,7 @@ describe("AuthService", () => {
       mockUserModel.findOne.mockResolvedValue(null);
 
       await expect(
-        service.login("nonexistent@example.com", "password")
+        service.login("nonexistent@example.com", "password"),
       ).rejects.toThrow(UnauthorizedException);
     });
   });
@@ -226,7 +226,7 @@ describe("AuthService", () => {
       mockUserModel.findById.mockResolvedValue(null);
 
       await expect(service.getUser("nonexistent")).rejects.toThrow(
-        UnauthorizedException
+        UnauthorizedException,
       );
     });
 
@@ -235,7 +235,7 @@ describe("AuthService", () => {
       mockPlanModel.findOne.mockResolvedValue(null);
 
       await expect(service.getUser("507f1f77bcf86cd799439011")).rejects.toThrow(
-        UnauthorizedException
+        UnauthorizedException,
       );
     });
   });
@@ -243,8 +243,8 @@ describe("AuthService", () => {
   describe("getGoogleSigninUrl", () => {
     it("should return Google OAuth URL", async () => {
       const result = await service.getGoogleSigninUrl(
-        "http://localhost:5000/callback",
-        "http://localhost:8080/auth"
+        "http://localhost:5080/callback",
+        "http://localhost:8080/auth",
       );
       expect(result).toBe("https://google.com/auth");
     });

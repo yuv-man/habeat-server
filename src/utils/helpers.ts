@@ -19,6 +19,130 @@ import logger from "./logger";
 // ============================================================================
 
 /**
+ * Clean ingredient name by removing preparation words
+ * Examples: "chopped fresh ginger" -> "ginger", "diced chicken breast" -> "chicken_breast"
+ */
+export const cleanIngredientName = (name: string): string => {
+  if (!name) return "";
+  
+  // Remove common preparation words
+  const preparationWords = [
+    "chopped",
+    "diced",
+    "minced",
+    "fresh",
+    "dried",
+    "sliced",
+    "grated",
+    "crushed",
+    "whole",
+    "ground",
+    "cubed",
+    "julienned",
+    "peeled",
+    "seeded",
+    "trimmed",
+    "cleaned",
+    "washed",
+    "cut",
+    "shredded",
+    "crumbled",
+    "mashed",
+    "pureed",
+    "roasted",
+    "toasted",
+    "raw",
+    "cooked",
+    "frozen",
+    "canned",
+    "organic",
+    "large",
+    "small",
+    "medium",
+    "extra",
+    "fine",
+    "coarse",
+  ];
+  
+  let cleaned = name.toLowerCase().trim();
+  
+  // Remove preparation words
+  for (const word of preparationWords) {
+    // Remove word with spaces around it
+    cleaned = cleaned.replace(new RegExp(`\\b${word}\\b`, "gi"), "");
+  }
+  
+  // Clean up multiple spaces
+  cleaned = cleaned.replace(/\s+/g, " ").trim();
+  
+  // Remove leading/trailing underscores
+  cleaned = cleaned.replace(/^_+|_+$/g, "");
+  
+  return cleaned || name; // Return original if cleaned is empty
+};
+
+/**
+ * Assign ingredient category based on name
+ */
+export const assignIngredientCategory = (ingredientName: string): string | undefined => {
+  const name = ingredientName.toLowerCase().replace(/_/g, " ");
+  
+  // Check each category's keywords
+  for (const [category, keywords] of Object.entries(ingredientCategories)) {
+    if (keywords.some((keyword) => name.includes(keyword))) {
+      return category;
+    }
+  }
+  
+  // Fallback: check common patterns
+  if (name.includes("chicken") || name.includes("beef") || name.includes("pork") || 
+      name.includes("fish") || name.includes("salmon") || name.includes("tuna") ||
+      name.includes("shrimp") || name.includes("egg") || name.includes("tofu") ||
+      name.includes("bean") || name.includes("lentil")) {
+    return "Proteins";
+  }
+  
+  if (name.includes("onion") || name.includes("garlic") || name.includes("tomato") ||
+      name.includes("lettuce") || name.includes("spinach") || name.includes("carrot") ||
+      name.includes("broccoli") || name.includes("pepper") || name.includes("cucumber") ||
+      name.includes("zucchini") || name.includes("kale") || name.includes("cauliflower")) {
+    return "Vegetables";
+  }
+  
+  if (name.includes("apple") || name.includes("banana") || name.includes("berry") ||
+      name.includes("orange") || name.includes("grape") || name.includes("strawberry") ||
+      name.includes("blueberry") || name.includes("pineapple") || name.includes("mango")) {
+    return "Fruits";
+  }
+  
+  if (name.includes("rice") || name.includes("pasta") || name.includes("bread") ||
+      name.includes("quinoa") || name.includes("oat") || name.includes("flour") ||
+      name.includes("tortilla") || name.includes("wrap")) {
+    return "Grains";
+  }
+  
+  if (name.includes("milk") || name.includes("cheese") || name.includes("yogurt") ||
+      name.includes("butter") || name.includes("cream") || name.includes("sour cream")) {
+    return "Dairy";
+  }
+  
+  if (name.includes("oil") || name.includes("salt") || name.includes("pepper") ||
+      name.includes("sugar") || name.includes("vinegar") || name.includes("soy") ||
+      name.includes("honey") || name.includes("ketchup") || name.includes("mustard")) {
+    return "Pantry";
+  }
+  
+  if (name.includes("cumin") || name.includes("paprika") || name.includes("oregano") ||
+      name.includes("basil") || name.includes("thyme") || name.includes("rosemary") ||
+      name.includes("cinnamon") || name.includes("ginger") || name.includes("turmeric") ||
+      name.includes("nutmeg")) {
+    return "Spices";
+  }
+  
+  return undefined;
+};
+
+/**
  * Meal ingredient format: [name, amountWithUnit] or [name, amountWithUnit, shoppingCategory]
  * - name: ingredient name (e.g., "chicken_breast")
  * - amountWithUnit: amount and unit combined (e.g., "200 g")
@@ -98,49 +222,71 @@ export const convertAIIngredientsToMealFormat = (
   if (!ingredients || !Array.isArray(ingredients)) return [];
 
   return ingredients.map((ing) => {
-    if (Array.isArray(ing)) {
-      // AI tuple format: [name, amount, unit]
-      const name = ing[0] || "";
-      const amount = ing[1] || "";
-      const unit = ing[2] || "";
-      // Combine amount and unit: "200" + "g" = "200 g"
-      const combinedAmount = unit ? `${amount} ${unit}`.trim() : amount;
+    let rawName = "";
+    let amount = "";
+    let unit = "";
+    let category: string | undefined = defaultCategory;
 
-      if (defaultCategory) {
-        return [name, combinedAmount, defaultCategory] as MealIngredient;
+    if (Array.isArray(ing)) {
+      // AI tuple format: [name, amount, unit] or [name, amount, unit, category]
+      // Cast to any[] to handle optional 4th element (category)
+      const ingArray: any[] = Array.isArray(ing) ? [...ing] : [];
+      rawName = ingArray[0] || "";
+      amount = ingArray[1] || "";
+      unit = ingArray[2] || "";
+      // Check if there's a 4th element (category) - handle both tuple formats
+      if (ingArray.length > 3 && typeof ingArray[3] === "string") {
+        category = ingArray[3];
+      } else {
+        category = defaultCategory;
       }
-      return [name, combinedAmount] as MealIngredient;
     } else if (typeof ing === "object" && ing !== null) {
       // Recipe object format: { name, amount, unit }
       const objIng = ing as RecipeIngredient;
-      const name = objIng.name || "";
-      const amount = objIng.amount || "";
-      const unit = objIng.unit || "";
-      const combinedAmount = unit ? `${amount} ${unit}`.trim() : amount;
-
-      if (defaultCategory) {
-        return [name, combinedAmount, defaultCategory] as MealIngredient;
-      }
-      return [name, combinedAmount] as MealIngredient;
+      rawName = objIng.name || "";
+      amount = objIng.amount || "";
+      unit = objIng.unit || "";
     } else if (typeof ing === "string") {
-      // String format - try to parse "name (amount unit)"
-      const match = ing.match(/^(.+?)\s*\(([^)]+)\)$/);
-      if (match) {
-        if (defaultCategory) {
-          return [
-            match[1].trim(),
-            match[2].trim(),
-            defaultCategory,
-          ] as MealIngredient;
+      // String format - try to parse "name (amount unit)" or "name|amount|unit|category"
+      const pipeMatch = ing.split("|");
+      if (pipeMatch.length >= 2) {
+        rawName = pipeMatch[0].trim();
+        amount = pipeMatch[1].trim();
+        unit = pipeMatch[2]?.trim() || "";
+        category = pipeMatch[3]?.trim() || defaultCategory;
+      } else {
+        const match = ing.match(/^(.+?)\s*\(([^)]+)\)$/);
+        if (match) {
+          rawName = match[1].trim();
+          const amountUnit = match[2].trim();
+          const amountUnitMatch = amountUnit.match(/^(\d+(?:\.\d+)?)\s*(.*)$/);
+          if (amountUnitMatch) {
+            amount = amountUnitMatch[1];
+            unit = amountUnitMatch[2].trim() || "";
+          } else {
+            amount = amountUnit;
+          }
+        } else {
+          rawName = ing;
         }
-        return [match[1].trim(), match[2].trim()] as MealIngredient;
       }
-      if (defaultCategory) {
-        return [ing, "", defaultCategory] as MealIngredient;
-      }
-      return [ing, ""] as MealIngredient;
     }
-    return ["", ""] as MealIngredient;
+
+    // Clean ingredient name (remove preparation words)
+    const cleanedName = cleanIngredientName(rawName);
+    
+    // Assign category if not already set
+    if (!category) {
+      category = assignIngredientCategory(cleanedName);
+    }
+
+    // Combine amount and unit: "200" + "g" = "200 g"
+    const combinedAmount = unit ? `${amount} ${unit}`.trim() : amount;
+
+    if (category) {
+      return [cleanedName, combinedAmount, category] as MealIngredient;
+    }
+    return [cleanedName, combinedAmount] as MealIngredient;
   });
 };
 

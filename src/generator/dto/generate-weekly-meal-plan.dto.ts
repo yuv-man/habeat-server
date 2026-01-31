@@ -82,4 +82,14 @@ export class GenerateWeeklyMealPlanDto {
   @IsOptional()
   @IsBoolean()
   useMock?: boolean;
+
+  @ApiProperty({
+    example: "red-carpet-balance",
+    required: false,
+    description:
+      "Predefined plan template ID. If provided, goals are ignored and the plan follows the template style. Valid values: red-carpet-balance, high-performance-fuel, plant-forward-glow, mindful-living, modern-comfort",
+  })
+  @IsOptional()
+  @IsString()
+  planTemplate?: string;
 }

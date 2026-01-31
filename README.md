@@ -100,7 +100,7 @@ TEST_MODE=false
 
 Once the server is running, access Swagger documentation at:
 
-- http://localhost:5000/api/docs
+- http://localhost:5080/api/docs
 
 ## Available Scripts
 

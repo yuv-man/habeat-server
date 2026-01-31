@@ -228,7 +228,8 @@ export class GeneratorService {
     language: string = "en",
     title: string = "Weekly Meal Plan for " +
       startDate.toISOString().split("T")[0],
-    useMock: boolean = false
+    useMock: boolean = false,
+    planTemplate?: string
   ) {
     if (!userId) {
       throw new BadRequestException("Please provide user data");
@@ -253,18 +254,26 @@ export class GeneratorService {
       `Generating meal plan starting from: ${finalStartDate.toISOString().split("T")[0]} (today is ${today.toISOString().split("T")[0]})`
     );
 
-    // Fetch active goals for the user
-    const activeGoals = await this.goalModel
-      .find({
-        userId: new mongoose.Types.ObjectId(userId),
-        status: { $in: ["active", "in_progress"] },
-      })
-      .lean()
-      .exec();
+    // For predefined plan templates, skip user goals
+    // Predefined plans use their own style instead of goal-based adjustments
+    let activeGoals = [];
+    if (!planTemplate) {
+      activeGoals = await this.goalModel
+        .find({
+          userId: new mongoose.Types.ObjectId(userId),
+          status: { $in: ["active", "in_progress"] },
+        })
+        .lean()
+        .exec();
 
-    logger.info(
-      `[generateWeeklyMealPlan] Found ${activeGoals.length} active goals for user ${userId}`
-    );
+      logger.info(
+        `[generateWeeklyMealPlan] Found ${activeGoals.length} active goals for user ${userId}`
+      );
+    } else {
+      logger.info(
+        `[generateWeeklyMealPlan] Using predefined plan template: ${planTemplate} (skipping goals)`
+      );
+    }
 
     const {
       mealPlan,
@@ -276,7 +285,8 @@ export class GeneratorService {
       "weekly", // Force weekly
       language,
       useMock,
-      activeGoals // Pass goals to AI service
+      activeGoals, // Empty for predefined plans
+      planTemplate
     );
 
     // Validate that meal plan was generated

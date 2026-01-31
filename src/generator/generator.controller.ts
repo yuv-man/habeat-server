@@ -116,7 +116,8 @@ Optional parameters that can be passed as query strings or in the request body. 
       body.startDate,
       language || body.language,
       title || body.title,
-      useMock !== undefined ? useMock : body.useMock || false
+      useMock !== undefined ? useMock : body.useMock || false,
+      body.planTemplate
     );
   }
 

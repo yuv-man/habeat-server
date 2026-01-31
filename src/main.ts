@@ -48,7 +48,7 @@ async function bootstrap() {
         logger.info("CORS: Allowing request with no origin (mobile app)");
         return callback(null, true);
       }
-      
+
       // Allow Capacitor/Ionic mobile app origins
       if (
         origin.startsWith("capacitor://") ||
@@ -60,20 +60,22 @@ async function bootstrap() {
         logger.info(`CORS: Allowing mobile/localhost origin: ${origin}`);
         return callback(null, true);
       }
-      
+
       // Allow configured origins
       if (allowedOrigins.includes(origin)) {
         logger.info(`CORS: Allowing configured origin: ${origin}`);
         return callback(null, true);
       }
-      
+
       // In production, be more permissive for mobile apps
       // Some Android apps might send unexpected origins
       if (process.env.NODE_ENV === "production") {
-        logger.warn(`CORS: Allowing origin in production (mobile app): ${origin}`);
+        logger.warn(
+          `CORS: Allowing origin in production (mobile app): ${origin}`,
+        );
         return callback(null, true);
       }
-      
+
       logger.warn(`CORS: Blocking origin: ${origin}`);
       return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
@@ -102,7 +104,7 @@ async function bootstrap() {
       .setVersion("1.0")
       .addBearerAuth(
         { type: "http", scheme: "bearer", bearerFormat: "JWT" },
-        "JWT-auth"
+        "JWT-auth",
       )
       .build();
 
@@ -146,7 +148,7 @@ export default async (req: any, res: any) => {
 
 if (require.main === module) {
   bootstrap().then(async (app) => {
-    const port = process.env.PORT || 5000;
+    const port = process.env.PORT || 5080;
     await app.listen(port);
     console.log(`Server running at http://localhost:${port}/api`);
   });
