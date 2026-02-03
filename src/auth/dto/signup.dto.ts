@@ -141,10 +141,14 @@ export class UserDataDto {
   @IsString({ each: true })
   dislikes?: string[];
 
-  @ApiProperty({ example: false, required: false })
+  @ApiProperty({
+    example: "free",
+    enum: ["free", "plus", "premium"],
+    required: false,
+  })
   @IsOptional()
-  @IsBoolean()
-  isPremium?: boolean;
+  @IsEnum(["free", "plus", "premium"])
+  subscriptionTier?: "free" | "plus" | "premium";
 
   @ApiProperty({ example: 73, required: false })
   @IsOptional()

@@ -1,4 +1,5 @@
 import mongoose, { Document } from "mongoose";
+import { SubscriptionTier } from "../enums/enumSubscription";
 
 // Badge earned by user
 export interface IBadge {
@@ -130,7 +131,12 @@ export interface IUserData {
   bmr?: number; // Basal Metabolic Rate
   tdee?: number; // Total Daily Energy Expenditure
   idealWeight?: number;
-  isPremium?: boolean;
+  subscriptionTier?: SubscriptionTier;
+  // Stripe fields
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  subscriptionStatus?: "active" | "canceled" | "past_due" | "trialing" | "incomplete" | "incomplete_expired" | "unpaid" | "none";
+  subscriptionEndDate?: Date;
   oauthProvider?: "google" | "facebook";
   preferences: { [key: string]: string | boolean | number };
   oauthId?: string;

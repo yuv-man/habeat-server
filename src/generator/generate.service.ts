@@ -476,7 +476,14 @@ const generateMealPlanWithGemini = async (
   logger.info(`[Gemini] Will try models in order: ${modelsToTry.join(", ")}`);
 
   const { prompt, dayToName, nameToDay, dates, activeDays, workoutDays } =
-    buildPrompt(userData, planType, language, weekStartDate, goals, planTemplate);
+    buildPrompt(
+      userData,
+      planType,
+      language,
+      weekStartDate,
+      goals,
+      planTemplate
+    );
 
   // Helper to get day name from date string
   const getDayNameFromDate = (dateStr: string): string => {
@@ -1172,11 +1179,12 @@ const buildPrompt = (
 
   // Goal & Preference Sections
   // For predefined plans, use the plan template style instead of goal context
-  const goalContext = planTemplate && PLAN_TEMPLATE_STYLES[planTemplate]
-    ? PLAN_TEMPLATE_STYLES[planTemplate]
-    : goalAdjustments.goalDescription
-      ? `ACTIVE GOAL: ${goalAdjustments.goalDescription}\n  (Adjust meals/macros/workouts to achieve this)`
-      : "GOAL: Maintain healthy lifestyle";
+  const goalContext =
+    planTemplate && PLAN_TEMPLATE_STYLES[planTemplate]
+      ? PLAN_TEMPLATE_STYLES[planTemplate]
+      : goalAdjustments.goalDescription
+        ? `ACTIVE GOAL: ${goalAdjustments.goalDescription}\n  (Adjust meals/macros/workouts to achieve this)`
+        : "GOAL: Maintain healthy lifestyle";
 
   const foodPrefs = userData.foodPreferences?.length
     ? `PREFERENCES: ${userData.foodPreferences.join(", ")}`
@@ -1235,11 +1243,12 @@ TARGETS:
 - Goal: ${goalContext}
 - Path: ${userData.path}
 
-DIETARY RULES:
+DIETARY RULES (STRICTLY ENFORCE):
 - Allergies: ${userData.allergies ? userData.allergies.join(", ") : "None"}
 - Restrictions: ${userData.dietaryRestrictions ? userData.dietaryRestrictions.join(", ") : "None"}
 - Dislikes: ${dislikes}
-- Food Preferences: ${foodPrefs}
+- Food Preferences (MUST INCORPORATE): ${foodPrefs}
+  ${userData.foodPreferences?.length ? `*** CRITICAL: You MUST incorporate these food preferences into the meal plan. At least 50% of meals should feature or include these preferred foods/cuisines. For example, if "Japanese food" is preferred, include meals like sushi, ramen, teriyaki, miso soup, etc. throughout the week. ***` : ""}
 
 MEAL FRAMEWORKS (Approximate):
 - Breakfast: ~${breakfastTarget} kcal (P:${breakfastMacros.protein}g, C:${breakfastMacros.carbs}g, F:${breakfastMacros.fat}g)
@@ -1308,7 +1317,14 @@ const generateMealPlanWithLlama2 = async (
     }
 
     const { prompt, dayToName, nameToDay, dates, activeDays, workoutDays } =
-      buildPrompt(userData, planType, language, weekStartDate, goals, planTemplate);
+      buildPrompt(
+        userData,
+        planType,
+        language,
+        weekStartDate,
+        goals,
+        planTemplate
+      );
 
     const ollamaModel = process.env.OLLAMA_MODEL || "phi";
     logger.info(`[Llama] Using model: ${ollamaModel}`);
@@ -1522,7 +1538,7 @@ ${aiRules ? `- Additional rules: ${aiRules}` : ""}
 
   const parseResponse = (jsonText: string) => {
     const mealData = JSON.parse(jsonText);
-    
+
     // Clean ingredients if they exist
     if (mealData.ingredients && Array.isArray(mealData.ingredients)) {
       mealData.ingredients = mealData.ingredients.map((ing: any) => {
@@ -1531,18 +1547,16 @@ ${aiRules ? `- Additional rules: ${aiRules}` : ""}
           const amount = String(ing[1] || "");
           const cleanedName = cleanIngredientName(rawName);
           const category = assignIngredientCategory(cleanedName);
-          return category 
+          return category
             ? [cleanedName, amount, category]
             : [cleanedName, amount];
         }
         const cleanedName = cleanIngredientName(String(ing));
         const category = assignIngredientCategory(cleanedName);
-        return category 
-          ? [cleanedName, "", category]
-          : [cleanedName, ""];
+        return category ? [cleanedName, "", category] : [cleanedName, ""];
       });
     }
-    
+
     return {
       _id: new mongoose.Types.ObjectId(),
       ...mealData,
@@ -1574,24 +1588,29 @@ const generateMealSuggestions = async (
   const targetCalories = mealCriteria.targetCalories || 500;
 
   // Check if aiRules contains a meal name request (variations request)
-  const isVariationRequest = mealCriteria.aiRules?.includes("variations of") || 
-                             mealCriteria.aiRules?.includes("variation of") ||
-                             (mealCriteria.aiRules && mealCriteria.aiRules.length < 50 && 
-                              !mealCriteria.aiRules.toLowerCase().includes("make") &&
-                              !mealCriteria.aiRules.toLowerCase().includes("create") &&
-                              !mealCriteria.aiRules.toLowerCase().includes("generate"));
+  const isVariationRequest =
+    mealCriteria.aiRules?.includes("variations of") ||
+    mealCriteria.aiRules?.includes("variation of") ||
+    (mealCriteria.aiRules &&
+      mealCriteria.aiRules.length < 50 &&
+      !mealCriteria.aiRules.toLowerCase().includes("make") &&
+      !mealCriteria.aiRules.toLowerCase().includes("create") &&
+      !mealCriteria.aiRules.toLowerCase().includes("generate"));
 
   // Extract meal name if it's a variation request
   let requestedMeal: string | undefined;
   if (isVariationRequest && mealCriteria.aiRules) {
-    const mealNameMatch = mealCriteria.aiRules.match(/variations? of ["']?([^"']+)["']?/i) || 
-                         mealCriteria.aiRules.match(/["']?([^"']+)["']?/);
-    requestedMeal = mealNameMatch ? mealNameMatch[1] : mealCriteria.aiRules.trim();
+    const mealNameMatch =
+      mealCriteria.aiRules.match(/variations? of ["']?([^"']+)["']?/i) ||
+      mealCriteria.aiRules.match(/["']?([^"']+)["']?/);
+    requestedMeal = mealNameMatch
+      ? mealNameMatch[1]
+      : mealCriteria.aiRules.trim();
   }
 
   // Build prompt with priority handling for meal name requests
   let prompt = "";
-  
+
   if (isVariationRequest && requestedMeal) {
     // PRIORITY MODE: User requested specific meal variations
     prompt = `You are a professional nutritionist. Generate exactly ${numberOfSuggestions} UNIQUE VARIATIONS of "${requestedMeal}".
@@ -1616,7 +1635,7 @@ ALL meals must be variations of "${requestedMeal}".
 - Target calories per meal: approximately ${targetCalories} calories (±10%)
 - Language for meal names and ingredients: ${language}
 ${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
-${mealCriteria.preferences?.length ? `- Preferences (try to include): ${mealCriteria.preferences.join(", ")}` : ""}
+${mealCriteria.preferences?.length ? `- Food Preferences (MUST INCORPORATE): ${mealCriteria.preferences.join(", ")} - *** CRITICAL: Incorporate these preferences into the variations where possible. ***` : ""}
 ${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
 
 Return a JSON object with a "meals" array containing exactly ${numberOfSuggestions} meal objects.
@@ -1665,7 +1684,7 @@ Each meal MUST have ALL these fields:
 - Target calories per meal: approximately ${targetCalories} calories (±10%)
 - Language for meal names and ingredients: ${language}
 ${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
-${mealCriteria.preferences?.length ? `- Preferences (try to include): ${mealCriteria.preferences.join(", ")}` : ""}
+${mealCriteria.preferences?.length ? `- Food Preferences (MUST INCORPORATE): ${mealCriteria.preferences.join(", ")} - *** CRITICAL: ALL meals should feature or be inspired by these preferences. For example, if "Japanese food" is preferred, generate meals like sushi, ramen, teriyaki, miso soup, etc. ***` : ""}
 ${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
 ${mealCriteria.aiRules ? `- Additional rules: ${mealCriteria.aiRules}` : ""}
 
@@ -1736,24 +1755,22 @@ Each meal MUST have ALL these fields:
               if (Array.isArray(ing)) {
                 const rawName = String(ing[0] || "");
                 const amount = String(ing[1] || "");
-                
+
                 // Clean ingredient name (remove preparation words)
                 const cleanedName = cleanIngredientName(rawName);
-                
+
                 // Assign category based on ingredient name
                 const category = assignIngredientCategory(cleanedName);
-                
+
                 // Return with category if assigned
-                return category 
+                return category
                   ? [cleanedName, amount, category]
                   : [cleanedName, amount];
               }
               // Handle string format
               const cleanedName = cleanIngredientName(String(ing));
               const category = assignIngredientCategory(cleanedName);
-              return category 
-                ? [cleanedName, "", category]
-                : [cleanedName, ""];
+              return category ? [cleanedName, "", category] : [cleanedName, ""];
             })
           : [],
         prepTime: Math.round(meal.prepTime || 30),
@@ -1876,15 +1893,13 @@ Return ONLY valid JSON:
               const amount = String(ing[1] || "");
               const cleanedName = cleanIngredientName(rawName);
               const category = assignIngredientCategory(cleanedName);
-              return category 
+              return category
                 ? [cleanedName, amount, category]
                 : [cleanedName, amount];
             }
             const cleanedName = cleanIngredientName(String(ing));
             const category = assignIngredientCategory(cleanedName);
-            return category 
-              ? [cleanedName, "", category]
-              : [cleanedName, ""];
+            return category ? [cleanedName, "", category] : [cleanedName, ""];
           })
         : [],
       prepTime,

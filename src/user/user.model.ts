@@ -159,8 +159,23 @@ const userSchemaDefinition = {
   bmr: { type: Number, required: false }, // Basal Metabolic Rate
   tdee: { type: Number, required: false }, // Total Daily Energy Expenditure
   idealWeight: { type: Number, required: false },
-  // Premium status
-  isPremium: { type: Boolean, default: false, required: false },
+  // Subscription tier
+  subscriptionTier: {
+    type: String,
+    enum: ["free", "plus", "premium"],
+    default: "free",
+    required: false,
+  },
+  // Stripe fields
+  stripeCustomerId: { type: String, required: false },
+  stripeSubscriptionId: { type: String, required: false },
+  subscriptionStatus: { 
+    type: String, 
+    enum: ["active", "canceled", "past_due", "trialing", "incomplete", "incomplete_expired", "unpaid", "none"],
+    default: "none",
+    required: false 
+  },
+  subscriptionEndDate: { type: Date, required: false },
   // OAuth fields
   oauthProvider: { type: String, required: false }, // 'google', 'facebook', or null
   oauthId: { type: String, required: false }, // OAuth provider's user ID

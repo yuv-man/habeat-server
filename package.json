@@ -44,6 +44,7 @@
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^10.3.0",
     "@nestjs/swagger": "^7.4.2",
+    "@types/stripe": "^8.0.416",
     "axios": "^1.11.0",
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
@@ -57,6 +58,7 @@
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.1",
     "sharp": "^0.34.5",
+    "stripe": "^20.3.0",
     "swagger-ui-express": "^5.0.1",
     "winston": "^3.17.0"
   },

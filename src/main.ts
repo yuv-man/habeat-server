@@ -22,11 +22,18 @@ mongooseConnection.on("error", (err) => {
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
-    bodyParser: true,
-    rawBody: false,
+    bodyParser: false, // Disable default body parser to handle raw body for Stripe webhook
   });
 
   const expressApp = app.getHttpAdapter().getInstance();
+  
+  // Apply raw body parser only for Stripe webhook endpoint
+  expressApp.use(
+    "/api/subscription/webhook",
+    express.raw({ type: "application/json" })
+  );
+  
+  // Apply JSON body parser for all other routes
   expressApp.use(express.json({ limit: "10mb" }));
   expressApp.use(express.urlencoded({ limit: "10mb", extended: true }));
 
