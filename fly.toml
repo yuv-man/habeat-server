@@ -10,6 +10,7 @@ app = "habeat-server"
 [env]
   NODE_ENV = "production"
   PORT = "8080"
+  NODE_OPTIONS = "--max-old-space-size=768"
 
 [http_service]
   internal_port = 8080
@@ -22,4 +23,4 @@ app = "habeat-server"
 [[vm]]
   cpu_kind = "shared"
   cpus = 1
-  memory_mb = 512
+  memory_mb = 1024

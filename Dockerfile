@@ -27,7 +27,8 @@ RUN npm ci --include=dev
 # Copy application code
 COPY . .
 
-# Build application
+# Build application (increase heap to avoid OOM during TypeScript compilation)
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN npm run build
 
 
