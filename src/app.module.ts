@@ -17,6 +17,7 @@ import { ReflectionModule } from "./reflection/reflection.module";
 import { NotificationModule } from "./notification/notification.module";
 import { PhotoRecognitionModule } from "./photo-recognition/photo-recognition.module";
 import { SubscriptionModule } from "./subscription/subscription.module";
+import { CBTModule } from "./cbt/cbt.module";
 import logger from "./utils/logger";
 
 @Module({
@@ -83,6 +84,7 @@ import logger from "./utils/logger";
     NotificationModule,
     PhotoRecognitionModule,
     SubscriptionModule,
+    CBTModule,
   ],
 })
 export class AppModule {}

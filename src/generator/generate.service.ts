@@ -255,6 +255,22 @@ const getAvailableGeminiModels = async (apiKey: string): Promise<string[]> => {
   }
 };
 
+// Module-level cache for Gemini model list — avoids redundant HTTP calls during parallel day generation
+let _cachedGeminiModels: string[] | null = null;
+let _modelCacheTimestamp = 0;
+const MODEL_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+const getAvailableGeminiModelsCached = async (apiKey: string): Promise<string[]> => {
+  if (_cachedGeminiModels && Date.now() - _modelCacheTimestamp < MODEL_CACHE_TTL_MS) {
+    logger.info("[Gemini] Using cached model list");
+    return _cachedGeminiModels;
+  }
+  const models = await getAvailableGeminiModels(apiKey);
+  _cachedGeminiModels = models;
+  _modelCacheTimestamp = Date.now();
+  return models;
+};
+
 // Generic retry logic with exponential backoff
 const retryWithBackoffGeneric = async <T>(
   fn: () => Promise<T>,
@@ -428,7 +444,151 @@ const generateWithFallback = async <T>(
   );
 };
 
-// Gemini generation with timeout
+// Cuisine and protein rotation for variety enforcement across parallel day calls
+const CUISINE_ROTATION = [
+  "Mediterranean", "Mexican", "Asian", "Italian",
+  "Middle Eastern", "Indian", "Japanese",
+];
+const PROTEIN_ROTATION = [
+  "Chicken", "Beef", "Salmon", "Tofu", "Turkey", "Shrimp", "Eggs",
+];
+
+/**
+ * Build a compact single-day prompt (~300 tokens vs ~3000 for the full 7-day prompt).
+ * Called once per day in parallel, each with a distinct cuisine + protein from the rotation.
+ */
+const buildDayPrompt = (
+  userData: IUserData,
+  dateStr: string,
+  dayName: string,
+  dayIndex: number,
+  hasWorkout: boolean,
+  targetCalories: number,
+  macros: { protein: number; carbs: number; fat: number },
+  goalContextStr: string
+): string => {
+  const bCal = Math.round(targetCalories * 0.25);
+  const lCal = Math.round(targetCalories * 0.35);
+  const dCal = Math.round(targetCalories * 0.3);
+  const sCal = Math.round(targetCalories * 0.1);
+  const cuisine = CUISINE_ROTATION[dayIndex % CUISINE_ROTATION.length];
+  const protein = PROTEIN_ROTATION[dayIndex % PROTEIN_ROTATION.length];
+
+  const avoidList =
+    [
+      ...(userData.allergies || []),
+      ...(userData.dietaryRestrictions || []),
+      ...(userData.dislikes || []),
+    ].join(", ") || "none";
+
+  const preferList = userData.foodPreferences?.join(", ") || "none";
+
+  const workoutLine = hasWorkout
+    ? `"workouts":[{"name":"<name>","category":"<cat>","duration":<min>,"caloriesBurned":<cal>}]`
+    : `"workouts":[]`;
+
+  return `Generate a single-day meal plan as JSON.
+PERSON: ${userData.age}y ${userData.gender} ${userData.height}cm ${userData.weight}kg path=${userData.path}
+DAILY TARGETS: ${targetCalories} kcal | P:${macros.protein}g C:${macros.carbs}g F:${macros.fat}g
+AVOID: ${avoidList}
+PREFER: ${preferList}
+${goalContextStr ? `STYLE: ${goalContextStr.substring(0, 200)}` : ""}
+DAY: ${dateStr} (${dayName}) | Cuisine: ${cuisine} | Primary protein: ${protein}
+${hasWorkout ? "WORKOUT: Include 1 workout today." : "REST DAY: No workout."}
+MEAL CALORIE TARGETS:
+- breakfast: ~${bCal} kcal
+- lunch: ~${lCal} kcal
+- dinner: ~${dCal} kcal
+- snacks[0]: ~${sCal} kcal
+INGREDIENT FORMAT: "ingredient_name|amount|unit|category"
+- ingredient_name: RAW name only — NO "chopped", "diced", "minced", "fresh", "dried" etc.
+- category: one of Proteins/Vegetables/Fruits/Grains/Dairy/Pantry/Spices
+- Math: protein*4 + carbs*4 + fat*9 ≈ meal calories
+RETURN ONLY THIS JSON (no markdown, no extra text):
+{"date":"${dateStr}","day":"${dayName}","meals":{"breakfast":{"name":"...","calories":${bCal},"macros":{"protein":0,"carbs":0,"fat":0},"ingredients":["..."],"prepTime":0},"lunch":{"name":"...","calories":${lCal},"macros":{"protein":0,"carbs":0,"fat":0},"ingredients":["..."],"prepTime":0},"dinner":{"name":"...","calories":${dCal},"macros":{"protein":0,"carbs":0,"fat":0},"ingredients":["..."],"prepTime":0},"snacks":[{"name":"...","calories":${sCal},"macros":{"protein":0,"carbs":0,"fat":0},"ingredients":["..."],"prepTime":0}]},${workoutLine}}`;
+};
+
+/**
+ * Generate one day's meal plan using Gemini.
+ * Tries up to 3 models with 2 attempts each and a per-day timeout.
+ */
+const generateSingleDayPlan = async (
+  genAI: GoogleGenerativeAI,
+  modelsToTry: string[],
+  dayPrompt: string,
+  context: string,
+  timeoutMs: number = 20000
+): Promise<any> => {
+  let lastError: Error | null = null;
+
+  for (const modelName of modelsToTry.slice(0, 3)) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName });
+
+        let timeoutHandle: NodeJS.Timeout;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(
+            () =>
+              reject(
+                new Error(`[${context}] Timed out after ${timeoutMs / 1000}s`)
+              ),
+            timeoutMs
+          );
+        });
+
+        const resultPromise = (async () => {
+          const result = await model.generateContent([
+            { text: dayPrompt + "\nReturn ONLY JSON." },
+          ]);
+          clearTimeout(timeoutHandle!);
+          const text = result.response.text();
+          if (!text || text.trim().length === 0)
+            throw new Error(`[${context}] Empty response from ${modelName}`);
+          const cleaned = repairJSON(extractAndCleanJSON(text));
+          const parsed = JSON.parse(cleaned);
+          if (!parsed.date || !parsed.meals)
+            throw new Error(
+              `[${context}] Missing date or meals in response from ${modelName}`
+            );
+          return parsed;
+        })();
+
+        const dayData = await Promise.race([resultPromise, timeoutPromise]);
+        logger.info(`[${context}] Generated with ${modelName} (attempt ${attempt + 1})`);
+        return dayData;
+      } catch (err: unknown) {
+        lastError =
+          err instanceof Error ? err : new Error(getErrorMessage(err));
+        const msg = getErrorMessage(err);
+
+        if (
+          msg.includes("401") ||
+          msg.includes("403") ||
+          msg.includes("API_KEY_INVALID")
+        ) {
+          throw err; // Non-retryable
+        }
+        if (msg.includes("429") || msg.includes("quota")) {
+          logger.warn(`[${context}] Quota hit on ${modelName}, trying next model`);
+          break; // Skip remaining attempts on this model
+        }
+
+        if (attempt === 0) {
+          logger.warn(
+            `[${context}] ${modelName} attempt 1 failed, retrying: ${msg}`
+          );
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+    }
+    logger.warn(`[${context}] Model ${modelName} exhausted, trying next`);
+  }
+
+  throw lastError || new Error(`[${context}] All models failed`);
+};
+
+// Gemini generation — parallel per-day calls for speed (~5–8s vs 60s+ for single 7-day call)
 const generateMealPlanWithGemini = async (
   userData: IUserData,
   weekStartDate: Date,
@@ -444,368 +604,122 @@ const generateMealPlanWithGemini = async (
     );
   }
 
-  let genAI: GoogleGenerativeAI;
-  try {
-    genAI = new GoogleGenerativeAI(apiKey);
-    logger.info("Gemini API client initialized");
-  } catch (error: unknown) {
-    throw new Error(`Failed to initialize Gemini: ${getErrorMessage(error)}`);
-  }
+  const genAI = new GoogleGenerativeAI(apiKey);
 
-  // Get available models for this API key
-  logger.info("[Gemini] Checking available models...");
-  const availableModels = await getAvailableGeminiModels(apiKey);
-
-  // Use available models, or fallback to known working models
+  // Fetch model list once (cached) — avoids N duplicate HTTP calls during parallel generation
+  logger.info("[Gemini] Fetching available models (cached)...");
+  const availableModels = await getAvailableGeminiModelsCached(apiKey);
   const modelsToTry =
     availableModels.length > 0
       ? availableModels
-      : [
-          "gemini-2.5-flash",
-          "gemini-2.5-pro",
-          "gemini-2.0-flash",
-          "gemini-2.0-flash-001",
-        ];
+      : ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-001"];
 
   if (modelsToTry.length === 0) {
-    throw new Error(
-      "No Gemini models available. Please check your API key and quota."
-    );
+    throw new Error("No Gemini models available. Please check your API key and quota.");
   }
 
-  logger.info(`[Gemini] Will try models in order: ${modelsToTry.join(", ")}`);
+  logger.info(`[Gemini] Will use models: ${modelsToTry.slice(0, 3).join(", ")}`);
 
-  const { prompt, dayToName, nameToDay, dates, activeDays, workoutDays } =
-    buildPrompt(
-      userData,
-      planType,
-      language,
-      weekStartDate,
-      goals,
-      planTemplate
-    );
-
-  // Helper to get day name from date string
-  const getDayNameFromDate = (dateStr: string): string => {
-    try {
-      if (!dateStr || typeof dateStr !== "string") {
-        return "monday";
-      }
-      const date = new Date(dateStr);
-      // Check if date is valid
-      if (isNaN(date.getTime())) {
-        logger.warn(
-          `[Gemini] Invalid date string: ${dateStr}, defaulting to monday`
-        );
-        return "monday";
-      }
-      const dayNum = date.getDay();
-      return dayToName[dayNum] || "monday";
-    } catch (error) {
-      logger.warn(
-        `[Gemini] Error parsing date string "${dateStr}": ${getErrorMessage(error)}, defaulting to monday`
-      );
-      return "monday";
-    }
-  };
-
-  const callModelWithTimeout = async (
-    modelName: string,
-    timeoutMs: number = 120000
-  ): Promise<MealPlanResponse> => {
-    logger.info(
-      `[Gemini] Calling ${modelName} (timeout: ${timeoutMs / 1000}s)`
-    );
-
-    let model;
-    try {
-      model = genAI.getGenerativeModel({ model: modelName });
-    } catch (error: unknown) {
-      throw new Error(
-        `Failed to initialize model ${modelName}: ${getErrorMessage(error)}`
-      );
-    }
-
-    // Create timeout that rejects after timeoutMs
-    let timeoutHandle: NodeJS.Timeout;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(() => {
-        reject(
-          new Error(
-            `[Gemini] Request to ${modelName} timed out after ${timeoutMs / 1000}s. Service may be overloaded.`
-          )
-        );
-      }, timeoutMs);
-    });
-
-    try {
-      logger.info(`[Gemini] Sending request to ${modelName}...`);
-
-      const resultPromise = (async () => {
-        const result = await model.generateContent([
-          {
-            text:
-              prompt +
-              "\n\nCRITICAL REQUIREMENTS:\n" +
-              "1. You MUST generate meal plans for ALL 7 DAYS\n" +
-              "2. Each day MUST include: breakfast, lunch, dinner, snacks, hydration, workouts\n" +
-              "3. Return ONLY valid JSON\n" +
-              "4. No markdown formatting or explanations\n\n",
-          },
-          {
-            text: "Remember: Return ONLY the JSON object. No other text.",
-          },
-        ]);
-
-        clearTimeout(timeoutHandle!);
-
-        if (!result || !result.response) {
-          throw new Error("Empty response from Gemini API");
-        }
-
-        const responseText = result.response.text();
-
-        if (!responseText || responseText.trim().length === 0) {
-          throw new Error("Gemini returned empty response text");
-        }
-
-        logger.info(
-          `[Gemini] Received response from ${modelName}: ${responseText.length} characters`
-        );
-
-        return responseText;
-      })();
-
-      const responseText = await Promise.race([resultPromise, timeoutPromise]);
-
-      // Use the same JSON extraction logic as Llama for consistency
-      let cleanedJSON: string;
-      try {
-        cleanedJSON = extractAndCleanJSON(responseText);
-      } catch (error: unknown) {
-        logger.error(
-          `[Gemini] Failed to extract JSON. Raw response (first 1000 chars): ${responseText.substring(0, 1000)}`
-        );
-        throw new Error(
-          `Failed to extract JSON from Gemini response: ${getErrorMessage(error)}`
-        );
-      }
-
-      if (!cleanedJSON || cleanedJSON.trim().length === 0) {
-        logger.error(
-          `[Gemini] Empty JSON after extraction. Raw response (first 1000 chars): ${responseText.substring(0, 1000)}`
-        );
-        throw new Error("Failed to extract JSON from Gemini response");
-      }
-
-      logger.info(`[Gemini] Parsing JSON from response...`);
-      logger.debug(
-        `[Gemini] Extracted JSON preview (first 500 chars): ${cleanedJSON.substring(0, 500)}...`
-      );
-
-      let parsedResponse: any;
-      try {
-        parsedResponse = JSON.parse(cleanedJSON);
-      } catch (parseError: unknown) {
-        logger.error(
-          `[Gemini] JSON parse error. Extracted JSON (first 2000 chars): ${cleanedJSON.substring(0, 2000)}`
-        );
-        throw new Error(
-          `Failed to parse Gemini JSON: ${getErrorMessage(parseError)}`
-        );
-      }
-
-      // Check if weeklyPlan exists at root or nested in mealPlan
-      let weeklyPlan = parsedResponse?.weeklyPlan;
-      if (!weeklyPlan && parsedResponse?.mealPlan?.weeklyPlan) {
-        weeklyPlan = parsedResponse.mealPlan.weeklyPlan;
-        logger.info(
-          `[Gemini] Found weeklyPlan nested in mealPlan object, using it`
-        );
-      }
-
-      // If weeklyPlan doesn't exist, check if days are at root level (monday, tuesday, etc.)
-      // and convert them to date-keyed format
-      if (!weeklyPlan) {
-        const responseKeys = Object.keys(parsedResponse || {});
-        const dayNames = [
-          "monday",
-          "tuesday",
-          "wednesday",
-          "thursday",
-          "friday",
-          "saturday",
-          "sunday",
-        ];
-
-        // Check if response has day names as keys
-        const hasDayKeys = dayNames.some((day) => responseKeys.includes(day));
-
-        if (hasDayKeys) {
-          logger.info(
-            `[Gemini] Found days at root level, converting to date-keyed weeklyPlan object`
-          );
-          // Convert day-keyed object to date-keyed object
-          const dateKeyedPlan: { [date: string]: any } = {};
-
-          dayNames.forEach((dayName) => {
-            if (parsedResponse[dayName]) {
-              const dayData = parsedResponse[dayName];
-              // Use the date from dayData, or calculate from dates array
-              const dayIndex = dayNames.indexOf(dayName);
-              let dateKey = dayData.date;
-
-              // If no date in dayData, try to get it from dates array
-              if (!dateKey && dates[dayIndex]) {
-                try {
-                  const date = dates[dayIndex];
-                  // Validate date before getting local date key
-                  if (date instanceof Date && !isNaN(date.getTime())) {
-                    dateKey = getLocalDateKey(date);
-                  } else {
-                    logger.warn(
-                      `[Gemini] Invalid date at index ${dayIndex} for ${dayName}, skipping`
-                    );
-                  }
-                } catch (error) {
-                  logger.warn(
-                    `[Gemini] Error formatting date for ${dayName}: ${getErrorMessage(error)}`
-                  );
-                }
-              }
-
-              if (dateKey) {
-                dateKeyedPlan[dateKey] = {
-                  day: dayName,
-                  date: dateKey,
-                  ...dayData,
-                };
-              }
-            }
-          });
-
-          weeklyPlan = dateKeyedPlan;
-        }
-      }
-
-      if (!weeklyPlan) {
-        const responseKeys = Object.keys(parsedResponse || {});
-        const responsePreview = JSON.stringify(parsedResponse).substring(
-          0,
-          2000
-        );
-        const errorMsg = `Missing weeklyPlan in response. Response keys: ${responseKeys.join(", ")}. Response preview: ${responsePreview}`;
-        logger.error(`[Gemini] ${errorMsg}`);
-        throw new Error(errorMsg);
-      }
-
-      // weeklyPlan can be either array or object (date-keyed)
-      // If it's an object, we need to convert it to array format for transformWeeklyPlan
-      let weeklyPlanArray: any[] = [];
-
-      if (Array.isArray(weeklyPlan)) {
-        weeklyPlanArray = weeklyPlan;
-      } else if (typeof weeklyPlan === "object") {
-        // Convert date-keyed object to array format
-        weeklyPlanArray = Object.entries(weeklyPlan).map(
-          ([dateKey, dayData]: [string, any]) => ({
-            day: dayData.day || getDayNameFromDate(dateKey),
-            date: dateKey,
-            ...dayData,
-          })
-        );
-      } else {
-        const errorMsg = `weeklyPlan is neither array nor object. Type: ${typeof weeklyPlan}, Value: ${JSON.stringify(weeklyPlan).substring(0, 500)}`;
-        logger.error(`[Gemini] ${errorMsg}`);
-        throw new Error(errorMsg);
-      }
-
-      if (weeklyPlanArray.length === 0) {
-        throw new Error("weeklyPlan is empty");
-      }
-
-      // Update parsedResponse to have weeklyPlan as array for transformWeeklyPlan
-      parsedResponse = { weeklyPlan: weeklyPlanArray } as {
-        weeklyPlan: Array<any>;
-      };
-
-      logger.info(
-        `[Gemini] Successfully parsed ${parsedResponse.weeklyPlan.length} days`
-      );
-
-      const transformedPlan = await transformWeeklyPlan(
-        parsedResponse,
-        dayToName,
-        nameToDay,
-        dates,
-        activeDays,
-        workoutDays,
-        planType,
-        language,
-        weekStartDate
-      );
-
-      // Enrich plan with user's favorite meals (20-30% replacement)
-      const enrichedPlan = await enrichPlanWithFavoriteMeals(
-        transformedPlan,
-        userData
-      );
-
-      return enrichedPlan;
-    } catch (error: unknown) {
-      clearTimeout(timeoutHandle!);
-
-      const errorMsg = getErrorMessage(error);
-
-      if (
-        errorMsg.includes("401") ||
-        errorMsg.includes("403") ||
-        errorMsg.includes("API_KEY_INVALID")
-      ) {
-        throw new Error(`Invalid Gemini API key: ${errorMsg}`);
-      }
-
-      if (errorMsg.includes("429") || errorMsg.includes("quota")) {
-        throw new Error(`Gemini quota exceeded: ${errorMsg}`);
-      }
-
-      if (errorMsg.includes("503") || errorMsg.includes("overloaded")) {
-        throw new Error(`Gemini model overloaded: ${errorMsg}`);
-      }
-
-      throw new Error(`Gemini error: ${errorMsg}`);
-    }
-  };
-
-  let lastError: Error | null = null;
-
-  for (const modelName of modelsToTry) {
-    try {
-      logger.info(`[Gemini] Attempting model: ${modelName}`);
-      return await retryWithBackoff(
-        () => callModelWithTimeout(modelName, 120000),
-        3,
-        2000
-      );
-    } catch (error: unknown) {
-      lastError =
-        error instanceof Error ? error : new Error(getErrorMessage(error));
-      const errorMsg = getErrorMessage(error);
-
-      logger.warn(`[Gemini] Model ${modelName} failed: ${errorMsg}`);
-
-      if (modelsToTry.indexOf(modelName) < modelsToTry.length - 1) {
-        logger.info(`[Gemini] Trying next model...`);
-      }
-    }
-  }
-
-  throw (
-    lastError ||
-    new Error(
-      `All available Gemini models failed. Tried: ${modelsToTry.join(", ")}`
-    )
+  // Build plan context: dates, day mapping, workout schedule
+  const { dayToName, nameToDay, dates, activeDays, workoutDays } = buildPrompt(
+    userData, planType, language, weekStartDate, goals, planTemplate
   );
+
+  // Compute nutrition targets once — shared across all day prompts
+  const goalAdjustments = planTemplate
+    ? getGoalBasedAdjustments([])
+    : getGoalBasedAdjustments(goals);
+  const effectiveWorkoutFreq =
+    goalAdjustments.workoutFrequency ?? userData.workoutFrequency;
+  const bmr = calculateBMR(userData.weight, userData.height, userData.age, userData.gender);
+  const tdee = calculateTDEE(bmr, effectiveWorkoutFreq);
+  const baseTargetCalories = calculateTargetCalories(tdee, userData.path);
+  const targetCalories = Math.max(
+    1200,
+    baseTargetCalories + goalAdjustments.calorieAdjustment
+  );
+  let macros = calculateMacros(targetCalories, userData.path);
+  if (goalAdjustments.macroAdjustments) {
+    macros = {
+      protein: Math.max(0, macros.protein + (goalAdjustments.macroAdjustments.protein || 0)),
+      carbs: Math.max(0, macros.carbs + (goalAdjustments.macroAdjustments.carbs || 0)),
+      fat: Math.max(0, macros.fat + (goalAdjustments.macroAdjustments.fat || 0)),
+    };
+  }
+
+  // Build workout date set: which specific dates require a workout
+  const workoutDayNums = new Set(workoutDays);
+  const workoutDateStrSet = new Set(
+    dates.filter((d) => workoutDayNums.has(d.getDay())).map(getLocalDateKey)
+  );
+
+  // Build goal context string for the compact day prompts
+  const goalContextStr =
+    planTemplate && PLAN_TEMPLATE_STYLES[planTemplate]
+      ? PLAN_TEMPLATE_STYLES[planTemplate]
+      : goalAdjustments.goalDescription
+        ? `Goal: ${goalAdjustments.goalDescription}`
+        : "";
+
+  logger.info(
+    `[Gemini] Launching ${dates.length} parallel day-generation requests...`
+  );
+
+  // Generate all days in parallel — each call is ~1/7 the size of the old single call
+  const dayResults = await Promise.all(
+    dates.map(async (date, dayIndex) => {
+      const dateStr = getLocalDateKey(date);
+      const dayName = dayToName[date.getDay()];
+      const hasWorkout = workoutDateStrSet.has(dateStr);
+
+      const dayPrompt = buildDayPrompt(
+        userData,
+        dateStr,
+        dayName,
+        dayIndex,
+        hasWorkout,
+        targetCalories,
+        macros,
+        goalContextStr
+      );
+
+      return generateSingleDayPlan(
+        genAI,
+        modelsToTry,
+        dayPrompt,
+        `Gemini-${dayName}`,
+        20000
+      );
+    })
+  );
+
+  logger.info(`[Gemini] All ${dayResults.length} days generated. Assembling...`);
+
+  // Assemble into the weeklyPlan array format expected by transformWeeklyPlan
+  const weeklyPlanArray = dayResults.map((day) => ({
+    ...day,
+    day: day.day || dayToName[new Date(day.date + "T00:00:00").getDay()] || "monday",
+    date: day.date,
+  }));
+
+  const parsedResponse = { weeklyPlan: weeklyPlanArray };
+
+  const transformedPlan = await transformWeeklyPlan(
+    parsedResponse,
+    dayToName,
+    nameToDay,
+    dates,
+    activeDays,
+    workoutDays,
+    planType,
+    language,
+    weekStartDate
+  );
+
+  const enrichedPlan = await enrichPlanWithFavoriteMeals(transformedPlan, userData);
+
+  logger.info("[Gemini] Weekly meal plan generated successfully via parallel day calls");
+  return enrichedPlan;
 };
 
 // MAIN: Try Gemini first, fallback to Llama
