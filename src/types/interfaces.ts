@@ -63,7 +63,15 @@ export type HabitChallengeType =
   | "protein_focus"      // Hit protein goal X days
   | "mindful_eating"     // Log meals consistently
   | "meal_consistency"   // Don't skip any meals X days
-  | "weekly_streak";     // Complete full week of tracking
+  | "weekly_streak"      // Complete full week of tracking
+  // CBT/Mindfulness challenge types
+  | "mood_tracking"      // Log mood X times
+  | "mindful_meal"       // Complete mindful eating exercise before meals
+  | "thought_journal"    // Complete X thought records
+  | "cbt_exercise"       // Complete X CBT exercises
+  | "emotional_awareness" // Link mood to X meals
+  | "pre_meal_checkin"   // Do mood check-in before X meals
+  | "mindfulness_streak"; // CBT activity streak for X days
 
 // Legacy challenge types (kept for backward compatibility)
 export type ChallengeType =
