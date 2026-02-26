@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, NotFoundException, Inject, forwardRef } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import mongoose from "mongoose";
@@ -23,6 +23,8 @@ import {
   LinkMoodToMealDto,
 } from "./cbt.dto";
 import logger from "../utils/logger";
+import { ChallengeService } from "../challenge/challenge.service";
+import { EngagementService } from "../engagement/engagement.service";
 
 // Built-in exercise library
 const EXERCISE_LIBRARY = [
@@ -255,7 +257,11 @@ export class CBTService {
     @InjectModel(CBTExerciseCompletion.name)
     private exerciseCompletionModel: Model<ICBTExerciseCompletion>,
     @InjectModel(MealMoodCorrelation.name)
-    private mealMoodModel: Model<IMealMoodCorrelation>
+    private mealMoodModel: Model<IMealMoodCorrelation>,
+    @Inject(forwardRef(() => ChallengeService))
+    private challengeService: ChallengeService,
+    @Inject(forwardRef(() => EngagementService))
+    private engagementService: EngagementService
   ) {}
 
   // ============== MOOD ENDPOINTS ==============
@@ -305,6 +311,34 @@ export class CBTService {
     });
 
     logger.info(`Mood logged for user ${userId}: ${dto.moodCategory}`);
+
+    // Update challenge progress
+    try {
+      await this.challengeService.onMoodLogged(userId);
+
+      // Check for mood tracking milestones and award badges
+      const moodCount = await this.moodModel.countDocuments({
+        userId: new mongoose.Types.ObjectId(userId),
+      });
+
+      if (moodCount === 1) {
+        await this.engagementService.awardBadge(userId, "mood_explorer");
+      }
+
+      // Check mood streak for badge
+      const moodStreak = await this.calculateStreak(
+        new mongoose.Types.ObjectId(userId),
+        "mood"
+      );
+      if (moodStreak === 7) {
+        await this.engagementService.awardBadge(userId, "mood_tracker");
+      }
+      if (moodStreak === 30) {
+        await this.engagementService.awardBadge(userId, "mood_master");
+      }
+    } catch (error) {
+      logger.error(`Failed to update challenge progress for mood: ${error}`);
+    }
 
     return {
       success: true,
@@ -403,6 +437,25 @@ export class CBTService {
     });
 
     logger.info(`Thought entry logged for user ${userId}`);
+
+    // Update challenge progress
+    try {
+      await this.challengeService.onThoughtLogged(userId);
+
+      // Check for thought journaling milestones
+      const thoughtCount = await this.thoughtModel.countDocuments({
+        userId: new mongoose.Types.ObjectId(userId),
+      });
+
+      if (thoughtCount === 5) {
+        await this.engagementService.awardBadge(userId, "thought_challenger");
+      }
+      if (thoughtCount === 20) {
+        await this.engagementService.awardBadge(userId, "cognitive_warrior");
+      }
+    } catch (error) {
+      logger.error(`Failed to update challenge progress for thought: ${error}`);
+    }
 
     return {
       success: true,
@@ -558,6 +611,39 @@ export class CBTService {
       `Exercise completed for user ${userId}: ${dto.exerciseType}`
     );
 
+    // Update challenge progress
+    try {
+      await this.challengeService.onCBTExerciseCompleted(userId, dto.exerciseType);
+
+      // Check for exercise completion milestones
+      const exerciseCount = await this.exerciseCompletionModel.countDocuments({
+        userId: new mongoose.Types.ObjectId(userId),
+      });
+
+      if (exerciseCount === 1) {
+        await this.engagementService.awardBadge(userId, "mindfulness_starter");
+      }
+      if (exerciseCount === 7) {
+        await this.engagementService.awardBadge(userId, "mindfulness_habit");
+      }
+      if (exerciseCount === 30) {
+        await this.engagementService.awardBadge(userId, "mindfulness_master");
+      }
+
+      // Track mindful eating specifically
+      if (dto.exerciseType === "mindful_eating") {
+        const mindfulMealCount = await this.exerciseCompletionModel.countDocuments({
+          userId: new mongoose.Types.ObjectId(userId),
+          exerciseType: "mindful_eating",
+        });
+        if (mindfulMealCount === 7) {
+          await this.engagementService.awardBadge(userId, "mindful_eater");
+        }
+      }
+    } catch (error) {
+      logger.error(`Failed to update challenge progress for exercise: ${error}`);
+    }
+
     return {
       success: true,
       data: { completion },
@@ -598,6 +684,22 @@ export class CBTService {
     logger.info(
       `Meal-mood correlation logged for user ${userId}: ${dto.mealName}`
     );
+
+    // Update challenge progress
+    try {
+      await this.challengeService.onMealMoodLinked(userId);
+
+      // Check for emotional awareness milestones
+      const correlationCount = await this.mealMoodModel.countDocuments({
+        userId: new mongoose.Types.ObjectId(userId),
+      });
+
+      if (correlationCount === 10) {
+        await this.engagementService.awardBadge(userId, "emotional_eater_aware");
+      }
+    } catch (error) {
+      logger.error(`Failed to update challenge progress for meal-mood link: ${error}`);
+    }
 
     return {
       success: true,

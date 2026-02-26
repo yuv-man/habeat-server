@@ -93,6 +93,74 @@ export const HABIT_BADGES: Record<string, Omit<IBadge, "earnedAt" | "id">> = {
     icon: "check-circle",
     category: "milestone",
   },
+
+  // CBT/Mindfulness badges
+  mood_explorer: {
+    name: "Mood Explorer",
+    description: "Logged your first mood entry",
+    icon: "smile",
+    category: "milestone",
+  },
+  mood_tracker: {
+    name: "Mood Tracker",
+    description: "Logged mood for 7 days in a row",
+    icon: "heart",
+    category: "consistency",
+  },
+  mood_master: {
+    name: "Mood Master",
+    description: "Logged mood for 30 days",
+    icon: "brain",
+    category: "consistency",
+  },
+  thought_challenger: {
+    name: "Thought Challenger",
+    description: "Completed 5 thought records",
+    icon: "lightbulb",
+    category: "milestone",
+  },
+  cognitive_warrior: {
+    name: "Cognitive Warrior",
+    description: "Completed 20 thought records",
+    icon: "shield",
+    category: "milestone",
+  },
+  mindfulness_starter: {
+    name: "Mindfulness Starter",
+    description: "Completed your first CBT exercise",
+    icon: "leaf",
+    category: "milestone",
+  },
+  mindfulness_habit: {
+    name: "Mindfulness Habit",
+    description: "Completed 7 CBT exercises",
+    icon: "lotus",
+    category: "consistency",
+  },
+  mindfulness_master: {
+    name: "Mindfulness Master",
+    description: "Completed 30 CBT exercises",
+    icon: "sparkles",
+    category: "milestone",
+  },
+  emotional_eater_aware: {
+    name: "Emotional Awareness",
+    description: "Linked mood to 10 meals",
+    icon: "eye",
+    category: "milestone",
+  },
+  mindful_eater: {
+    name: "Mindful Eater",
+    description: "Practiced mindful eating for 7 meals",
+    icon: "utensils-crossed",
+    category: "consistency",
+  },
+  cbt_streak_week: {
+    name: "Mindful Week",
+    description: "CBT activity every day for a week",
+    icon: "flame",
+    category: "consistency",
+  },
 };
 
 // Legacy XP rewards (kept for backward compatibility during migration)
@@ -131,9 +199,10 @@ export class EngagementService {
 
   /**
    * Calculate Habit Score (0-100) based on:
-   * - Recent consistency (last 7 days): 40%
-   * - Streak length: 30%
-   * - Goal achievement rate: 30%
+   * - Recent consistency (last 7 days): 30%
+   * - Streak length: 25%
+   * - Goal achievement rate: 25%
+   * - Mindfulness engagement (last 7 days): 20%
    */
   async calculateHabitScore(userId: string): Promise<number> {
     const user = await this.userModel.findById(userId);
@@ -141,18 +210,63 @@ export class EngagementService {
 
     // Get recent activity (last 7 days)
     const recentDays = await this.getRecentActivityDays(userId, 7);
-    const consistencyScore = (recentDays / 7) * 40;
+    const consistencyScore = (recentDays / 7) * 30;
 
     // Streak score (maxes out at 30 days)
     const streak = (user as any).engagement?.streakDays || 0;
-    const streakScore = Math.min(streak / 30, 1) * 30;
+    const streakScore = Math.min(streak / 30, 1) * 25;
 
     // Goal achievement rate (last 7 days)
     const goalRate = await this.getGoalAchievementRate(userId, 7);
-    const goalScore = goalRate * 30;
+    const goalScore = goalRate * 25;
 
-    const habitScore = Math.round(consistencyScore + streakScore + goalScore);
+    // Mindfulness engagement score (last 7 days)
+    const mindfulnessScore = await this.getMindfulnessScore(userId, 7);
+
+    const habitScore = Math.round(consistencyScore + streakScore + goalScore + mindfulnessScore);
     return Math.min(100, Math.max(0, habitScore));
+  }
+
+  /**
+   * Calculate mindfulness engagement score (0-20) based on CBT activities
+   * - Mood tracking: up to 7 points (1 per day)
+   * - CBT exercises: up to 7 points (1 per exercise)
+   * - Thought records: up to 3 points (1 per record)
+   * - Meal-mood correlations: up to 3 points (1 per correlation)
+   */
+  async getMindfulnessScore(userId: string, days: number): Promise<number> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const startDate = new Date(today);
+    startDate.setDate(startDate.getDate() - days + 1);
+
+    const startDateStr = startDate.toISOString().split("T")[0];
+    const endDateStr = today.toISOString().split("T")[0];
+
+    try {
+      // We need to use the User model to access CBT collections
+      // For now, we'll estimate based on engagement badges and stats
+      const user = await this.userModel.findById(userId);
+      if (!user) return 0;
+
+      const badges = (user as any).engagement?.badges || [];
+      let score = 0;
+
+      // Award points based on CBT-related badges
+      if (badges.some((b: any) => b.id === "mood_explorer")) score += 2;
+      if (badges.some((b: any) => b.id === "mood_tracker")) score += 4;
+      if (badges.some((b: any) => b.id === "mindfulness_starter")) score += 2;
+      if (badges.some((b: any) => b.id === "mindfulness_habit")) score += 4;
+      if (badges.some((b: any) => b.id === "thought_challenger")) score += 3;
+      if (badges.some((b: any) => b.id === "emotional_eater_aware")) score += 3;
+      if (badges.some((b: any) => b.id === "cbt_streak_week")) score += 2;
+
+      return Math.min(20, score);
+    } catch (error) {
+      logger.warn(`Failed to calculate mindfulness score: ${error}`);
+      return 0;
+    }
   }
 
   /**

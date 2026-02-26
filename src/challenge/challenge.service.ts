@@ -192,6 +192,161 @@ const HABIT_CHALLENGE_TEMPLATES: HabitChallengeTemplate[] = [
     period: "weekly",
     difficulty: "established",
   },
+
+  // ========== CBT/MINDFULNESS CHALLENGES ==========
+  // Daily mindfulness challenges (quick wins)
+  {
+    type: "mood_tracking",
+    title: "Mood Check-in",
+    description: "Log your mood today",
+    icon: "smile",
+    target: 1,
+    daysRequired: 1,
+    period: "daily",
+    difficulty: "starter",
+  },
+  {
+    type: "cbt_exercise",
+    title: "Mindful Moment",
+    description: "Complete a mindfulness exercise",
+    icon: "brain",
+    target: 1,
+    daysRequired: 1,
+    period: "daily",
+    difficulty: "starter",
+  },
+  {
+    type: "pre_meal_checkin",
+    title: "Pre-Meal Pause",
+    description: "Check in with yourself before a meal",
+    icon: "pause",
+    target: 1,
+    daysRequired: 1,
+    period: "daily",
+    difficulty: "starter",
+  },
+
+  // Starter mindfulness habits (3-day)
+  {
+    type: "mood_tracking",
+    title: "Mood Starter",
+    description: "Log your mood for 3 days",
+    icon: "smile",
+    target: 3,
+    daysRequired: 3,
+    period: "weekly",
+    difficulty: "starter",
+  },
+  {
+    type: "mindful_meal",
+    title: "Mindful Bites",
+    description: "Practice mindful eating for 3 meals",
+    icon: "utensils",
+    target: 3,
+    daysRequired: 3,
+    period: "weekly",
+    difficulty: "starter",
+  },
+  {
+    type: "cbt_exercise",
+    title: "Calm Starter",
+    description: "Complete 3 CBT exercises",
+    icon: "wind",
+    target: 3,
+    daysRequired: 3,
+    period: "weekly",
+    difficulty: "starter",
+  },
+
+  // Building mindfulness habits (7-day)
+  {
+    type: "mood_tracking",
+    title: "Mood Week",
+    description: "Log your mood every day for a week",
+    icon: "heart",
+    target: 7,
+    daysRequired: 7,
+    period: "weekly",
+    difficulty: "building",
+    badgeId: "mood_tracker",
+  },
+  {
+    type: "emotional_awareness",
+    title: "Food & Feelings",
+    description: "Link your mood to 5 meals this week",
+    icon: "link",
+    target: 5,
+    daysRequired: 7,
+    period: "weekly",
+    difficulty: "building",
+  },
+  {
+    type: "cbt_exercise",
+    title: "Mindfulness Week",
+    description: "Complete 7 CBT exercises this week",
+    icon: "brain",
+    target: 7,
+    daysRequired: 7,
+    period: "weekly",
+    difficulty: "building",
+    badgeId: "mindfulness_habit",
+  },
+  {
+    type: "thought_journal",
+    title: "Thought Detective",
+    description: "Complete 3 thought records this week",
+    icon: "search",
+    target: 3,
+    daysRequired: 7,
+    period: "weekly",
+    difficulty: "building",
+  },
+  {
+    type: "mindfulness_streak",
+    title: "Daily Mindfulness",
+    description: "Do any CBT activity every day for a week",
+    icon: "flame",
+    target: 7,
+    daysRequired: 7,
+    period: "weekly",
+    difficulty: "building",
+    badgeId: "cbt_streak_week",
+  },
+
+  // Established mindfulness habits (14-day)
+  {
+    type: "emotional_awareness",
+    title: "Emotional Eater Aware",
+    description: "Link mood to 10 meals in 2 weeks",
+    icon: "eye",
+    target: 10,
+    daysRequired: 14,
+    period: "weekly",
+    difficulty: "established",
+    badgeId: "emotional_eater_aware",
+  },
+  {
+    type: "thought_journal",
+    title: "Cognitive Master",
+    description: "Complete 7 thought records in 2 weeks",
+    icon: "lightbulb",
+    target: 7,
+    daysRequired: 14,
+    period: "weekly",
+    difficulty: "established",
+    badgeId: "thought_challenger",
+  },
+  {
+    type: "mindful_meal",
+    title: "Mindful Eating Pro",
+    description: "Practice mindful eating for 10 meals",
+    icon: "utensils",
+    target: 10,
+    daysRequired: 14,
+    period: "weekly",
+    difficulty: "established",
+    badgeId: "mindful_eater",
+  },
 ];
 
 @Injectable()
@@ -655,6 +810,73 @@ export class ChallengeService {
    */
   async onProteinGoalReached(userId: string): Promise<void> {
     await this.updateProgress(userId, "protein_focus", 1);
+  }
+
+  // ========== CBT/MINDFULNESS EVENT HANDLERS ==========
+
+  /**
+   * Process mood logged - update mood tracking challenges
+   */
+  async onMoodLogged(userId: string): Promise<void> {
+    await this.updateProgress(userId, "mood_tracking", 1);
+    await this.updateProgress(userId, "mindfulness_streak", 1);
+
+    logger.info(`[ChallengeService] Mood logged for user ${userId}`);
+  }
+
+  /**
+   * Process CBT exercise completed - update exercise challenges
+   */
+  async onCBTExerciseCompleted(userId: string, exerciseType: string): Promise<void> {
+    await this.updateProgress(userId, "cbt_exercise", 1);
+    await this.updateProgress(userId, "mindfulness_streak", 1);
+
+    // If it's a mindful eating exercise, update that challenge too
+    if (exerciseType === "mindful_eating" || exerciseType === "urge_surfing") {
+      await this.updateProgress(userId, "mindful_meal", 1);
+    }
+
+    logger.info(`[ChallengeService] CBT exercise completed (${exerciseType}) for user ${userId}`);
+  }
+
+  /**
+   * Process thought record completed - update thought journal challenges
+   */
+  async onThoughtLogged(userId: string): Promise<void> {
+    await this.updateProgress(userId, "thought_journal", 1);
+    await this.updateProgress(userId, "mindfulness_streak", 1);
+
+    logger.info(`[ChallengeService] Thought logged for user ${userId}`);
+  }
+
+  /**
+   * Process meal-mood link - update emotional awareness challenges
+   */
+  async onMealMoodLinked(userId: string): Promise<void> {
+    await this.updateProgress(userId, "emotional_awareness", 1);
+    await this.updateProgress(userId, "mindfulness_streak", 1);
+
+    logger.info(`[ChallengeService] Meal-mood linked for user ${userId}`);
+  }
+
+  /**
+   * Process pre-meal check-in - update pre-meal challenges
+   */
+  async onPreMealCheckIn(userId: string): Promise<void> {
+    await this.updateProgress(userId, "pre_meal_checkin", 1);
+    await this.updateProgress(userId, "mindfulness_streak", 1);
+
+    logger.info(`[ChallengeService] Pre-meal check-in for user ${userId}`);
+  }
+
+  /**
+   * Process mindful eating practice - update mindful meal challenges
+   */
+  async onMindfulMealCompleted(userId: string): Promise<void> {
+    await this.updateProgress(userId, "mindful_meal", 1);
+    await this.updateProgress(userId, "mindfulness_streak", 1);
+
+    logger.info(`[ChallengeService] Mindful meal completed for user ${userId}`);
   }
 
   // Helper to shuffle array

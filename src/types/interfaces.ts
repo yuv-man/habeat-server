@@ -8,7 +8,7 @@ export interface IBadge {
   description: string;
   icon: string;
   earnedAt: Date;
-  category: "streak" | "meals" | "nutrition" | "milestone" | "special" | "consistency" | "hydration";
+  category: "streak" | "meals" | "nutrition" | "milestone" | "special" | "consistency" | "hydration" | "mindfulness";
 }
 
 // Weekly summary for habit tracking
