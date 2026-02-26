@@ -154,11 +154,16 @@ export default async (req: any, res: any) => {
 };
 
 if (require.main === module) {
-  bootstrap().then(async (app) => {
-    const port = process.env.PORT || 5080;
-    await app.listen(port, "0.0.0.0");
-    console.log(`Server running at http://0.0.0.0:${port}/api`);
-  });
+  const port = Number(process.env.PORT) || 5080;
+  bootstrap()
+    .then(async (app) => {
+      await app.listen(port, "0.0.0.0");
+      console.log(`Server listening on 0.0.0.0:${port}/api`);
+    })
+    .catch((err) => {
+      console.error("Startup failed:", err);
+      process.exit(1);
+    });
 }
 
 export { bootstrap };
