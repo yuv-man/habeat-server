@@ -158,7 +158,7 @@ const extractAndCleanJSON = (text: string): string => {
 const callOllama = async (
   prompt: string,
   model: string = "phi",
-  isWeeklyPlan: boolean = false
+  isWeeklyPlan: boolean = false,
 ): Promise<string> => {
   const ollamaBaseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
 
@@ -166,7 +166,7 @@ const callOllama = async (
     await axios.get(`${ollamaBaseUrl}/api/tags`, { timeout: 5000 });
   } catch (error) {
     throw new Error(
-      `Ollama is not running at ${ollamaBaseUrl}. Start Ollama first with: ollama serve`
+      `Ollama is not running at ${ollamaBaseUrl}. Start Ollama first with: ollama serve`,
     );
   }
 
@@ -191,7 +191,7 @@ const callOllama = async (
           "Content-Type": "application/json",
         },
         timeout: timeout,
-      }
+      },
     );
 
     if (response.data && response.data.response) {
@@ -209,12 +209,12 @@ const getAvailableGeminiModels = async (apiKey: string): Promise<string[]> => {
   try {
     const response = await axios.get(
       `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`,
-      { timeout: 5000 }
+      { timeout: 5000 },
     );
 
     const allModels = (response.data.models || [])
       .filter((model: any) =>
-        model.supportedGenerationMethods?.includes("generateContent")
+        model.supportedGenerationMethods?.includes("generateContent"),
       )
       .map((model: any) => {
         // Extract model name from path like "models/gemini-2.5-flash"
@@ -224,6 +224,7 @@ const getAvailableGeminiModels = async (apiKey: string): Promise<string[]> => {
 
     // Prioritize better models
     const priorityOrder = [
+      "gemini-1.5-flash",
       "gemini-2.5-flash",
       "gemini-2.5-pro",
       "gemini-2.0-flash",
@@ -243,10 +244,11 @@ const getAvailableGeminiModels = async (apiKey: string): Promise<string[]> => {
     return sortedModels;
   } catch (error: unknown) {
     logger.warn(
-      `[Gemini] Could not list available models: ${getErrorMessage(error)}`
+      `[Gemini] Could not list available models: ${getErrorMessage(error)}`,
     );
     // Return default models as fallback
     return [
+      "gemini-1.5-flash",
       "gemini-2.5-flash",
       "gemini-2.5-pro",
       "gemini-2.0-flash",
@@ -260,8 +262,13 @@ let _cachedGeminiModels: string[] | null = null;
 let _modelCacheTimestamp = 0;
 const MODEL_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-const getAvailableGeminiModelsCached = async (apiKey: string): Promise<string[]> => {
-  if (_cachedGeminiModels && Date.now() - _modelCacheTimestamp < MODEL_CACHE_TTL_MS) {
+const getAvailableGeminiModelsCached = async (
+  apiKey: string,
+): Promise<string[]> => {
+  if (
+    _cachedGeminiModels &&
+    Date.now() - _modelCacheTimestamp < MODEL_CACHE_TTL_MS
+  ) {
     logger.info("[Gemini] Using cached model list");
     return _cachedGeminiModels;
   }
@@ -276,7 +283,7 @@ const retryWithBackoffGeneric = async <T>(
   fn: () => Promise<T>,
   maxRetries: number = 3,
   baseDelay: number = 1000,
-  context: string = "AI"
+  context: string = "AI",
 ): Promise<T> => {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
@@ -299,7 +306,7 @@ const retryWithBackoffGeneric = async <T>(
 
       const delay = baseDelay * Math.pow(2, attempt);
       logger.warn(
-        `[${context}] Attempt ${attempt + 1} failed (retryable). Waiting ${delay}ms before retry...`
+        `[${context}] Attempt ${attempt + 1} failed (retryable). Waiting ${delay}ms before retry...`,
       );
 
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -313,7 +320,7 @@ const retryWithBackoffGeneric = async <T>(
 const retryWithBackoff = async (
   fn: () => Promise<MealPlanResponse>,
   maxRetries: number = 3,
-  baseDelay: number = 1000
+  baseDelay: number = 1000,
 ): Promise<MealPlanResponse> => {
   return retryWithBackoffGeneric(fn, maxRetries, baseDelay, "Gemini");
 };
@@ -326,7 +333,7 @@ const generateWithFallback = async <T>(
     timeoutMs?: number;
     maxRetries?: number;
     context?: string;
-  } = {}
+  } = {},
 ): Promise<T> => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
@@ -342,13 +349,18 @@ const generateWithFallback = async <T>(
   const modelsToTry =
     availableModels.length > 0
       ? availableModels
-      : ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"];
+      : [
+          "gemini-1.5-flash",
+          "gemini-2.5-flash",
+          "gemini-2.5-pro",
+          "gemini-2.0-flash",
+        ];
 
   logger.info(`[${context}] Will try models: ${modelsToTry.join(", ")}`);
 
   const callModelWithTimeout = async (modelName: string): Promise<T> => {
     logger.info(
-      `[${context}] Calling ${modelName} (timeout: ${timeoutMs / 1000}s)`
+      `[${context}] Calling ${modelName} (timeout: ${timeoutMs / 1000}s)`,
     );
 
     const model = genAI.getGenerativeModel({ model: modelName });
@@ -359,8 +371,8 @@ const generateWithFallback = async <T>(
       timeoutHandle = setTimeout(() => {
         reject(
           new Error(
-            `[${context}] Request to ${modelName} timed out after ${timeoutMs / 1000}s`
-          )
+            `[${context}] Request to ${modelName} timed out after ${timeoutMs / 1000}s`,
+          ),
         );
       }, timeoutMs);
     });
@@ -383,7 +395,7 @@ const generateWithFallback = async <T>(
         }
 
         logger.info(
-          `[${context}] Received response: ${responseText.length} characters`
+          `[${context}] Received response: ${responseText.length} characters`,
         );
 
         // Clean and parse JSON
@@ -421,13 +433,13 @@ const generateWithFallback = async <T>(
         () => callModelWithTimeout(modelName),
         maxRetries,
         2000,
-        context
+        context,
       );
     } catch (error: unknown) {
       lastError =
         error instanceof Error ? error : new Error(getErrorMessage(error));
       logger.warn(
-        `[${context}] Model ${modelName} failed: ${getErrorMessage(error)}`
+        `[${context}] Model ${modelName} failed: ${getErrorMessage(error)}`,
       );
 
       if (modelsToTry.indexOf(modelName) < modelsToTry.length - 1) {
@@ -439,18 +451,29 @@ const generateWithFallback = async <T>(
   throw (
     lastError ||
     new Error(
-      `[${context}] All models failed. Tried: ${modelsToTry.join(", ")}`
+      `[${context}] All models failed. Tried: ${modelsToTry.join(", ")}`,
     )
   );
 };
 
 // Cuisine and protein rotation for variety enforcement across parallel day calls
 const CUISINE_ROTATION = [
-  "Mediterranean", "Mexican", "Asian", "Italian",
-  "Middle Eastern", "Indian", "Japanese",
+  "Mediterranean",
+  "Mexican",
+  "Asian",
+  "Italian",
+  "Middle Eastern",
+  "Indian",
+  "Japanese",
 ];
 const PROTEIN_ROTATION = [
-  "Chicken", "Beef", "Salmon", "Tofu", "Turkey", "Shrimp", "Eggs",
+  "Chicken",
+  "Beef",
+  "Salmon",
+  "Tofu",
+  "Turkey",
+  "Shrimp",
+  "Eggs",
 ];
 
 /**
@@ -465,7 +488,7 @@ const buildDayPrompt = (
   hasWorkout: boolean,
   targetCalories: number,
   macros: { protein: number; carbs: number; fat: number },
-  goalContextStr: string
+  goalContextStr: string,
 ): string => {
   const bCal = Math.round(targetCalories * 0.25);
   const lCal = Math.round(targetCalories * 0.35);
@@ -514,78 +537,29 @@ RETURN ONLY THIS JSON (no markdown, no extra text):
  */
 const generateSingleDayPlan = async (
   genAI: GoogleGenerativeAI,
-  modelsToTry: string[],
+  modelName: string,
   dayPrompt: string,
   context: string,
-  timeoutMs: number = 20000
 ): Promise<any> => {
-  let lastError: Error | null = null;
+  // We use responseMimeType: "application/json" to ensure the model
+  // returns valid JSON directly, bypassing the need for manual cleaning.
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0.7,
+    },
+  });
 
-  for (const modelName of modelsToTry.slice(0, 3)) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const model = genAI.getGenerativeModel({ model: modelName });
-
-        let timeoutHandle: NodeJS.Timeout;
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutHandle = setTimeout(
-            () =>
-              reject(
-                new Error(`[${context}] Timed out after ${timeoutMs / 1000}s`)
-              ),
-            timeoutMs
-          );
-        });
-
-        const resultPromise = (async () => {
-          const result = await model.generateContent([
-            { text: dayPrompt + "\nReturn ONLY JSON." },
-          ]);
-          clearTimeout(timeoutHandle!);
-          const text = result.response.text();
-          if (!text || text.trim().length === 0)
-            throw new Error(`[${context}] Empty response from ${modelName}`);
-          const cleaned = repairJSON(extractAndCleanJSON(text));
-          const parsed = JSON.parse(cleaned);
-          if (!parsed.date || !parsed.meals)
-            throw new Error(
-              `[${context}] Missing date or meals in response from ${modelName}`
-            );
-          return parsed;
-        })();
-
-        const dayData = await Promise.race([resultPromise, timeoutPromise]);
-        logger.info(`[${context}] Generated with ${modelName} (attempt ${attempt + 1})`);
-        return dayData;
-      } catch (err: unknown) {
-        lastError =
-          err instanceof Error ? err : new Error(getErrorMessage(err));
-        const msg = getErrorMessage(err);
-
-        if (
-          msg.includes("401") ||
-          msg.includes("403") ||
-          msg.includes("API_KEY_INVALID")
-        ) {
-          throw err; // Non-retryable
-        }
-        if (msg.includes("429") || msg.includes("quota")) {
-          logger.warn(`[${context}] Quota hit on ${modelName}, trying next model`);
-          break; // Skip remaining attempts on this model
-        }
-
-        if (attempt === 0) {
-          logger.warn(
-            `[${context}] ${modelName} attempt 1 failed, retrying: ${msg}`
-          );
-          await new Promise((r) => setTimeout(r, 1000));
-        }
-      }
-    }
-    logger.warn(`[${context}] Model ${modelName} exhausted, trying next`);
+  try {
+    const result = await model.generateContent(dayPrompt);
+    const text = result.response.text();
+    // No regex or "cleaned" variable needed here anymore
+    return JSON.parse(text);
+  } catch (err) {
+    logger.error(`[${context}] Day generation failed: ${getErrorMessage(err)}`);
+    return null;
   }
-
-  throw lastError || new Error(`[${context}] All models failed`);
 };
 
 // Gemini generation — parallel per-day calls for speed (~5–8s vs 60s+ for single 7-day call)
@@ -596,114 +570,76 @@ const generateMealPlanWithGemini = async (
   language: string,
   apiKey: string,
   goals: IGoal[] = [],
-  planTemplate?: string
+  planTemplate?: string,
 ): Promise<MealPlanResponse> => {
-  if (!apiKey.startsWith("AIza") || apiKey.length < 39) {
-    logger.warn(
-      `GEMINI_API_KEY format may be invalid. Expected format: "AIza..." with length 39+. Current length: ${apiKey.length}`
-    );
-  }
-
   const genAI = new GoogleGenerativeAI(apiKey);
+  const models = await getAvailableGeminiModelsCached(apiKey);
 
-  // Fetch model list once (cached) — avoids N duplicate HTTP calls during parallel generation
-  logger.info("[Gemini] Fetching available models (cached)...");
-  const availableModels = await getAvailableGeminiModelsCached(apiKey);
-  const modelsToTry =
-    availableModels.length > 0
-      ? availableModels
-      : ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.0-flash-001"];
+  // Force 1.5-flash for maximum speed/efficiency
+  const modelToUse = models.includes("gemini-1.5-flash")
+    ? "gemini-1.5-flash"
+    : models[0];
 
-  if (modelsToTry.length === 0) {
-    throw new Error("No Gemini models available. Please check your API key and quota.");
-  }
-
-  logger.info(`[Gemini] Will use models: ${modelsToTry.slice(0, 3).join(", ")}`);
-
-  // Build plan context: dates, day mapping, workout schedule
   const { dayToName, nameToDay, dates, activeDays, workoutDays } = buildPrompt(
-    userData, planType, language, weekStartDate, goals, planTemplate
+    userData,
+    planType,
+    language,
+    weekStartDate,
+    goals,
+    planTemplate,
   );
 
-  // Compute nutrition targets once — shared across all day prompts
+  // Pre-calculate targets once to keep the worker loop lean
   const goalAdjustments = planTemplate
     ? getGoalBasedAdjustments([])
     : getGoalBasedAdjustments(goals);
-  const effectiveWorkoutFreq =
-    goalAdjustments.workoutFrequency ?? userData.workoutFrequency;
-  const bmr = calculateBMR(userData.weight, userData.height, userData.age, userData.gender);
-  const tdee = calculateTDEE(bmr, effectiveWorkoutFreq);
-  const baseTargetCalories = calculateTargetCalories(tdee, userData.path);
+  const bmr = calculateBMR(
+    userData.weight,
+    userData.height,
+    userData.age,
+    userData.gender,
+  );
+  const tdee = calculateTDEE(
+    bmr,
+    goalAdjustments.workoutFrequency ?? userData.workoutFrequency,
+  );
   const targetCalories = Math.max(
     1200,
-    baseTargetCalories + goalAdjustments.calorieAdjustment
+    calculateTargetCalories(tdee, userData.path) +
+      goalAdjustments.calorieAdjustment,
   );
-  let macros = calculateMacros(targetCalories, userData.path);
-  if (goalAdjustments.macroAdjustments) {
-    macros = {
-      protein: Math.max(0, macros.protein + (goalAdjustments.macroAdjustments.protein || 0)),
-      carbs: Math.max(0, macros.carbs + (goalAdjustments.macroAdjustments.carbs || 0)),
-      fat: Math.max(0, macros.fat + (goalAdjustments.macroAdjustments.fat || 0)),
-    };
-  }
-
-  // Build workout date set: which specific dates require a workout
+  const macros = calculateMacros(targetCalories, userData.path);
   const workoutDayNums = new Set(workoutDays);
-  const workoutDateStrSet = new Set(
-    dates.filter((d) => workoutDayNums.has(d.getDay())).map(getLocalDateKey)
-  );
 
-  // Build goal context string for the compact day prompts
-  const goalContextStr =
-    planTemplate && PLAN_TEMPLATE_STYLES[planTemplate]
-      ? PLAN_TEMPLATE_STYLES[planTemplate]
-      : goalAdjustments.goalDescription
-        ? `Goal: ${goalAdjustments.goalDescription}`
-        : "";
+  logger.info(`[Gemini] Launching parallel generation via ${modelToUse}...`);
 
-  logger.info(
-    `[Gemini] Launching ${dates.length} parallel day-generation requests...`
-  );
-
-  // Generate all days in parallel — each call is ~1/7 the size of the old single call
+  // Staggering by 200ms per day prevents "Too Many Requests" errors
+  // when firing all 7 days simultaneously.
   const dayResults = await Promise.all(
-    dates.map(async (date, dayIndex) => {
+    dates.map(async (date, idx) => {
+      await new Promise((r) => setTimeout(r, idx * 200));
+
       const dateStr = getLocalDateKey(date);
       const dayName = dayToName[date.getDay()];
-      const hasWorkout = workoutDateStrSet.has(dateStr);
-
       const dayPrompt = buildDayPrompt(
         userData,
         dateStr,
         dayName,
-        dayIndex,
-        hasWorkout,
+        idx,
+        workoutDayNums.has(date.getDay()),
         targetCalories,
         macros,
-        goalContextStr
+        "",
       );
 
-      return generateSingleDayPlan(
-        genAI,
-        modelsToTry,
-        dayPrompt,
-        `Gemini-${dayName}`,
-        20000
-      );
-    })
+      return generateSingleDayPlan(genAI, modelToUse, dayPrompt, dayName);
+    }),
   );
 
-  logger.info(`[Gemini] All ${dayResults.length} days generated. Assembling...`);
-
-  // Assemble into the weeklyPlan array format expected by transformWeeklyPlan
-  const weeklyPlanArray = dayResults.map((day) => ({
-    ...day,
-    day: day.day || dayToName[new Date(day.date + "T00:00:00").getDay()] || "monday",
-    date: day.date,
-  }));
-
+  const weeklyPlanArray = dayResults.filter((d) => d !== null);
   const parsedResponse = { weeklyPlan: weeklyPlanArray };
 
+  // Note: transformWeeklyPlan handles the final language and structure mapping
   const transformedPlan = await transformWeeklyPlan(
     parsedResponse,
     dayToName,
@@ -713,13 +649,10 @@ const generateMealPlanWithGemini = async (
     workoutDays,
     planType,
     language,
-    weekStartDate
+    weekStartDate,
   );
 
-  const enrichedPlan = await enrichPlanWithFavoriteMeals(transformedPlan, userData);
-
-  logger.info("[Gemini] Weekly meal plan generated successfully via parallel day calls");
-  return enrichedPlan;
+  return await enrichPlanWithFavoriteMeals(transformedPlan, userData);
 };
 
 // MAIN: Try Gemini first, fallback to Llama
@@ -730,7 +663,7 @@ const generateMealPlanWithAI = async (
   language: string = "en",
   useMock: boolean = false,
   goals: IGoal[] = [],
-  planTemplate?: string
+  planTemplate?: string,
 ): Promise<MealPlanResponse> => {
   try {
     if (useMock) {
@@ -745,7 +678,7 @@ const generateMealPlanWithAI = async (
             generatedAt: new Date().toISOString(),
             fallbackModel: "mock",
           });
-        }, 3000)
+        }, 3000),
       );
     }
 
@@ -761,11 +694,11 @@ const generateMealPlanWithAI = async (
           language,
           apiKey,
           goals,
-          planTemplate
+          planTemplate,
         );
       } catch (geminiError: unknown) {
         logger.warn(
-          `Gemini failed: ${getErrorMessage(geminiError)}. Falling back to Llama...`
+          `Gemini failed: ${getErrorMessage(geminiError)}. Falling back to Llama...`,
         );
       }
     } else {
@@ -782,11 +715,11 @@ const generateMealPlanWithAI = async (
         language,
         false,
         goals,
-        planTemplate
+        planTemplate,
       );
     } catch (llamaError: unknown) {
       throw new Error(
-        `Both Gemini and Llama failed. Llama: ${getErrorMessage(llamaError)}`
+        `Both Gemini and Llama failed. Llama: ${getErrorMessage(llamaError)}`,
       );
     }
   } catch (error: unknown) {
@@ -797,7 +730,7 @@ const generateMealPlanWithAI = async (
 
 // Helper function to determine goal-based adjustments
 const getGoalBasedAdjustments = (
-  goals: IGoal[]
+  goals: IGoal[],
 ): {
   workoutTypes: string[];
   calorieAdjustment: number;
@@ -829,7 +762,7 @@ const getGoalBasedAdjustments = (
   goalKeywords.forEach((goal, index) => {
     const fullText = `${goal.title} ${goal.description}`;
     goalDescriptions.push(
-      `${goals[index].title}: ${goals[index].description} (Target: ${goals[index].target} ${goals[index].unit})`
+      `${goals[index].title}: ${goals[index].description} (Target: ${goals[index].target} ${goals[index].unit})`,
     );
 
     // Marathon/Running goals
@@ -945,7 +878,7 @@ const buildPrompt = (
   language: string,
   weekStartDate: Date,
   goals: IGoal[] = [],
-  planTemplate?: string
+  planTemplate?: string,
 ): {
   prompt: string;
   dayToName: Record<number, string>;
@@ -964,7 +897,7 @@ const buildPrompt = (
     userData.weight,
     userData.height,
     userData.age,
-    userData.gender
+    userData.gender,
   );
 
   // Balance workout frequency
@@ -981,7 +914,7 @@ const buildPrompt = (
   const baseTargetCalories = calculateTargetCalories(tdee, userData.path);
   const targetCalories = Math.max(
     1200,
-    baseTargetCalories + goalAdjustments.calorieAdjustment
+    baseTargetCalories + goalAdjustments.calorieAdjustment,
   );
 
   let macros = calculateMacros(targetCalories, userData.path);
@@ -989,15 +922,15 @@ const buildPrompt = (
     macros = {
       protein: Math.max(
         0,
-        macros.protein + (goalAdjustments.macroAdjustments.protein || 0)
+        macros.protein + (goalAdjustments.macroAdjustments.protein || 0),
       ),
       carbs: Math.max(
         0,
-        macros.carbs + (goalAdjustments.macroAdjustments.carbs || 0)
+        macros.carbs + (goalAdjustments.macroAdjustments.carbs || 0),
       ),
       fat: Math.max(
         0,
-        macros.fat + (goalAdjustments.macroAdjustments.fat || 0)
+        macros.fat + (goalAdjustments.macroAdjustments.fat || 0),
       ),
     };
   }
@@ -1060,7 +993,7 @@ const buildPrompt = (
 
   // Calculate specific INDICES for workouts to distribute them evenly
   const workoutIndices = Array.from({ length: workoutsToInclude }, (_, i) =>
-    Math.floor((i * daysLeft) / workoutsToInclude)
+    Math.floor((i * daysLeft) / workoutsToInclude),
   );
 
   // Map indices to actual Day Numbers
@@ -1072,7 +1005,7 @@ const buildPrompt = (
   // Create a Set of Date Strings that MUST have workouts
   // This explicitly binds the workout to a specific YYYY-MM-DD
   const workoutDatesSet = new Set(
-    workoutIndices.map((i) => getLocalDateKey(dates[i]))
+    workoutIndices.map((i) => getLocalDateKey(dates[i])),
   );
 
   // --- 4. PROMPT CONSTRUCTION ---
@@ -1216,7 +1149,7 @@ const generateMealPlanWithLlama2 = async (
   language: string = "en",
   useMock: boolean = false,
   goals: IGoal[] = [],
-  planTemplate?: string
+  planTemplate?: string,
 ): Promise<MealPlanResponse> => {
   try {
     if (useMock) {
@@ -1237,7 +1170,7 @@ const generateMealPlanWithLlama2 = async (
         language,
         weekStartDate,
         goals,
-        planTemplate
+        planTemplate,
       );
 
     const ollamaModel = process.env.OLLAMA_MODEL || "phi";
@@ -1251,7 +1184,7 @@ const generateMealPlanWithLlama2 = async (
     const generatedText = await callOllama(
       fullPrompt,
       ollamaModel,
-      isWeeklyPlan
+      isWeeklyPlan,
     );
 
     let cleanedJSON = extractAndCleanJSON(generatedText);
@@ -1265,7 +1198,7 @@ const generateMealPlanWithLlama2 = async (
       mealPlanData = JSON.parse(cleanedJSON) as IParsedWeeklyPlanResponse;
     } catch (parseError: unknown) {
       throw new Error(
-        `Failed to parse Llama JSON: ${getErrorMessage(parseError)}`
+        `Failed to parse Llama JSON: ${getErrorMessage(parseError)}`,
       );
     }
 
@@ -1279,13 +1212,13 @@ const generateMealPlanWithLlama2 = async (
       workoutDays,
       planType,
       language,
-      weekStartDate
+      weekStartDate,
     );
 
     // Enrich plan with user's favorite meals (20-30% replacement)
     const enrichedPlan = await enrichPlanWithFavoriteMeals(
       transformedPlan,
-      userData
+      userData,
     );
 
     logger.info("[Llama] Meal plan generated successfully");
@@ -1304,7 +1237,7 @@ const generateRecipeDetails = async (
   ingredients: MealIngredient[],
   dietaryRestrictions: string[] = [],
   servings: number,
-  language: string = "en"
+  language: string = "en",
 ): Promise<IRecipe> => {
   // Convert meal ingredients directly to recipe format for the prompt
   // MealIngredient: [name, "200 g", "Proteins"] -> RecipeIngredient: { name, amount: "200", unit: "g" }
@@ -1418,7 +1351,7 @@ const generateMeal = async (
   preferences: string[] = [],
   dislikes: string[] = [],
   language: string = "en",
-  aiRules?: string
+  aiRules?: string,
 ): Promise<any> => {
   const prompt = `Generate a ${category} meal "${mealName}" in ${language}.
 
@@ -1496,7 +1429,7 @@ const generateMealSuggestions = async (
     numberOfSuggestions?: number;
     aiRules?: string;
   },
-  language: string = "en"
+  language: string = "en",
 ): Promise<IMeal[]> => {
   const numberOfSuggestions = mealCriteria.numberOfSuggestions || 3;
   const targetCalories = mealCriteria.targetCalories || 500;
@@ -1698,7 +1631,7 @@ Each meal MUST have ALL these fields:
   });
 
   logger.info(
-    `[generateMealSuggestions] Generated ${meals.length} meal suggestions for ${mealCriteria.category}`
+    `[generateMealSuggestions] Generated ${meals.length} meal suggestions for ${mealCriteria.category}`,
   );
 
   return meals;
@@ -1733,7 +1666,7 @@ const generateRescueMeal = async (
     preferences?: string[];
     dislikes?: string[];
   },
-  language: string = "en"
+  language: string = "en",
 ): Promise<IMeal> => {
   const { category, targetCalories, targetMacros } = mealCriteria;
 
@@ -1822,7 +1755,7 @@ Return ONLY valid JSON:
   };
 
   logger.info(
-    `[generateRescueMeal] Generating rescue meal for ${category} (${targetCalories} kcal)`
+    `[generateRescueMeal] Generating rescue meal for ${category} (${targetCalories} kcal)`,
   );
 
   const meal = await generateWithFallback<IMeal>(prompt, parseResponse, {
@@ -1832,7 +1765,7 @@ Return ONLY valid JSON:
   });
 
   logger.info(
-    `[generateRescueMeal] Generated: ${meal.name} (${meal.prepTime} min prep)`
+    `[generateRescueMeal] Generated: ${meal.name} (${meal.prepTime} min prep)`,
   );
 
   return meal;
@@ -1841,7 +1774,7 @@ Return ONLY valid JSON:
 const generateSnack = async (
   snackName: string,
   dietaryRestrictions: string[] = [],
-  language: string = "en"
+  language: string = "en",
 ): Promise<IMeal> => {
   const prompt = `Generate a snack "${snackName}" in ${language}.
 
@@ -1897,7 +1830,7 @@ const generateGoal = async (
   dietType: string,
   timeframe: string = "3 months",
   language: string = "en",
-  startDate?: Date
+  startDate?: Date,
 ): Promise<{
   title: string;
   description: string;
