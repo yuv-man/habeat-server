@@ -532,17 +532,16 @@ RETURN ONLY THIS JSON (no markdown, no extra text):
 };
 
 /**
- * Generate one day's meal plan using Gemini.
- * Tries up to 3 models with 2 attempts each and a per-day timeout.
+ * Generate one day's meal plan using Gemini with retry logic for rate limits.
+ * Retries up to 3 times with exponential backoff for 429/rate limit errors.
  */
 const generateSingleDayPlan = async (
   genAI: GoogleGenerativeAI,
   modelName: string,
   dayPrompt: string,
   context: string,
+  maxRetries: number = 3,
 ): Promise<any> => {
-  // We use responseMimeType: "application/json" to ensure the model
-  // returns valid JSON directly, bypassing the need for manual cleaning.
   const model = genAI.getGenerativeModel({
     model: modelName,
     generationConfig: {
@@ -551,18 +550,41 @@ const generateSingleDayPlan = async (
     },
   });
 
-  try {
-    const result = await model.generateContent(dayPrompt);
-    const text = result.response.text();
-    // No regex or "cleaned" variable needed here anymore
-    return JSON.parse(text);
-  } catch (err) {
-    logger.error(`[${context}] Day generation failed: ${getErrorMessage(err)}`);
-    return null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const result = await model.generateContent(dayPrompt);
+      const text = result.response.text();
+      return JSON.parse(text);
+    } catch (err) {
+      const errorMsg = getErrorMessage(err);
+      const isRateLimited =
+        errorMsg.includes("429") ||
+        errorMsg.includes("quota") ||
+        errorMsg.includes("RATE_LIMIT") ||
+        errorMsg.includes("Too Many Requests") ||
+        errorMsg.includes("Resource has been exhausted");
+
+      if (isRateLimited && attempt < maxRetries - 1) {
+        // Exponential backoff: 2s, 4s, 8s
+        const delay = Math.pow(2, attempt + 1) * 1000;
+        logger.warn(
+          `[${context}] Rate limited (attempt ${attempt + 1}/${maxRetries}). Waiting ${delay}ms...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+
+      logger.error(
+        `[${context}] Day generation failed (attempt ${attempt + 1}): ${errorMsg}`,
+      );
+      return null;
+    }
   }
+
+  return null;
 };
 
-// Gemini generation — parallel per-day calls for speed (~5–8s vs 60s+ for single 7-day call)
+// Gemini generation — batched per-day calls to avoid rate limiting while staying efficient
 const generateMealPlanWithGemini = async (
   userData: IUserData,
   weekStartDate: Date,
@@ -611,32 +633,66 @@ const generateMealPlanWithGemini = async (
   const macros = calculateMacros(targetCalories, userData.path);
   const workoutDayNums = new Set(workoutDays);
 
-  logger.info(`[Gemini] Launching parallel generation via ${modelToUse}...`);
+  // Batched processing: 2 concurrent requests max to avoid rate limiting
+  // With ~1.5s delay between batches for safety
+  const BATCH_SIZE = 2;
+  const BATCH_DELAY_MS = 1500;
 
-  // Staggering by 200ms per day prevents "Too Many Requests" errors
-  // when firing all 7 days simultaneously.
-  const dayResults = await Promise.all(
-    dates.map(async (date, idx) => {
-      await new Promise((r) => setTimeout(r, idx * 200));
-
-      const dateStr = getLocalDateKey(date);
-      const dayName = dayToName[date.getDay()];
-      const dayPrompt = buildDayPrompt(
-        userData,
-        dateStr,
-        dayName,
-        idx,
-        workoutDayNums.has(date.getDay()),
-        targetCalories,
-        macros,
-        "",
-      );
-
-      return generateSingleDayPlan(genAI, modelToUse, dayPrompt, dayName);
-    }),
+  logger.info(
+    `[Gemini] Starting batched generation via ${modelToUse} (${dates.length} days, batch size ${BATCH_SIZE})...`,
   );
 
-  const weeklyPlanArray = dayResults.filter((d) => d !== null);
+  const allDayResults: any[] = [];
+
+  // Process days in batches
+  for (let batchStart = 0; batchStart < dates.length; batchStart += BATCH_SIZE) {
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, dates.length);
+    const batchDates = dates.slice(batchStart, batchEnd);
+    const batchNumber = Math.floor(batchStart / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(dates.length / BATCH_SIZE);
+
+    logger.info(`[Gemini] Processing batch ${batchNumber}/${totalBatches}...`);
+
+    // Process this batch in parallel
+    const batchResults = await Promise.all(
+      batchDates.map(async (date, batchIdx) => {
+        const globalIdx = batchStart + batchIdx;
+        const dateStr = getLocalDateKey(date);
+        const dayName = dayToName[date.getDay()];
+        const dayPrompt = buildDayPrompt(
+          userData,
+          dateStr,
+          dayName,
+          globalIdx,
+          workoutDayNums.has(date.getDay()),
+          targetCalories,
+          macros,
+          "",
+        );
+
+        return generateSingleDayPlan(genAI, modelToUse, dayPrompt, dayName);
+      }),
+    );
+
+    allDayResults.push(...batchResults);
+
+    // Add delay between batches (but not after the last batch)
+    if (batchEnd < dates.length) {
+      logger.info(`[Gemini] Waiting ${BATCH_DELAY_MS}ms before next batch...`);
+      await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
+    }
+  }
+
+  const weeklyPlanArray = allDayResults.filter((d) => d !== null);
+
+  if (weeklyPlanArray.length === 0) {
+    throw new Error("All day generations failed. Check Gemini API quota/rate limits.");
+  }
+
+  logger.info(
+    `[Gemini] Successfully generated ${weeklyPlanArray.length}/${dates.length} days`,
+  );
+
   const parsedResponse = { weeklyPlan: weeklyPlanArray };
 
   // Note: transformWeeklyPlan handles the final language and structure mapping
