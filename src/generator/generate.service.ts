@@ -325,7 +325,7 @@ const retryWithBackoff = async (
   return retryWithBackoffGeneric(fn, maxRetries, baseDelay, "Gemini");
 };
 
-// Generic AI generation with model fallback and timeout
+// Generic AI generation with fast model selection and timeout
 const generateWithFallback = async <T>(
   prompt: string,
   parseResponse: (text: string) => T,
@@ -340,29 +340,32 @@ const generateWithFallback = async <T>(
     throw new Error("GEMINI_API_KEY not configured");
   }
 
-  const { timeoutMs = 60000, maxRetries = 3, context = "AI" } = options;
+  // Reduced defaults for faster response times
+  const { timeoutMs = 30000, maxRetries = 2, context = "AI" } = options;
 
   const genAI = new GoogleGenerativeAI(apiKey);
 
-  // Get available models
-  const availableModels = await getAvailableGeminiModels(apiKey);
-  const modelsToTry =
-    availableModels.length > 0
-      ? availableModels
-      : [
-          "gemini-1.5-flash",
-          "gemini-2.5-flash",
-          "gemini-2.5-pro",
-          "gemini-2.0-flash",
-        ];
+  // Use cached model list to avoid redundant API calls
+  const availableModels = await getAvailableGeminiModelsCached(apiKey);
 
-  logger.info(`[${context}] Will try models: ${modelsToTry.join(", ")}`);
+  // Prioritize gemini-1.5-flash for speed, limit fallback models to reduce wait time
+  const preferredModels = ["gemini-1.5-flash", "gemini-2.0-flash"];
+  const modelsToTry = preferredModels.filter((m) =>
+    availableModels.includes(m),
+  );
+
+  // Fallback to first available if preferred not found
+  if (modelsToTry.length === 0 && availableModels.length > 0) {
+    modelsToTry.push(availableModels[0]);
+  }
+
+  if (modelsToTry.length === 0) {
+    modelsToTry.push("gemini-1.5-flash"); // Last resort default
+  }
+
+  logger.info(`[${context}] Using model: ${modelsToTry[0]}`);
 
   const callModelWithTimeout = async (modelName: string): Promise<T> => {
-    logger.info(
-      `[${context}] Calling ${modelName} (timeout: ${timeoutMs / 1000}s)`,
-    );
-
     const model = genAI.getGenerativeModel({ model: modelName });
 
     // Create timeout promise
@@ -427,12 +430,16 @@ const generateWithFallback = async <T>(
 
   let lastError: Error | null = null;
 
-  for (const modelName of modelsToTry) {
+  // Try only 1-2 models max to reduce total wait time
+  const maxModelsToTry = Math.min(modelsToTry.length, 2);
+
+  for (let i = 0; i < maxModelsToTry; i++) {
+    const modelName = modelsToTry[i];
     try {
       return await retryWithBackoffGeneric(
         () => callModelWithTimeout(modelName),
         maxRetries,
-        2000,
+        1000, // Reduced base delay
         context,
       );
     } catch (error: unknown) {
@@ -442,8 +449,8 @@ const generateWithFallback = async <T>(
         `[${context}] Model ${modelName} failed: ${getErrorMessage(error)}`,
       );
 
-      if (modelsToTry.indexOf(modelName) < modelsToTry.length - 1) {
-        logger.info(`[${context}] Trying next model...`);
+      if (i < maxModelsToTry - 1) {
+        logger.info(`[${context}] Trying fallback model...`);
       }
     }
   }
@@ -451,7 +458,7 @@ const generateWithFallback = async <T>(
   throw (
     lastError ||
     new Error(
-      `[${context}] All models failed. Tried: ${modelsToTry.join(", ")}`,
+      `[${context}] All models failed. Tried: ${modelsToTry.slice(0, maxModelsToTry).join(", ")}`,
     )
   );
 };
@@ -532,8 +539,9 @@ RETURN ONLY THIS JSON (no markdown, no extra text):
 };
 
 /**
- * Generate one day's meal plan using Gemini with retry logic for rate limits.
- * Retries up to 3 times with exponential backoff for 429/rate limit errors.
+ * Generate one day's meal plan using Gemini with timeout and retry logic.
+ * - Timeout: 20s per request (Gemini 1.5-flash typically responds in 5-15s)
+ * - Retries up to 3 times with exponential backoff for rate limit errors
  */
 const generateSingleDayPlan = async (
   genAI: GoogleGenerativeAI,
@@ -541,6 +549,7 @@ const generateSingleDayPlan = async (
   dayPrompt: string,
   context: string,
   maxRetries: number = 3,
+  timeoutMs: number = 20000,
 ): Promise<any> => {
   const model = genAI.getGenerativeModel({
     model: modelName,
@@ -552,7 +561,22 @@ const generateSingleDayPlan = async (
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const result = await model.generateContent(dayPrompt);
+      // Create timeout promise
+      let timeoutHandle: NodeJS.Timeout;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`Request timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      });
+
+      // Race between API call and timeout
+      const result = await Promise.race([
+        model.generateContent(dayPrompt),
+        timeoutPromise,
+      ]);
+
+      clearTimeout(timeoutHandle!);
+
       const text = result.response.text();
       return JSON.parse(text);
     } catch (err) {
@@ -564,11 +588,17 @@ const generateSingleDayPlan = async (
         errorMsg.includes("Too Many Requests") ||
         errorMsg.includes("Resource has been exhausted");
 
-      if (isRateLimited && attempt < maxRetries - 1) {
-        // Exponential backoff: 2s, 4s, 8s
-        const delay = Math.pow(2, attempt + 1) * 1000;
+      const isRetryable =
+        isRateLimited ||
+        errorMsg.includes("timed out") ||
+        errorMsg.includes("503") ||
+        errorMsg.includes("500");
+
+      if (isRetryable && attempt < maxRetries - 1) {
+        // Exponential backoff: 1s, 2s, 4s
+        const delay = Math.pow(2, attempt) * 1000;
         logger.warn(
-          `[${context}] Rate limited (attempt ${attempt + 1}/${maxRetries}). Waiting ${delay}ms...`,
+          `[${context}] Attempt ${attempt + 1}/${maxRetries} failed (${isRateLimited ? "rate limited" : "retryable"}). Waiting ${delay}ms...`,
         );
         await new Promise((resolve) => setTimeout(resolve, delay));
         continue;
@@ -633,19 +663,30 @@ const generateMealPlanWithGemini = async (
   const macros = calculateMacros(targetCalories, userData.path);
   const workoutDayNums = new Set(workoutDays);
 
-  // Batched processing: 2 concurrent requests max to avoid rate limiting
-  // With ~1.5s delay between batches for safety
-  const BATCH_SIZE = 2;
-  const BATCH_DELAY_MS = 1500;
+  // Optimized batching: 3 concurrent requests with shorter delays
+  // Using Promise.allSettled to prevent one failure from blocking others
+  const BATCH_SIZE = 3;
+  const BATCH_DELAY_MS = 800; // Reduced delay for faster throughput
+  const REQUEST_TIMEOUT_MS = 20000; // 20s per request
+  const MAX_CONSECUTIVE_FAILURES = 3; // Early termination if too many failures
 
   logger.info(
-    `[Gemini] Starting batched generation via ${modelToUse} (${dates.length} days, batch size ${BATCH_SIZE})...`,
+    `[Gemini] Starting optimized generation via ${modelToUse} (${dates.length} days, batch size ${BATCH_SIZE})...`,
   );
 
   const allDayResults: any[] = [];
+  let consecutiveFailures = 0;
 
   // Process days in batches
   for (let batchStart = 0; batchStart < dates.length; batchStart += BATCH_SIZE) {
+    // Early termination if too many consecutive failures
+    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      logger.error(
+        `[Gemini] Aborting: ${MAX_CONSECUTIVE_FAILURES} consecutive failures. Possible API issue.`,
+      );
+      break;
+    }
+
     const batchEnd = Math.min(batchStart + BATCH_SIZE, dates.length);
     const batchDates = dates.slice(batchStart, batchEnd);
     const batchNumber = Math.floor(batchStart / BATCH_SIZE) + 1;
@@ -653,8 +694,8 @@ const generateMealPlanWithGemini = async (
 
     logger.info(`[Gemini] Processing batch ${batchNumber}/${totalBatches}...`);
 
-    // Process this batch in parallel
-    const batchResults = await Promise.all(
+    // Process this batch in parallel using Promise.allSettled (won't fail if one fails)
+    const batchSettled = await Promise.allSettled(
       batchDates.map(async (date, batchIdx) => {
         const globalIdx = batchStart + batchIdx;
         const dateStr = getLocalDateKey(date);
@@ -670,14 +711,41 @@ const generateMealPlanWithGemini = async (
           "",
         );
 
-        return generateSingleDayPlan(genAI, modelToUse, dayPrompt, dayName);
+        return generateSingleDayPlan(
+          genAI,
+          modelToUse,
+          dayPrompt,
+          dayName,
+          3,
+          REQUEST_TIMEOUT_MS,
+        );
       }),
     );
+
+    // Extract results from settled promises
+    let batchFailures = 0;
+    const batchResults = batchSettled.map((result, idx) => {
+      if (result.status === "fulfilled" && result.value !== null) {
+        consecutiveFailures = 0; // Reset on success
+        return result.value;
+      }
+      batchFailures++;
+      const dayName = dayToName[batchDates[idx].getDay()];
+      logger.warn(
+        `[Gemini] ${dayName} failed: ${result.status === "rejected" ? result.reason : "null result"}`,
+      );
+      return null;
+    });
+
+    // Track consecutive failures for early termination
+    if (batchFailures === batchDates.length) {
+      consecutiveFailures++;
+    }
 
     allDayResults.push(...batchResults);
 
     // Add delay between batches (but not after the last batch)
-    if (batchEnd < dates.length) {
+    if (batchEnd < dates.length && consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
       logger.info(`[Gemini] Waiting ${BATCH_DELAY_MS}ms before next batch...`);
       await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
     }
@@ -1393,8 +1461,8 @@ Return ONLY valid JSON matching this EXACT structure:
   };
 
   return generateWithFallback(prompt, parseResponse, {
-    timeoutMs: 60000,
-    maxRetries: 3,
+    timeoutMs: 25000, // Reduced for faster UX
+    maxRetries: 2,
     context: "RecipeDetails",
   });
 };
@@ -1469,8 +1537,8 @@ ${aiRules ? `- Additional rules: ${aiRules}` : ""}
   };
 
   return generateWithFallback(prompt, parseResponse, {
-    timeoutMs: 60000,
-    maxRetries: 3,
+    timeoutMs: 20000, // Reduced for faster UX
+    maxRetries: 2,
     context: "GenerateMeal",
   });
 };
@@ -1681,8 +1749,8 @@ Each meal MUST have ALL these fields:
   };
 
   const meals = await generateWithFallback<IMeal[]>(prompt, parseResponse, {
-    timeoutMs: 60000,
-    maxRetries: 3,
+    timeoutMs: 25000, // Reduced for faster UX
+    maxRetries: 2,
     context: "MealSuggestions",
   });
 
@@ -1873,8 +1941,8 @@ Return ONLY valid JSON matching this EXACT structure:
   };
 
   return generateWithFallback(prompt, parseResponse, {
-    timeoutMs: 60000,
-    maxRetries: 3,
+    timeoutMs: 15000, // Snacks are simple, fast timeout
+    maxRetries: 2,
     context: "GenerateSnack",
   });
 };
@@ -1997,8 +2065,8 @@ Return ONLY valid JSON, no additional text.`;
   };
 
   return generateWithFallback(prompt, parseResponse, {
-    timeoutMs: 60000,
-    maxRetries: 3,
+    timeoutMs: 20000, // Reduced for faster UX
+    maxRetries: 2,
     context: "GenerateGoal",
   });
 };
