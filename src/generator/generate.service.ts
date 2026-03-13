@@ -1,6 +1,12 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GenerativeModel } from "@google/generative-ai";
 import axios from "axios";
 import logger from "../utils/logger";
+import {
+  callGeminiWithRateLimit,
+  getErrorMessage as getRateLimitErrorMessage,
+  isRateLimitError,
+  parseRetryDelay,
+} from "../utils/gemini-rate-limiter";
 import { enumLanguage } from "../enums/enumLanguage";
 import {
   IUserData,
@@ -325,7 +331,7 @@ const retryWithBackoff = async (
   return retryWithBackoffGeneric(fn, maxRetries, baseDelay, "Gemini");
 };
 
-// Generic AI generation with fast model selection and timeout
+// Generic AI generation with rate limiting and automatic retry
 const generateWithFallback = async <T>(
   prompt: string,
   parseResponse: (text: string) => T,
@@ -341,14 +347,12 @@ const generateWithFallback = async <T>(
   }
 
   // Reduced defaults for faster response times
-  const { timeoutMs = 30000, maxRetries = 2, context = "AI" } = options;
-
-  const genAI = new GoogleGenerativeAI(apiKey);
+  const { timeoutMs = 30000, maxRetries = 3, context = "AI" } = options;
 
   // Use cached model list to avoid redundant API calls
   const availableModels = await getAvailableGeminiModelsCached(apiKey);
 
-  // Prioritize gemini-1.5-flash for speed, limit fallback models to reduce wait time
+  // Prioritize gemini-1.5-flash for speed and better rate limits
   const preferredModels = ["gemini-1.5-flash", "gemini-2.0-flash"];
   const modelsToTry = preferredModels.filter((m) =>
     availableModels.includes(m),
@@ -363,103 +367,42 @@ const generateWithFallback = async <T>(
     modelsToTry.push("gemini-1.5-flash"); // Last resort default
   }
 
-  logger.info(`[${context}] Using model: ${modelsToTry[0]}`);
+  const modelName = modelsToTry[0];
+  logger.info(`[${context}] Using model: ${modelName}`);
 
-  const callModelWithTimeout = async (modelName: string): Promise<T> => {
-    const model = genAI.getGenerativeModel({ model: modelName });
+  // Use the centralized rate limiter with automatic retry
+  return callGeminiWithRateLimit<T>(
+    apiKey,
+    modelName,
+    async (model: GenerativeModel) => {
+      const result = await model.generateContent([
+        { text: prompt + "\n\nReturn ONLY JSON. No other text." },
+      ]);
 
-    // Create timeout promise
-    let timeoutHandle: NodeJS.Timeout;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(() => {
-        reject(
-          new Error(
-            `[${context}] Request to ${modelName} timed out after ${timeoutMs / 1000}s`,
-          ),
-        );
-      }, timeoutMs);
-    });
-
-    try {
-      const resultPromise = (async () => {
-        const result = await model.generateContent([
-          { text: prompt + "\n\nReturn ONLY JSON. No other text." },
-        ]);
-
-        clearTimeout(timeoutHandle!);
-
-        if (!result || !result.response) {
-          throw new Error("Empty response from Gemini API");
-        }
-
-        const responseText = result.response.text();
-        if (!responseText || responseText.trim().length === 0) {
-          throw new Error("Gemini returned empty response text");
-        }
-
-        logger.info(
-          `[${context}] Received response: ${responseText.length} characters`,
-        );
-
-        // Clean and parse JSON
-        let cleanedJSON = extractAndCleanJSON(responseText);
-        cleanedJSON = repairJSON(cleanedJSON);
-
-        return parseResponse(cleanedJSON);
-      })();
-
-      return await Promise.race([resultPromise, timeoutPromise]);
-    } catch (error: unknown) {
-      clearTimeout(timeoutHandle!);
-      const errorMsg = getErrorMessage(error);
-
-      if (
-        errorMsg.includes("401") ||
-        errorMsg.includes("403") ||
-        errorMsg.includes("API_KEY_INVALID")
-      ) {
-        throw new Error(`Invalid Gemini API key: ${errorMsg}`);
-      }
-      if (errorMsg.includes("429") || errorMsg.includes("quota")) {
-        throw new Error(`Gemini quota exceeded: ${errorMsg}`);
+      if (!result || !result.response) {
+        throw new Error("Empty response from Gemini API");
       }
 
-      throw error;
-    }
-  };
+      const responseText = result.response.text();
+      if (!responseText || responseText.trim().length === 0) {
+        throw new Error("Gemini returned empty response text");
+      }
 
-  let lastError: Error | null = null;
-
-  // Try only 1-2 models max to reduce total wait time
-  const maxModelsToTry = Math.min(modelsToTry.length, 2);
-
-  for (let i = 0; i < maxModelsToTry; i++) {
-    const modelName = modelsToTry[i];
-    try {
-      return await retryWithBackoffGeneric(
-        () => callModelWithTimeout(modelName),
-        maxRetries,
-        1000, // Reduced base delay
-        context,
-      );
-    } catch (error: unknown) {
-      lastError =
-        error instanceof Error ? error : new Error(getErrorMessage(error));
-      logger.warn(
-        `[${context}] Model ${modelName} failed: ${getErrorMessage(error)}`,
+      logger.info(
+        `[${context}] Received response: ${responseText.length} characters`,
       );
 
-      if (i < maxModelsToTry - 1) {
-        logger.info(`[${context}] Trying fallback model...`);
-      }
-    }
-  }
+      // Clean and parse JSON
+      let cleanedJSON = extractAndCleanJSON(responseText);
+      cleanedJSON = repairJSON(cleanedJSON);
 
-  throw (
-    lastError ||
-    new Error(
-      `[${context}] All models failed. Tried: ${modelsToTry.slice(0, maxModelsToTry).join(", ")}`,
-    )
+      return parseResponse(cleanedJSON);
+    },
+    {
+      maxRetries,
+      timeoutMs,
+      context,
+    },
   );
 };
 
@@ -539,82 +482,47 @@ RETURN ONLY THIS JSON (no markdown, no extra text):
 };
 
 /**
- * Generate one day's meal plan using Gemini with timeout and retry logic.
- * - Timeout: 20s per request (Gemini 1.5-flash typically responds in 5-15s)
- * - Retries up to 3 times with exponential backoff for rate limit errors
+ * Generate one day's meal plan using Gemini with rate limiting and retry logic.
+ * Uses the centralized rate limiter to handle rate limits properly.
  */
 const generateSingleDayPlan = async (
-  genAI: GoogleGenerativeAI,
+  apiKey: string,
   modelName: string,
   dayPrompt: string,
   context: string,
   maxRetries: number = 3,
-  timeoutMs: number = 20000,
+  timeoutMs: number = 25000,
 ): Promise<any> => {
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    generationConfig: {
-      responseMimeType: "application/json",
-      temperature: 0.7,
-    },
-  });
+  try {
+    return await callGeminiWithRateLimit(
+      apiKey,
+      modelName,
+      async (model: GenerativeModel) => {
+        const result = await model.generateContent({
+          contents: [{ role: "user", parts: [{ text: dayPrompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.7,
+          },
+        });
 
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      // Create timeout promise
-      let timeoutHandle: NodeJS.Timeout;
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(`Request timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      });
-
-      // Race between API call and timeout
-      const result = await Promise.race([
-        model.generateContent(dayPrompt),
-        timeoutPromise,
-      ]);
-
-      clearTimeout(timeoutHandle!);
-
-      const text = result.response.text();
-      return JSON.parse(text);
-    } catch (err) {
-      const errorMsg = getErrorMessage(err);
-      const isRateLimited =
-        errorMsg.includes("429") ||
-        errorMsg.includes("quota") ||
-        errorMsg.includes("RATE_LIMIT") ||
-        errorMsg.includes("Too Many Requests") ||
-        errorMsg.includes("Resource has been exhausted");
-
-      const isRetryable =
-        isRateLimited ||
-        errorMsg.includes("timed out") ||
-        errorMsg.includes("503") ||
-        errorMsg.includes("500");
-
-      if (isRetryable && attempt < maxRetries - 1) {
-        // Exponential backoff: 1s, 2s, 4s
-        const delay = Math.pow(2, attempt) * 1000;
-        logger.warn(
-          `[${context}] Attempt ${attempt + 1}/${maxRetries} failed (${isRateLimited ? "rate limited" : "retryable"}). Waiting ${delay}ms...`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        continue;
-      }
-
-      logger.error(
-        `[${context}] Day generation failed (attempt ${attempt + 1}): ${errorMsg}`,
-      );
-      return null;
-    }
+        const text = result.response.text();
+        return JSON.parse(text);
+      },
+      {
+        maxRetries,
+        timeoutMs,
+        context,
+      },
+    );
+  } catch (err) {
+    const errorMsg = getErrorMessage(err);
+    logger.error(`[${context}] Day generation failed: ${errorMsg}`);
+    return null;
   }
-
-  return null;
 };
 
-// Gemini generation — batched per-day calls to avoid rate limiting while staying efficient
+// Gemini generation — sequential calls with rate limiting for free tier
 const generateMealPlanWithGemini = async (
   userData: IUserData,
   weekStartDate: Date,
@@ -624,10 +532,9 @@ const generateMealPlanWithGemini = async (
   goals: IGoal[] = [],
   planTemplate?: string,
 ): Promise<MealPlanResponse> => {
-  const genAI = new GoogleGenerativeAI(apiKey);
   const models = await getAvailableGeminiModelsCached(apiKey);
 
-  // Force 1.5-flash for maximum speed/efficiency
+  // Force 1.5-flash for maximum speed/efficiency and better rate limits
   const modelToUse = models.includes("gemini-1.5-flash")
     ? "gemini-1.5-flash"
     : models[0];
@@ -663,21 +570,21 @@ const generateMealPlanWithGemini = async (
   const macros = calculateMacros(targetCalories, userData.path);
   const workoutDayNums = new Set(workoutDays);
 
-  // Optimized batching: 3 concurrent requests with shorter delays
-  // Using Promise.allSettled to prevent one failure from blocking others
-  const BATCH_SIZE = 3;
-  const BATCH_DELAY_MS = 800; // Reduced delay for faster throughput
-  const REQUEST_TIMEOUT_MS = 20000; // 20s per request
+  // For free tier: Process sequentially with rate limiter handling throttling
+  // The centralized rate limiter handles delays automatically
+  const BATCH_SIZE = 2; // Reduced for free tier (15 RPM limit)
+  const BATCH_DELAY_MS = 5000; // 5 seconds between batches for free tier
+  const REQUEST_TIMEOUT_MS = 30000; // 30s per request with retries
   const MAX_CONSECUTIVE_FAILURES = 3; // Early termination if too many failures
 
   logger.info(
-    `[Gemini] Starting optimized generation via ${modelToUse} (${dates.length} days, batch size ${BATCH_SIZE})...`,
+    `[Gemini] Starting generation via ${modelToUse} (${dates.length} days, batch size ${BATCH_SIZE}, free tier mode)...`,
   );
 
   const allDayResults: any[] = [];
   let consecutiveFailures = 0;
 
-  // Process days in batches
+  // Process days in small batches to stay under rate limits
   for (let batchStart = 0; batchStart < dates.length; batchStart += BATCH_SIZE) {
     // Early termination if too many consecutive failures
     if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
@@ -694,50 +601,44 @@ const generateMealPlanWithGemini = async (
 
     logger.info(`[Gemini] Processing batch ${batchNumber}/${totalBatches}...`);
 
-    // Process this batch in parallel using Promise.allSettled (won't fail if one fails)
-    const batchSettled = await Promise.allSettled(
-      batchDates.map(async (date, batchIdx) => {
-        const globalIdx = batchStart + batchIdx;
-        const dateStr = getLocalDateKey(date);
-        const dayName = dayToName[date.getDay()];
-        const dayPrompt = buildDayPrompt(
-          userData,
-          dateStr,
-          dayName,
-          globalIdx,
-          workoutDayNums.has(date.getDay()),
-          targetCalories,
-          macros,
-          "",
-        );
-
-        return generateSingleDayPlan(
-          genAI,
-          modelToUse,
-          dayPrompt,
-          dayName,
-          3,
-          REQUEST_TIMEOUT_MS,
-        );
-      }),
-    );
-
-    // Extract results from settled promises
-    let batchFailures = 0;
-    const batchResults = batchSettled.map((result, idx) => {
-      if (result.status === "fulfilled" && result.value !== null) {
-        consecutiveFailures = 0; // Reset on success
-        return result.value;
-      }
-      batchFailures++;
-      const dayName = dayToName[batchDates[idx].getDay()];
-      logger.warn(
-        `[Gemini] ${dayName} failed: ${result.status === "rejected" ? result.reason : "null result"}`,
+    // Process this batch sequentially (rate limiter handles throttling)
+    const batchResults: any[] = [];
+    for (let i = 0; i < batchDates.length; i++) {
+      const date = batchDates[i];
+      const globalIdx = batchStart + i;
+      const dateStr = getLocalDateKey(date);
+      const dayName = dayToName[date.getDay()];
+      const dayPrompt = buildDayPrompt(
+        userData,
+        dateStr,
+        dayName,
+        globalIdx,
+        workoutDayNums.has(date.getDay()),
+        targetCalories,
+        macros,
+        "",
       );
-      return null;
-    });
+
+      const result = await generateSingleDayPlan(
+        apiKey,
+        modelToUse,
+        dayPrompt,
+        dayName,
+        3,
+        REQUEST_TIMEOUT_MS,
+      );
+
+      if (result !== null) {
+        consecutiveFailures = 0;
+        batchResults.push(result);
+      } else {
+        logger.warn(`[Gemini] ${dayName} failed`);
+        batchResults.push(null);
+      }
+    }
 
     // Track consecutive failures for early termination
+    const batchFailures = batchResults.filter((r) => r === null).length;
     if (batchFailures === batchDates.length) {
       consecutiveFailures++;
     }

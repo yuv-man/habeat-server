@@ -2,7 +2,6 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import mongoose from "mongoose";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { User } from "../user/user.model";
 import { Plan } from "../plan/plan.model";
 import { Goal } from "../goals/goal.model";
@@ -17,6 +16,10 @@ import {
 } from "../types/interfaces";
 import logger from "../utils/logger";
 import { getLocalDateKey } from "../utils/helpers";
+import {
+  generateTextWithRateLimit,
+  getErrorMessage,
+} from "../utils/gemini-rate-limiter";
 
 interface ChatContext {
   currentScreen?: string;
@@ -27,13 +30,6 @@ interface AIResponse {
   message: string;
   action?: IProposedAction;
 }
-
-// Helper to get error message
-const getErrorMessage = (error: unknown): string => {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return "Unknown error";
-};
 
 // Helper to extract and clean JSON from response
 const extractActionJSON = (text: string): string | null => {
@@ -303,10 +299,6 @@ IMPORTANT:
         context
       );
 
-      // Call Gemini
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-
       const fullPrompt = `${systemPrompt}
 
 ## User Message:
@@ -316,13 +308,18 @@ ${userMessage}
 
       logger.info(`[ChatAI] Sending message to Gemini...`);
 
-      const result = await model.generateContent([{ text: fullPrompt }]);
+      // Use rate-limited wrapper with automatic retry
+      const responseText = await generateTextWithRateLimit(
+        apiKey,
+        "gemini-1.5-flash", // Using 1.5-flash as primary for better rate limits
+        fullPrompt,
+        {
+          maxRetries: 3,
+          timeoutMs: 30000,
+          context: "ChatAI",
+        }
+      );
 
-      if (!result?.response) {
-        throw new Error("Empty response from Gemini");
-      }
-
-      const responseText = result.response.text();
       logger.info(`[ChatAI] Received response: ${responseText.length} chars`);
 
       // Parse response for actions
@@ -356,39 +353,6 @@ ${userMessage}
       };
     } catch (error) {
       logger.error(`[ChatAI] Error generating response: ${getErrorMessage(error)}`);
-
-      // Try fallback models
-      try {
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const fallbackModels = ["gemini-2.0-flash", "gemini-2.0-flash-001"];
-
-        for (const modelName of fallbackModels) {
-          try {
-            logger.info(`[ChatAI] Trying fallback model: ${modelName}`);
-            const model = genAI.getGenerativeModel({ model: modelName });
-
-            const result = await model.generateContent([
-              {
-                text: `You are a helpful nutrition assistant. Answer this question briefly: ${userMessage}`,
-              },
-            ]);
-
-            if (result?.response) {
-              return {
-                message: result.response.text(),
-              };
-            }
-          } catch (fallbackError) {
-            logger.warn(
-              `[ChatAI] Fallback ${modelName} failed: ${getErrorMessage(fallbackError)}`
-            );
-          }
-        }
-      } catch (fallbackError) {
-        logger.error(
-          `[ChatAI] All fallbacks failed: ${getErrorMessage(fallbackError)}`
-        );
-      }
 
       return {
         message:

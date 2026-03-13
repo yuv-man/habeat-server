@@ -1,5 +1,4 @@
 import { Injectable } from "@nestjs/common";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import axios from "axios";
 import logger from "../utils/logger";
 import { compressImage } from "../utils/imageCompression";
@@ -7,6 +6,10 @@ import {
   RecognizedMealResponse,
   NutritionResponse,
 } from "./dto/recognize-meal.dto";
+import {
+  generateVisionWithRateLimit,
+  getErrorMessage,
+} from "../utils/gemini-rate-limiter";
 
 // Helper to extract and clean JSON from LLM response
 const extractAndCleanJSON = (text: string): string => {
@@ -32,22 +35,14 @@ const extractAndCleanJSON = (text: string): string => {
   return cleaned.trim();
 };
 
-// Helper to get error message
-const getErrorMessage = (error: unknown): string => {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return "Unknown error";
-};
-
 @Injectable()
 export class PhotoRecognitionService {
-  private genAI: GoogleGenerativeAI | null = null;
   private readonly USDA_API_BASE = "https://api.nal.usda.gov/fdc/v1";
+  private readonly apiKey: string | undefined;
 
   constructor() {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey) {
-      this.genAI = new GoogleGenerativeAI(apiKey);
+    this.apiKey = process.env.GEMINI_API_KEY;
+    if (this.apiKey) {
       logger.info("[PhotoRecognition] Gemini AI initialized");
     } else {
       logger.warn(
@@ -62,7 +57,7 @@ export class PhotoRecognitionService {
   async recognizeMealFromPhoto(
     imageBase64: string
   ): Promise<RecognizedMealResponse> {
-    if (!this.genAI) {
+    if (!this.apiKey) {
       logger.error("[PhotoRecognition] Gemini AI not initialized");
       return {
         mealName: "",
@@ -79,9 +74,6 @@ export class PhotoRecognitionService {
       const base64Data = compressedImage.includes(",")
         ? compressedImage.split(",")[1]
         : compressedImage;
-
-      // Get the model with vision capabilities
-      const model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
       const prompt = `You are a food recognition expert. Analyze this image and identify the meal/food.
 
@@ -106,16 +98,19 @@ Rules:
 5. Provide reasonable calorie and macro estimates based on a typical serving size
 6. ONLY output the JSON, nothing else`;
 
-      const imagePart = {
-        inlineData: {
-          data: base64Data,
-          mimeType: "image/jpeg",
-        },
-      };
-
-      const result = await model.generateContent([prompt, imagePart]);
-      const response = result.response;
-      const text = response.text();
+      // Use rate-limited wrapper with retry logic
+      const text = await generateVisionWithRateLimit(
+        this.apiKey,
+        "gemini-2.0-flash",
+        prompt,
+        base64Data,
+        "image/jpeg",
+        {
+          maxRetries: 3,
+          timeoutMs: 30000,
+          context: "PhotoRecognition",
+        }
+      );
 
       logger.info(`[PhotoRecognition] Raw Gemini response: ${text.substring(0, 500)}`);
 
