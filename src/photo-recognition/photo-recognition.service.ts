@@ -99,9 +99,10 @@ Rules:
 6. ONLY output the JSON, nothing else`;
 
       // Use rate-limited wrapper with retry logic
+      // Using gemini-2.5-flash-lite for better free tier rate limits
       const text = await generateVisionWithRateLimit(
         this.apiKey,
-        "gemini-2.0-flash",
+        "gemini-2.5-flash-lite",
         prompt,
         base64Data,
         "image/jpeg",

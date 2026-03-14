@@ -309,9 +309,10 @@ ${userMessage}
       logger.info(`[ChatAI] Sending message to Gemini...`);
 
       // Use rate-limited wrapper with automatic retry
+      // Using gemini-2.5-flash-lite for better free tier rate limits
       const responseText = await generateTextWithRateLimit(
         apiKey,
-        "gemini-1.5-flash", // Using 1.5-flash as primary for better rate limits
+        "gemini-2.5-flash-lite",
         fullPrompt,
         {
           maxRetries: 3,

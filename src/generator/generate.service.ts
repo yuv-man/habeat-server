@@ -228,14 +228,13 @@ const getAvailableGeminiModels = async (apiKey: string): Promise<string[]> => {
       })
       .filter((name: string) => name && name.includes("gemini"));
 
-    // Prioritize better models
+    // Prioritize lite models for better rate limits on free tier
     const priorityOrder = [
-      "gemini-1.5-flash",
+      "gemini-2.5-flash-lite",
       "gemini-2.5-flash",
       "gemini-2.5-pro",
+      "gemini-2.0-flash-lite",
       "gemini-2.0-flash",
-      "gemini-2.0-flash-001",
-      "gemini-2.5-flash-lite",
     ];
 
     const sortedModels = allModels.sort((a: string, b: string) => {
@@ -252,13 +251,11 @@ const getAvailableGeminiModels = async (apiKey: string): Promise<string[]> => {
     logger.warn(
       `[Gemini] Could not list available models: ${getErrorMessage(error)}`,
     );
-    // Return default models as fallback
+    // Return default models as fallback (prioritize lite for rate limits)
     return [
-      "gemini-1.5-flash",
+      "gemini-2.5-flash-lite",
       "gemini-2.5-flash",
       "gemini-2.5-pro",
-      "gemini-2.0-flash",
-      "gemini-2.0-flash-001",
     ];
   }
 };
@@ -352,8 +349,8 @@ const generateWithFallback = async <T>(
   // Use cached model list to avoid redundant API calls
   const availableModels = await getAvailableGeminiModelsCached(apiKey);
 
-  // Prioritize gemini-1.5-flash for speed and better rate limits
-  const preferredModels = ["gemini-1.5-flash", "gemini-2.0-flash"];
+  // Use gemini-2.5-flash-lite for free tier (better rate limits than regular models)
+  const preferredModels = ["gemini-2.5-flash-lite", "gemini-2.5-flash"];
   const modelsToTry = preferredModels.filter((m) =>
     availableModels.includes(m),
   );
@@ -534,10 +531,12 @@ const generateMealPlanWithGemini = async (
 ): Promise<MealPlanResponse> => {
   const models = await getAvailableGeminiModelsCached(apiKey);
 
-  // Force 1.5-flash for maximum speed/efficiency and better rate limits
-  const modelToUse = models.includes("gemini-1.5-flash")
-    ? "gemini-1.5-flash"
-    : models[0];
+  // Use gemini-2.5-flash-lite for better free tier rate limits
+  const modelToUse = models.includes("gemini-2.5-flash-lite")
+    ? "gemini-2.5-flash-lite"
+    : models.includes("gemini-2.5-flash")
+      ? "gemini-2.5-flash"
+      : models[0];
 
   const { dayToName, nameToDay, dates, activeDays, workoutDays } = buildPrompt(
     userData,
