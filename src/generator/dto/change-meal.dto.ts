@@ -18,6 +18,25 @@ export enum MealCategory {
   SNACK = "snack",
 }
 
+class CurrentMoodDto {
+  @ApiProperty({
+    example: "stressed",
+    description: "Current mood category",
+  })
+  @IsString()
+  moodCategory: string;
+
+  @ApiProperty({
+    example: 3,
+    description: "Current mood level (1-5)",
+    minimum: 1,
+    maximum: 5,
+  })
+  @IsNumber()
+  @Min(1)
+  moodLevel: number;
+}
+
 class MealCriteriaDto {
   @ApiProperty({
     example: "lunch",
@@ -74,6 +93,26 @@ class MealCriteriaDto {
   @IsNumber()
   @Min(1)
   numberOfSuggestions?: number;
+
+  @ApiProperty({
+    type: CurrentMoodDto,
+    required: false,
+    description: "Current user mood for mood-aware suggestions",
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CurrentMoodDto)
+  currentMood?: CurrentMoodDto;
+
+  @ApiProperty({
+    type: [String],
+    required: false,
+    description: "Foods recommended based on current mood",
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  moodFoodSuggestions?: string[];
 }
 
 export class ChangeMealDto {

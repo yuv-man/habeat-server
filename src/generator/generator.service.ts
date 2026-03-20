@@ -903,6 +903,7 @@ export class GeneratorService {
   /**
    * 4. Generate meal suggestions based on user and meal criteria
    * OPTIMIZED: Uses DB meals first, then fills remaining slots with AI-generated meals
+   * ENHANCED: Now supports mood-aware suggestions
    */
   async generateMealSuggestions(
     userId: string,
@@ -914,6 +915,12 @@ export class GeneratorService {
       dislikes?: string[];
       numberOfSuggestions?: number;
       aiRules?: string; // Can contain free-text meal name query
+      // Mood-aware parameters
+      currentMood?: {
+        moodCategory: string;
+        moodLevel: number;
+      };
+      moodFoodSuggestions?: string[]; // Foods recommended for current mood
     },
     language: string = "en"
   ) {
@@ -981,6 +988,32 @@ export class GeneratorService {
 
     // Check if aiRules exists (any kind of AI rules, not just meal name)
     const hasAiRules = mealCriteria.aiRules && mealCriteria.aiRules.trim().length > 0;
+
+    // Build mood-aware context for AI suggestions
+    let moodContext = "";
+    if (mealCriteria.currentMood) {
+      const { moodCategory, moodLevel } = mealCriteria.currentMood;
+      moodContext = `The user is currently feeling ${moodCategory} (level ${moodLevel}/5). `;
+
+      if (mealCriteria.moodFoodSuggestions && mealCriteria.moodFoodSuggestions.length > 0) {
+        moodContext += `Consider including ingredients like: ${mealCriteria.moodFoodSuggestions.slice(0, 5).join(", ")}. `;
+      }
+
+      // Add mood-specific guidance
+      const moodGuidance: Record<string, string> = {
+        stressed: "Suggest calming, comfort foods rich in magnesium and omega-3s.",
+        anxious: "Suggest gut-friendly foods with probiotics and tryptophan.",
+        sad: "Suggest mood-boosting foods rich in omega-3s and vitamin D.",
+        tired: "Suggest energizing foods with complex carbs and iron.",
+        happy: "Suggest balanced, nutritious meals to maintain the good mood.",
+        calm: "Suggest light, Mediterranean-style meals.",
+        energetic: "Suggest balanced meals that won't cause an energy crash.",
+        angry: "Suggest calming foods with magnesium and complex carbs.",
+        neutral: "Suggest balanced, nutritious meals.",
+      };
+
+      moodContext += moodGuidance[moodCategory] || moodGuidance.neutral;
+    }
 
     // PRIORITY FLOW: If user requested a specific meal (e.g., "beef steak"), generate variations FIRST
     if (isMealNameRequest && mealNameFromRules) {
@@ -1291,9 +1324,17 @@ export class GeneratorService {
           `[generateMealSuggestions] Generating ${remainingSlots} meals via AI to fill remaining slots`
         );
 
+        // Build AI rules with mood context if available
+        let enhancedAiRules = mealCriteria.aiRules || "";
+        if (moodContext) {
+          enhancedAiRules = moodContext + (enhancedAiRules ? ` ${enhancedAiRules}` : "");
+          logger.info(`[generateMealSuggestions] Added mood context: ${moodContext}`);
+        }
+
         const aiCriteria = {
           ...mealCriteria,
           numberOfSuggestions: remainingSlots,
+          aiRules: enhancedAiRules || undefined,
         };
 
         aiMeals = await aiService.generateMealSuggestions(aiCriteria, language);

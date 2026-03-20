@@ -22,6 +22,7 @@ import { CBTService } from "./cbt.service";
 import { AuthGuard } from "../auth/auth.guard";
 import {
   LogMoodDto,
+  UpdateMoodDto,
   LogThoughtDto,
   UpdateThoughtDto,
   CompleteExerciseDto,
@@ -69,6 +70,28 @@ export class CBTController {
   @ApiResponse({ status: 201, description: "Mood logged successfully" })
   async logMood(@Request() req: any, @Body() dto: LogMoodDto) {
     return this.cbtService.logMood(req.user._id.toString(), dto);
+  }
+
+  @Put("moods/:id")
+  @ApiOperation({ summary: "Update a mood entry" })
+  @ApiParam({ name: "id", description: "Mood entry ID" })
+  @ApiResponse({ status: 200, description: "Mood updated successfully" })
+  @ApiResponse({ status: 404, description: "Mood entry not found" })
+  async updateMood(
+    @Request() req: any,
+    @Param("id") moodId: string,
+    @Body() dto: UpdateMoodDto
+  ) {
+    return this.cbtService.updateMood(req.user._id.toString(), moodId, dto);
+  }
+
+  @Delete("moods/:id")
+  @ApiOperation({ summary: "Delete a mood entry" })
+  @ApiParam({ name: "id", description: "Mood entry ID" })
+  @ApiResponse({ status: 200, description: "Mood deleted successfully" })
+  @ApiResponse({ status: 404, description: "Mood entry not found" })
+  async deleteMood(@Request() req: any, @Param("id") moodId: string) {
+    return this.cbtService.deleteMood(req.user._id.toString(), moodId);
   }
 
   @Get("moods/summary")
@@ -215,6 +238,31 @@ export class CBTController {
     return this.cbtService.getEmotionalEatingInsights(
       req.user._id.toString(),
       query.period || "week"
+    );
+  }
+
+  // ============== MOOD-BASED MEAL RECOMMENDATIONS ==============
+
+  @Get("meal-recommendations")
+  @ApiOperation({ summary: "Get mood-based meal recommendations" })
+  @ApiQuery({ name: "moodCategory", required: false, description: "Current mood category" })
+  @ApiQuery({ name: "moodLevel", required: false, description: "Current mood level (1-5)" })
+  @ApiResponse({ status: 200, description: "Mood-based recommendations retrieved successfully" })
+  async getMoodBasedMealRecommendations(
+    @Request() req: any,
+    @Query("moodCategory") moodCategory?: string,
+    @Query("moodLevel") moodLevel?: string
+  ) {
+    const currentMood = moodCategory
+      ? {
+          moodCategory: moodCategory as any,
+          moodLevel: moodLevel ? parseInt(moodLevel, 10) : 3,
+        }
+      : undefined;
+
+    return this.cbtService.getMoodBasedMealRecommendations(
+      req.user._id.toString(),
+      currentMood
     );
   }
 

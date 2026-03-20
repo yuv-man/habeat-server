@@ -346,6 +346,49 @@ export class CBTService {
     };
   }
 
+  async updateMood(userId: string, moodId: string, updates: Partial<LogMoodDto>) {
+    const mood = await this.moodModel
+      .findOneAndUpdate(
+        {
+          _id: new mongoose.Types.ObjectId(moodId),
+          userId: new mongoose.Types.ObjectId(userId),
+        },
+        { $set: updates },
+        { new: true }
+      )
+      .lean()
+      .exec();
+
+    if (!mood) {
+      throw new NotFoundException("Mood entry not found");
+    }
+
+    logger.info(`Mood updated for user ${userId}: ${moodId}`);
+
+    return {
+      success: true,
+      data: { mood },
+    };
+  }
+
+  async deleteMood(userId: string, moodId: string) {
+    const result = await this.moodModel.deleteOne({
+      _id: new mongoose.Types.ObjectId(moodId),
+      userId: new mongoose.Types.ObjectId(userId),
+    });
+
+    if (result.deletedCount === 0) {
+      throw new NotFoundException("Mood entry not found");
+    }
+
+    logger.info(`Mood deleted for user ${userId}: ${moodId}`);
+
+    return {
+      success: true,
+      message: "Mood entry deleted successfully",
+    };
+  }
+
   async getMoodSummary(userId: string, period: "week" | "month" = "week") {
     const now = new Date();
     const startDate = new Date();
@@ -843,6 +886,265 @@ export class CBTService {
         },
       },
     };
+  }
+
+  // ============== MOOD-BASED MEAL RECOMMENDATIONS ==============
+
+  /**
+   * Get meal recommendations based on mood analysis
+   * Uses historical data to find meals that improved user's mood
+   */
+  async getMoodBasedMealRecommendations(
+    userId: string,
+    currentMood?: {
+      moodCategory: MoodCategory;
+      moodLevel: number;
+    }
+  ) {
+    const userIdObj = new mongoose.Types.ObjectId(userId);
+
+    // Get meal-mood correlations where mood improved after eating
+    const correlationsWithImprovement = await this.mealMoodModel
+      .find({
+        userId: userIdObj,
+        moodBefore: { $exists: true },
+        moodAfter: { $exists: true },
+      })
+      .lean()
+      .exec();
+
+    // Analyze which meals improved mood
+    const mealScores: Record<string, {
+      mealName: string;
+      mealType: MealType;
+      timesImproved: number;
+      totalOccurrences: number;
+      avgMoodImprovement: number;
+      moods: MoodCategory[];
+    }> = {};
+
+    correlationsWithImprovement.forEach((correlation) => {
+      const moodBefore = correlation.moodBefore?.moodLevel || 3;
+      const moodAfter = correlation.moodAfter?.moodLevel || 3;
+      const improvement = moodAfter - moodBefore;
+      const mealKey = correlation.mealName.toLowerCase();
+
+      if (!mealScores[mealKey]) {
+        mealScores[mealKey] = {
+          mealName: correlation.mealName,
+          mealType: correlation.mealType,
+          timesImproved: 0,
+          totalOccurrences: 0,
+          avgMoodImprovement: 0,
+          moods: [],
+        };
+      }
+
+      mealScores[mealKey].totalOccurrences++;
+      if (improvement > 0) {
+        mealScores[mealKey].timesImproved++;
+      }
+      mealScores[mealKey].avgMoodImprovement =
+        (mealScores[mealKey].avgMoodImprovement * (mealScores[mealKey].totalOccurrences - 1) + improvement) /
+        mealScores[mealKey].totalOccurrences;
+
+      if (correlation.moodBefore?.moodCategory) {
+        mealScores[mealKey].moods.push(correlation.moodBefore.moodCategory);
+      }
+    });
+
+    // Sort meals by improvement score
+    const sortedMeals = Object.values(mealScores)
+      .filter((m) => m.totalOccurrences >= 1) // At least used once
+      .sort((a, b) => {
+        // Primary: average mood improvement
+        // Secondary: consistency (times improved / total)
+        const aScore = a.avgMoodImprovement + (a.timesImproved / a.totalOccurrences);
+        const bScore = b.avgMoodImprovement + (b.timesImproved / b.totalOccurrences);
+        return bScore - aScore;
+      });
+
+    // Get mood-specific recommendations based on current mood
+    let moodSpecificSuggestions: string[] = [];
+    if (currentMood) {
+      const moodCategory = currentMood.moodCategory;
+
+      // Find meals that specifically helped when user had this mood before
+      const mealsForMood = sortedMeals.filter((m) =>
+        m.moods.includes(moodCategory) && m.avgMoodImprovement > 0
+      );
+
+      moodSpecificSuggestions = mealsForMood.slice(0, 3).map((m) => m.mealName);
+    }
+
+    // Generate AI suggestions based on mood
+    const moodFoodSuggestions = this.getMoodBasedFoodSuggestions(
+      currentMood?.moodCategory || "neutral",
+      currentMood?.moodLevel || 3
+    );
+
+    return {
+      success: true,
+      data: {
+        historicalRecommendations: sortedMeals.slice(0, 5).map((m) => ({
+          mealName: m.mealName,
+          mealType: m.mealType,
+          avgMoodImprovement: Math.round(m.avgMoodImprovement * 100) / 100,
+          successRate: Math.round((m.timesImproved / m.totalOccurrences) * 100),
+        })),
+        moodSpecificRecommendations: moodSpecificSuggestions,
+        currentMood: currentMood || null,
+        foodSuggestions: moodFoodSuggestions,
+      },
+    };
+  }
+
+  /**
+   * Get food suggestions based on mood (nutritional science)
+   */
+  private getMoodBasedFoodSuggestions(
+    moodCategory: MoodCategory,
+    moodLevel: number
+  ): {
+    recommended: string[];
+    nutrients: string[];
+    avoid: string[];
+    reasoning: string;
+  } {
+    const suggestions: Record<MoodCategory, {
+      recommended: string[];
+      nutrients: string[];
+      avoid: string[];
+      reasoning: string;
+    }> = {
+      stressed: {
+        recommended: [
+          "dark chocolate",
+          "avocado",
+          "green tea",
+          "blueberries",
+          "salmon",
+          "chamomile tea",
+          "nuts and seeds",
+          "oatmeal",
+        ],
+        nutrients: ["magnesium", "omega-3", "vitamin B", "antioxidants"],
+        avoid: ["caffeine", "sugar", "processed foods", "alcohol"],
+        reasoning: "When stressed, foods rich in magnesium and omega-3s help reduce cortisol levels and promote relaxation.",
+      },
+      anxious: {
+        recommended: [
+          "turkey",
+          "eggs",
+          "yogurt",
+          "fermented foods",
+          "leafy greens",
+          "turmeric",
+          "chamomile",
+          "fatty fish",
+        ],
+        nutrients: ["tryptophan", "probiotics", "zinc", "omega-3"],
+        avoid: ["caffeine", "alcohol", "refined sugar", "artificial sweeteners"],
+        reasoning: "Anxiety is linked to gut health. Probiotic-rich foods and tryptophan help produce calming neurotransmitters.",
+      },
+      sad: {
+        recommended: [
+          "salmon",
+          "walnuts",
+          "dark chocolate",
+          "bananas",
+          "berries",
+          "spinach",
+          "lentils",
+          "mushrooms",
+        ],
+        nutrients: ["omega-3", "vitamin D", "vitamin B12", "folate", "serotonin precursors"],
+        avoid: ["processed foods", "excess sugar", "alcohol"],
+        reasoning: "Low mood can be improved with omega-3s, vitamin D, and foods that support serotonin production.",
+      },
+      tired: {
+        recommended: [
+          "eggs",
+          "sweet potatoes",
+          "quinoa",
+          "lean meats",
+          "beans",
+          "spinach",
+          "oranges",
+          "almonds",
+        ],
+        nutrients: ["iron", "complex carbs", "protein", "B vitamins", "vitamin C"],
+        avoid: ["simple sugars", "heavy meals", "excessive caffeine"],
+        reasoning: "Fatigue often indicates need for steady energy. Complex carbs and iron-rich foods provide sustained energy.",
+      },
+      energetic: {
+        recommended: [
+          "lean proteins",
+          "whole grains",
+          "fresh fruits",
+          "vegetables",
+          "water",
+          "green smoothies",
+        ],
+        nutrients: ["balanced macros", "hydration", "antioxidants"],
+        avoid: ["excess sugar", "heavy fried foods"],
+        reasoning: "Maintain your energy with balanced, nutritious meals that won't cause a crash.",
+      },
+      happy: {
+        recommended: [
+          "colorful vegetables",
+          "fresh fruits",
+          "whole grains",
+          "lean proteins",
+          "social foods",
+        ],
+        nutrients: ["balanced nutrition", "fiber", "vitamins"],
+        avoid: ["overindulgence", "ultra-processed foods"],
+        reasoning: "When happy, maintain your mood with balanced, nutritious meals and mindful eating.",
+      },
+      calm: {
+        recommended: [
+          "herbal teas",
+          "light meals",
+          "Mediterranean foods",
+          "fresh salads",
+          "fish",
+          "olive oil",
+        ],
+        nutrients: ["healthy fats", "light proteins", "hydration"],
+        avoid: ["heavy meals", "stimulants"],
+        reasoning: "Maintain your peaceful state with light, nutritious Mediterranean-style eating.",
+      },
+      neutral: {
+        recommended: [
+          "balanced meals",
+          "variety of colors",
+          "whole foods",
+          "lean proteins",
+          "vegetables",
+          "fruits",
+        ],
+        nutrients: ["balanced macros", "fiber", "vitamins", "minerals"],
+        avoid: ["processed foods", "excess sugar"],
+        reasoning: "Balanced nutrition helps maintain stable mood and energy throughout the day.",
+      },
+      angry: {
+        recommended: [
+          "chamomile tea",
+          "complex carbs",
+          "bananas",
+          "almonds",
+          "leafy greens",
+          "whole grains",
+          "avocado",
+        ],
+        nutrients: ["magnesium", "B vitamins", "complex carbs", "omega-3"],
+        avoid: ["caffeine", "alcohol", "spicy foods", "excess sugar"],
+        reasoning: "Anger can be soothed with calming foods. Magnesium and complex carbs help stabilize mood.",
+      },
+    };
+
+    return suggestions[moodCategory] || suggestions.neutral;
   }
 
   // ============== STATS ENDPOINT ==============

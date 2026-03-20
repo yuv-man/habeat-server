@@ -88,6 +88,56 @@ export class LogMoodDto {
   linkedMealType?: MealType;
 }
 
+export class UpdateMoodDto {
+  @ApiPropertyOptional({ minimum: 1, maximum: 5 })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  moodLevel?: MoodLevel;
+
+  @ApiPropertyOptional({
+    enum: [
+      "happy",
+      "calm",
+      "energetic",
+      "neutral",
+      "tired",
+      "stressed",
+      "anxious",
+      "sad",
+      "angry",
+    ],
+  })
+  @IsOptional()
+  @IsString()
+  moodCategory?: MoodCategory;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 5 })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  energyLevel?: MoodLevel;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 5 })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(5)
+  stressLevel?: MoodLevel;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  notes?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  triggers?: MoodTrigger[];
+}
+
 // Thought DTOs
 export class ThoughtEmotionDto {
   @ApiProperty()

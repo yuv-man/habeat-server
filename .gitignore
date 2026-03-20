@@ -9,3 +9,9 @@
 .env
 .env.bak
 .log
+
+.cursor
+.cursorrules
+.cursorignore
+
+.skills/*
