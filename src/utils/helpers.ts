@@ -24,7 +24,7 @@ import logger from "./logger";
  */
 export const cleanIngredientName = (name: string): string => {
   if (!name) return "";
-  
+
   // Remove common preparation words
   const preparationWords = [
     "chopped",
@@ -63,82 +63,140 @@ export const cleanIngredientName = (name: string): string => {
     "fine",
     "coarse",
   ];
-  
+
   let cleaned = name.toLowerCase().trim();
-  
+
   // Remove preparation words
   for (const word of preparationWords) {
     // Remove word with spaces around it
     cleaned = cleaned.replace(new RegExp(`\\b${word}\\b`, "gi"), "");
   }
-  
+
   // Clean up multiple spaces
   cleaned = cleaned.replace(/\s+/g, " ").trim();
-  
+
   // Remove leading/trailing underscores
   cleaned = cleaned.replace(/^_+|_+$/g, "");
-  
+
   return cleaned || name; // Return original if cleaned is empty
 };
 
 /**
  * Assign ingredient category based on name
  */
-export const assignIngredientCategory = (ingredientName: string): string | undefined => {
+export const assignIngredientCategory = (
+  ingredientName: string,
+): string | undefined => {
   const name = ingredientName.toLowerCase().replace(/_/g, " ");
-  
+
   // Check each category's keywords
   for (const [category, keywords] of Object.entries(ingredientCategories)) {
     if (keywords.some((keyword) => name.includes(keyword))) {
       return category;
     }
   }
-  
+
   // Fallback: check common patterns
-  if (name.includes("chicken") || name.includes("beef") || name.includes("pork") || 
-      name.includes("fish") || name.includes("salmon") || name.includes("tuna") ||
-      name.includes("shrimp") || name.includes("egg") || name.includes("tofu") ||
-      name.includes("bean") || name.includes("lentil")) {
+  if (
+    name.includes("chicken") ||
+    name.includes("beef") ||
+    name.includes("pork") ||
+    name.includes("fish") ||
+    name.includes("salmon") ||
+    name.includes("tuna") ||
+    name.includes("shrimp") ||
+    name.includes("egg") ||
+    name.includes("tofu") ||
+    name.includes("bean") ||
+    name.includes("lentil")
+  ) {
     return "Proteins";
   }
-  
-  if (name.includes("onion") || name.includes("garlic") || name.includes("tomato") ||
-      name.includes("lettuce") || name.includes("spinach") || name.includes("carrot") ||
-      name.includes("broccoli") || name.includes("pepper") || name.includes("cucumber") ||
-      name.includes("zucchini") || name.includes("kale") || name.includes("cauliflower")) {
+
+  if (
+    name.includes("onion") ||
+    name.includes("garlic") ||
+    name.includes("tomato") ||
+    name.includes("lettuce") ||
+    name.includes("spinach") ||
+    name.includes("carrot") ||
+    name.includes("broccoli") ||
+    name.includes("pepper") ||
+    name.includes("cucumber") ||
+    name.includes("zucchini") ||
+    name.includes("kale") ||
+    name.includes("cauliflower")
+  ) {
     return "Vegetables";
   }
-  
-  if (name.includes("apple") || name.includes("banana") || name.includes("berry") ||
-      name.includes("orange") || name.includes("grape") || name.includes("strawberry") ||
-      name.includes("blueberry") || name.includes("pineapple") || name.includes("mango")) {
+
+  if (
+    name.includes("apple") ||
+    name.includes("banana") ||
+    name.includes("berry") ||
+    name.includes("orange") ||
+    name.includes("grape") ||
+    name.includes("strawberry") ||
+    name.includes("blueberry") ||
+    name.includes("pineapple") ||
+    name.includes("mango")
+  ) {
     return "Fruits";
   }
-  
-  if (name.includes("rice") || name.includes("pasta") || name.includes("bread") ||
-      name.includes("quinoa") || name.includes("oat") || name.includes("flour") ||
-      name.includes("tortilla") || name.includes("wrap")) {
+
+  if (
+    name.includes("rice") ||
+    name.includes("pasta") ||
+    name.includes("bread") ||
+    name.includes("quinoa") ||
+    name.includes("oat") ||
+    name.includes("flour") ||
+    name.includes("tortilla") ||
+    name.includes("wrap")
+  ) {
     return "Grains";
   }
-  
-  if (name.includes("milk") || name.includes("cheese") || name.includes("yogurt") ||
-      name.includes("butter") || name.includes("cream") || name.includes("sour cream")) {
+
+  if (
+    name.includes("milk") ||
+    name.includes("cheese") ||
+    name.includes("yogurt") ||
+    name.includes("butter") ||
+    name.includes("cream") ||
+    name.includes("sour cream")
+  ) {
     return "Dairy";
   }
-  
-  if (name.includes("oil") || name.includes("salt") || name.includes("pepper") ||
-      name.includes("sugar") || name.includes("vinegar") || name.includes("soy") ||
-      name.includes("honey") || name.includes("ketchup") || name.includes("mustard")) {
+
+  if (
+    name.includes("oil") ||
+    name.includes("salt") ||
+    name.includes("pepper") ||
+    name.includes("sugar") ||
+    name.includes("vinegar") ||
+    name.includes("soy") ||
+    name.includes("honey") ||
+    name.includes("ketchup") ||
+    name.includes("mustard")
+  ) {
     return "Pantry";
   }
-  
-  if (name.includes("cumin") || name.includes("paprika") || name.includes("oregano") ||
-      name.includes("basil") || name.includes("thyme") || name.includes("rosemary") ||
-      name.includes("cinnamon") || name.includes("ginger") || name.includes("turmeric") ||
-      name.includes("nutmeg")) {
+
+  if (
+    name.includes("cumin") ||
+    name.includes("paprika") ||
+    name.includes("oregano") ||
+    name.includes("basil") ||
+    name.includes("thyme") ||
+    name.includes("rosemary") ||
+    name.includes("cinnamon") ||
+    name.includes("ginger") ||
+    name.includes("turmeric") ||
+    name.includes("nutmeg")
+  ) {
     return "Spices";
   }
-  
+
   return undefined;
 };
 
@@ -183,7 +241,7 @@ export interface RecipeIngredient {
  * AI format: [name, "200", "g"]
  */
 export const convertMealIngredientsToAIFormat = (
-  ingredients: MealIngredient[]
+  ingredients: MealIngredient[],
 ): AIIngredient[] => {
   if (!ingredients || !Array.isArray(ingredients)) return [];
 
@@ -217,7 +275,7 @@ export const convertMealIngredientsToAIFormat = (
  */
 export const convertAIIngredientsToMealFormat = (
   ingredients: (AIIngredient | RecipeIngredient | string)[],
-  defaultCategory?: string
+  defaultCategory?: string,
 ): MealIngredient[] => {
   if (!ingredients || !Array.isArray(ingredients)) return [];
 
@@ -274,7 +332,7 @@ export const convertAIIngredientsToMealFormat = (
 
     // Clean ingredient name (remove preparation words)
     const cleanedName = cleanIngredientName(rawName);
-    
+
     // Assign category if not already set
     if (!category) {
       category = assignIngredientCategory(cleanedName);
@@ -298,7 +356,7 @@ export const convertAIIngredientsToMealFormat = (
  * Recipe format: { name: "...", amount: "200", unit: "g" }
  */
 export const convertMealIngredientsToRecipeFormat = (
-  ingredients: MealIngredient[]
+  ingredients: MealIngredient[],
 ): RecipeIngredient[] => {
   if (!ingredients || !Array.isArray(ingredients)) return [];
 
@@ -334,7 +392,7 @@ export const convertMealIngredientsToRecipeFormat = (
  * Recipe format: { name, amount, unit }
  */
 export const convertAIIngredientsToRecipeFormat = (
-  ingredients: (AIIngredient | RecipeIngredient | string)[]
+  ingredients: (AIIngredient | RecipeIngredient | string)[],
 ): RecipeIngredient[] => {
   if (!ingredients || !Array.isArray(ingredients)) return [];
 
@@ -407,7 +465,7 @@ export const convertAIIngredientsToRecipeFormat = (
  * Meal format: [name, "200 g"]
  */
 export const convertRecipeIngredientsToMealFormat = (
-  ingredients: RecipeIngredient[]
+  ingredients: RecipeIngredient[],
 ): MealIngredient[] => {
   if (!ingredients || !Array.isArray(ingredients)) return [];
 
@@ -444,7 +502,7 @@ export const getLocalDateKey = (date: Date): string => {
 // Works for prepTime, duration, caloriesBurned, etc.
 export const parseNumericValue = (
   value: any,
-  defaultValue: number = 0
+  defaultValue: number = 0,
 ): number => {
   if (typeof value === "number") {
     return Math.round(value);
@@ -493,7 +551,7 @@ export const getValidObjectId = (id: any): mongoose.Types.ObjectId => {
 // Simple formula: 1 glass per 250 calories, max 2 glasses per workout
 export const calculateWorkoutWaterGlasses = (
   caloriesBurned: number,
-  time?: string
+  time?: string,
 ): number => {
   if (!caloriesBurned || caloriesBurned <= 0) {
     return 0;
@@ -507,7 +565,7 @@ export const calculateWorkoutWaterGlasses = (
 // Calculate total extra water for all workouts in a day
 // Maximum 4 extra glasses per day from workouts
 export const calculateDayWorkoutWater = (
-  workouts: Array<{ caloriesBurned?: number; time?: string }>
+  workouts: Array<{ caloriesBurned?: number; time?: string }>,
 ): number => {
   if (!workouts || workouts.length === 0) return 0;
 
@@ -593,7 +651,7 @@ export const formatRecipeForResponse = (recipe: IRecipe) => {
       recipe.ingredients
         ?.map(
           (ing: any) =>
-            `- ${ing.amount} ${ing.unit} ${ing.name}${ing.notes ? ` (${ing.notes})` : ""}`
+            `- ${ing.amount} ${ing.unit} ${ing.name}${ing.notes ? ` (${ing.notes})` : ""}`,
         )
         .join("\n") || "Ingredients not available"
     }
@@ -606,7 +664,7 @@ export const formatRecipeForResponse = (recipe: IRecipe) => {
       recipe.instructions
         ?.map(
           (inst: any) =>
-            `${inst.step}. ${inst.instruction}${inst.time ? ` (${inst.time} minutes)` : ""}${inst.temperature ? ` at ${inst.temperature}°C` : ""}`
+            `${inst.step}. ${inst.instruction}${inst.time ? ` (${inst.time} minutes)` : ""}${inst.temperature ? ` at ${inst.temperature}°C` : ""}`,
         )
         .join("\n") || "Instructions not available"
     }
@@ -617,13 +675,13 @@ export const processMealForIngredients = async (
   meal: IMeal,
   plan: any,
   allIngredients: string[],
-  mealsToGenerate: string[]
+  mealsToGenerate: string[],
 ) => {
   // Add to list of meals that need ingredient generation
   if (meal.ingredients && Array.isArray(meal.ingredients)) {
     // If meal already has ingredients, use them
     const ingredientNames = meal.ingredients.map((ing: any) =>
-      typeof ing === "string" ? ing : ing[0] || ing.name || ""
+      typeof ing === "string" ? ing : ing[0] || ing.name || "",
     );
     allIngredients.push(...ingredientNames.filter(Boolean));
   } else {
@@ -634,7 +692,7 @@ export const processMealForIngredients = async (
 
 // Parse ingredient string like "greek_yogurt_2%_fat (200 g)" into name, amount, unit
 const parseIngredientString = (
-  str: string
+  str: string,
 ): { name: string; amount: number; unit: string } => {
   // Match pattern: "name (amount unit)" or "name (amount)"
   const match = str.match(/^(.+?)\s*\((\d+(?:\.\d+)?)\s*(\w*)\)$/);
@@ -675,7 +733,7 @@ const mergeIngredients = (items: string[]): string[] => {
       result.push(
         unit
           ? `${name} (${formattedAmount} ${unit})`
-          : `${name} (${formattedAmount})`
+          : `${name} (${formattedAmount})`,
       );
     } else {
       result.push(name);
@@ -686,7 +744,7 @@ const mergeIngredients = (items: string[]): string[] => {
 };
 
 export const organizeIngredients = (
-  ingredients: string[] | [string, string][] | [string, string, string?][]
+  ingredients: string[] | [string, string][] | [string, string, string?][],
 ): string => {
   const organized: { [key: string]: string[] } = {};
 
@@ -726,7 +784,7 @@ export const organizeIngredients = (
       for (const [cat, keywords] of Object.entries(ingredientCategories)) {
         if (
           keywords.some((keyword) =>
-            ingredientName.toLowerCase().includes(keyword.toLowerCase())
+            ingredientName.toLowerCase().includes(keyword.toLowerCase()),
           )
         ) {
           category = cat;
@@ -769,7 +827,7 @@ export const organizeIngredients = (
 // Progress calculation utilities
 export const calculateProgressPercentage = (
   current: number,
-  goal: number
+  goal: number,
 ): number => {
   if (goal === 0) return 0;
   return Math.min(Math.round((current / goal) * 100), 100);
@@ -777,7 +835,7 @@ export const calculateProgressPercentage = (
 
 export const calculateCalorieDeficit = (
   consumed: number,
-  goal: number
+  goal: number,
 ): number => {
   return goal - consumed;
 };
@@ -812,17 +870,17 @@ export const formatProgressStats = (progress: any) => {
       goal: progress.caloriesGoal,
       percentage: calculateProgressPercentage(
         progress.caloriesConsumed,
-        progress.caloriesGoal
+        progress.caloriesGoal,
       ),
       deficit: calculateCalorieDeficit(
         progress.caloriesConsumed,
-        progress.caloriesGoal
+        progress.caloriesGoal,
       ),
       status: getProgressStatus(
         calculateProgressPercentage(
           progress.caloriesConsumed,
-          progress.caloriesGoal
-        )
+          progress.caloriesGoal,
+        ),
       ),
     },
     macros: {
@@ -831,7 +889,7 @@ export const formatProgressStats = (progress: any) => {
         goal: progress.protein.goal,
         percentage: calculateProgressPercentage(
           progress.protein.consumed,
-          progress.protein.goal
+          progress.protein.goal,
         ),
       },
       carbs: {
@@ -839,7 +897,7 @@ export const formatProgressStats = (progress: any) => {
         goal: progress.carbs.goal,
         percentage: calculateProgressPercentage(
           progress.carbs.consumed,
-          progress.carbs.goal
+          progress.carbs.goal,
         ),
       },
       fat: {
@@ -847,7 +905,7 @@ export const formatProgressStats = (progress: any) => {
         goal: progress.fat.goal,
         percentage: calculateProgressPercentage(
           progress.fat.consumed,
-          progress.fat.goal
+          progress.fat.goal,
         ),
       },
     },
@@ -856,13 +914,13 @@ export const formatProgressStats = (progress: any) => {
       goal: progress.water.goal,
       percentage: calculateProgressPercentage(
         progress.water.consumed,
-        progress.water.goal
+        progress.water.goal,
       ),
       status: getProgressStatus(
         calculateProgressPercentage(
           progress.water.consumed,
-          progress.water.goal
-        )
+          progress.water.goal,
+        ),
       ),
     },
     workouts: {
@@ -870,13 +928,13 @@ export const formatProgressStats = (progress: any) => {
       goal: progress.workouts.length,
       percentage: calculateProgressPercentage(
         progress.workouts.filter((w: any) => w.done).length,
-        progress.workouts.length
+        progress.workouts.length,
       ),
       status: getProgressStatus(
         calculateProgressPercentage(
           progress.workouts.filter((w: any) => w.done).length,
-          progress.workouts.length
-        )
+          progress.workouts.length,
+        ),
       ),
     },
     meals: {
@@ -928,7 +986,7 @@ export const formatProgressStats = (progress: any) => {
     exercise: {
       minutes: progress.workouts.reduce(
         (total: number, w: any) => total + (w.done ? w.duration : 0),
-        0
+        0,
       ),
       workouts: progress.workouts.filter((w: any) => w.done).length,
       details: progress.workouts.map((w: any) => ({
@@ -966,7 +1024,7 @@ const createEmptyMeal = (category: string): IMealWithStatus => ({
 const expandMixedVegetables = (
   ingredientName: string,
   amount: string,
-  mealName?: string
+  mealName?: string,
 ): [string, string][] => {
   const normalizedName = ingredientName.toLowerCase().trim();
   if (
@@ -989,7 +1047,7 @@ const expandMixedVegetables = (
       const perVeg = numericAmount / vegetables.length;
       return vegetables.map(
         (veg) =>
-          [veg, `${perVeg.toFixed(1)} ${unit}`.trim()] as [string, string]
+          [veg, `${perVeg.toFixed(1)} ${unit}`.trim()] as [string, string],
       );
     }
 
@@ -1012,7 +1070,7 @@ const VALID_CATEGORIES = [
 // Helper function to parse ingredients
 const parseIngredients = (
   ingredients: (string | [string, string] | [string, string, string?])[],
-  mealName?: string
+  mealName?: string,
 ): [string, string, string?][] => {
   if (!Array.isArray(ingredients) || ingredients.length === 0) return [];
 
@@ -1046,7 +1104,7 @@ const parseIngredients = (
           amount = `${parts[1]} ${parts[2]}`.trim();
           const providedCategory = parts[3];
           category = VALID_CATEGORIES.includes(
-            providedCategory as (typeof VALID_CATEGORIES)[number]
+            providedCategory as (typeof VALID_CATEGORIES)[number],
           )
             ? providedCategory
             : undefined;
@@ -1088,7 +1146,7 @@ const parseIngredients = (
 export const validateAndCorrectMealMacros = (
   meal: IAIMealData,
   targetCalories?: number,
-  targetMacros?: { protein: number; carbs: number; fat: number }
+  targetMacros?: { protein: number; carbs: number; fat: number },
 ): IAIMealData => {
   if (!meal || !meal.macros) return meal;
 
@@ -1130,10 +1188,10 @@ export const validateAndCorrectMealMacros = (
     ) {
       const adjustment = 0.7; // 70% towards target, 30% keep current
       protein = Math.round(
-        protein * (1 - adjustment) + targetMacros.protein * adjustment
+        protein * (1 - adjustment) + targetMacros.protein * adjustment,
       );
       carbs = Math.round(
-        carbs * (1 - adjustment) + targetMacros.carbs * adjustment
+        carbs * (1 - adjustment) + targetMacros.carbs * adjustment,
       );
       fat = Math.round(fat * (1 - adjustment) + targetMacros.fat * adjustment);
 
@@ -1168,7 +1226,7 @@ export const cleanMealData = (meal: IAIMealData | undefined): IMeal => {
 
   const parsedIngredients = parseIngredients(
     meal?.ingredients || [],
-    meal?.name
+    meal?.name,
   );
 
   return {
@@ -1227,11 +1285,11 @@ const distributeWorkouts = (
   weeklyPlanArray: any[],
   workoutDays: number[],
   dayToName: Record<number, string>,
-  nameToDay: Record<string, number>
+  nameToDay: Record<string, number>,
 ): void => {
   if (!workoutDays || workoutDays.length === 0) {
     logger.info(
-      `[distributeWorkouts] No workout days specified, skipping distribution`
+      `[distributeWorkouts] No workout days specified, skipping distribution`,
     );
     return;
   }
@@ -1245,7 +1303,7 @@ const distributeWorkouts = (
   });
 
   logger.info(
-    `[distributeWorkouts] Found ${allWorkouts.length} total workouts, ${workoutDays.length} workout days`
+    `[distributeWorkouts] Found ${allWorkouts.length} total workouts, ${workoutDays.length} workout days`,
   );
 
   // Clear all workouts from all days first
@@ -1286,7 +1344,7 @@ const distributeWorkouts = (
           // Map JavaScript day (0-6) to our day numbers (0 = Sunday, 1 = Monday, etc.)
           dayNumber = dayOfWeek;
           logger.debug(
-            `[distributeWorkouts] Mapped day "${day.day}" to day number ${dayNumber} using date ${day.date}`
+            `[distributeWorkouts] Mapped day "${day.day}" to day number ${dayNumber} using date ${day.date}`,
           );
         }
       } catch (e) {
@@ -1299,25 +1357,25 @@ const distributeWorkouts = (
       // If we have 7 days and they're in order, index 0 = Monday (1), index 1 = Tuesday (2), etc.
       dayNumber = (index + 1) % 7; // Monday = 1, Tuesday = 2, ..., Sunday = 0
       logger.debug(
-        `[distributeWorkouts] Mapped day "${day.day}" to day number ${dayNumber} using array index ${index}`
+        `[distributeWorkouts] Mapped day "${day.day}" to day number ${dayNumber} using array index ${index}`,
       );
     }
 
     if (dayNumber !== undefined) {
       dayMap.set(dayNumber, day);
       logger.debug(
-        `[distributeWorkouts] Mapped day "${day.day}" (${dayNameLower}) to day number ${dayNumber}`
+        `[distributeWorkouts] Mapped day "${day.day}" (${dayNameLower}) to day number ${dayNumber}`,
       );
     } else {
       logger.warn(
-        `[distributeWorkouts] Could not map day "${day.day}" to day number. Available days: ${Object.keys(nameToDay).join(", ")}`
+        `[distributeWorkouts] Could not map day "${day.day}" to day number. Available days: ${Object.keys(nameToDay).join(", ")}`,
       );
     }
   });
 
   // Log day mapping for debugging
   logger.info(
-    `[distributeWorkouts] Day map created with ${dayMap.size} entries. Workout days: ${workoutDays.join(", ")}`
+    `[distributeWorkouts] Day map created with ${dayMap.size} entries. Workout days: ${workoutDays.join(", ")}`,
   );
 
   // If we have collected workouts, distribute them
@@ -1325,7 +1383,7 @@ const distributeWorkouts = (
     // Distribute collected workouts across workout days evenly
     // Each workout day should get at least 1 workout, distribute extras evenly
     const baseWorkoutsPerDay = Math.floor(
-      allWorkouts.length / workoutDays.length
+      allWorkouts.length / workoutDays.length,
     );
     const extraWorkouts = allWorkouts.length % workoutDays.length;
     let workoutIndex = 0;
@@ -1351,11 +1409,11 @@ const distributeWorkouts = (
 
         dayObj.workouts = dayWorkouts;
         logger.info(
-          `[distributeWorkouts] Assigned ${dayWorkouts.length} workout(s) to ${dayToName[dayNumber]} (day ${dayNumber})`
+          `[distributeWorkouts] Assigned ${dayWorkouts.length} workout(s) to ${dayToName[dayNumber]} (day ${dayNumber})`,
         );
       } else {
         logger.warn(
-          `[distributeWorkouts] Could not find day object for ${dayToName[dayNumber]} (day number ${dayNumber})`
+          `[distributeWorkouts] Could not find day object for ${dayToName[dayNumber]} (day number ${dayNumber})`,
         );
         // If day object not found, still consume workouts to avoid assigning them elsewhere
         const workoutsForThisDay =
@@ -1366,12 +1424,12 @@ const distributeWorkouts = (
 
     // Log distribution summary
     logger.info(
-      `[distributeWorkouts] Distributed ${allWorkouts.length} workouts across ${workoutDays.length} days: ${workoutDays.map((d) => `${dayToName[d]}(${dayMap.get(d)?.workouts?.length || 0})`).join(", ")}`
+      `[distributeWorkouts] Distributed ${allWorkouts.length} workouts across ${workoutDays.length} days: ${workoutDays.map((d) => `${dayToName[d]}(${dayMap.get(d)?.workouts?.length || 0})`).join(", ")}`,
     );
   } else {
     // No workouts from AI, generate defaults for each workout day
     logger.info(
-      `[distributeWorkouts] No workouts from AI, generating defaults for ${workoutDays.length} days`
+      `[distributeWorkouts] No workouts from AI, generating defaults for ${workoutDays.length} days`,
     );
 
     let templateIndex = 0;
@@ -1396,23 +1454,23 @@ const distributeWorkouts = (
         templateIndex++;
         workoutsGenerated++;
         logger.info(
-          `[distributeWorkouts] Generated default workout "${template.name}" for ${dayToName[dayNumber]}`
+          `[distributeWorkouts] Generated default workout "${template.name}" for ${dayToName[dayNumber]}`,
         );
       } else {
         logger.warn(
-          `[distributeWorkouts] Could not find day object for ${dayToName[dayNumber]} (day number ${dayNumber}), cannot generate workout`
+          `[distributeWorkouts] Could not find day object for ${dayToName[dayNumber]} (day number ${dayNumber}), cannot generate workout`,
         );
       }
     }
 
     if (workoutsGenerated === 0) {
       logger.error(
-        `[distributeWorkouts] CRITICAL: No workouts were generated! Day map size: ${dayMap.size}, Workout days: ${workoutDays.join(", ")}, Weekly plan array length: ${weeklyPlanArray.length}`
+        `[distributeWorkouts] CRITICAL: No workouts were generated! Day map size: ${dayMap.size}, Workout days: ${workoutDays.join(", ")}, Weekly plan array length: ${weeklyPlanArray.length}`,
       );
       // Fallback: try to assign workouts to any available days
       if (weeklyPlanArray.length > 0) {
         logger.warn(
-          `[distributeWorkouts] Attempting fallback: assigning workouts to first ${Math.min(workoutDays.length, weeklyPlanArray.length)} days`
+          `[distributeWorkouts] Attempting fallback: assigning workouts to first ${Math.min(workoutDays.length, weeklyPlanArray.length)} days`,
         );
         let templateIndex = 0;
         for (
@@ -1437,7 +1495,7 @@ const distributeWorkouts = (
             ];
             templateIndex++;
             logger.info(
-              `[distributeWorkouts] Fallback: Generated workout "${template.name}" for day at index ${i}`
+              `[distributeWorkouts] Fallback: Generated workout "${template.name}" for day at index ${i}`,
             );
           }
         }
@@ -1464,636 +1522,89 @@ export const transformWeeklyPlan = async (
   workoutDays: number[],
   planType: "daily" | "weekly",
   language: string,
-  weekStartDate: Date
+  weekStartDate: Date,
 ): Promise<MealPlanResponse> => {
-  // Validate weekStartDate and use fallback if invalid
-  let validWeekStartDate = weekStartDate;
-  if (
-    !weekStartDate ||
-    !(weekStartDate instanceof Date) ||
-    isNaN(weekStartDate.getTime())
-  ) {
-    logger.error(
-      `[transformWeeklyPlan] Invalid weekStartDate: ${weekStartDate}`
-    );
-    // Use today as fallback
-    validWeekStartDate = new Date();
-    validWeekStartDate.setHours(0, 0, 0, 0);
-    logger.warn(
-      `[transformWeeklyPlan] Using today as fallback: ${validWeekStartDate.toISOString()}`
-    );
-  }
-
-  // Validate dates array
+  // 1. DATA NORMALIZATION (Export to Helper: normalizeInputData)
   const validDates = dates.filter(
-    (date) => date instanceof Date && !isNaN(date.getTime())
+    (d) => d instanceof Date && !isNaN(d.getTime()),
   );
-  if (validDates.length === 0) {
-    logger.error(`[transformWeeklyPlan] All dates in dates array are invalid`);
-    throw new Error("Invalid dates array provided to transformWeeklyPlan");
-  }
-  if (validDates.length !== dates.length) {
-    logger.warn(
-      `[transformWeeklyPlan] ${dates.length - validDates.length} invalid dates found in dates array`
-    );
-  }
-
-  const allMeals: {
-    name: string;
-    category: string;
-    calories: number;
-    mealData: IAIMealData;
-  }[] = [];
-
-  // Handle both array and object formats for weeklyPlan
   let weeklyPlanArray = Array.isArray(parsedResponse.weeklyPlan)
     ? parsedResponse.weeklyPlan
     : Object.values(parsedResponse.weeklyPlan);
 
-  // CRITICAL: Limit to 7 days maximum before processing
-  // This prevents the AI from generating more than a week's worth of data
-  if (weeklyPlanArray.length > 7) {
-    logger.warn(
-      `[transformWeeklyPlan] AI returned ${weeklyPlanArray.length} days, limiting to 7. Original days: ${weeklyPlanArray.map((d: any) => d.day || "unknown").join(", ")}`
-    );
-    weeklyPlanArray = weeklyPlanArray.slice(0, 7);
-  }
+  if (weeklyPlanArray.length > 7) weeklyPlanArray = weeklyPlanArray.slice(0, 7);
 
-  // Distribute workouts evenly across designated workout days
-  // This fixes the issue where AI sometimes puts all workouts on the first day
-  logger.info(
-    `[transformWeeklyPlan] Distributing workouts across ${workoutDays.length} workout days: ${workoutDays.map((d) => dayToName[d]).join(", ")}`
-  );
+  // 2. WORKOUT DISTRIBUTION
   distributeWorkouts(weeklyPlanArray, workoutDays, dayToName, nameToDay);
 
+  // 3. BULK MEAL SYNC (CRITICAL FOR PERFORMANCE)
+  // [EXPORT TO HELPER: syncMealsWithDatabase]
+  const allMealsToSync: any[] = [];
   weeklyPlanArray.forEach((day: IAIDayData) => {
-    if (day.meals.breakfast?.name)
-      allMeals.push({
-        ...day.meals.breakfast,
-        category: "breakfast",
-        mealData: day.meals.breakfast,
-      });
-    if (day.meals.lunch?.name)
-      allMeals.push({
-        ...day.meals.lunch,
-        category: "lunch",
-        mealData: day.meals.lunch,
-      });
-    if (day.meals.dinner?.name)
-      allMeals.push({
-        ...day.meals.dinner,
-        category: "dinner",
-        mealData: day.meals.dinner,
-      });
-    day.meals.snacks?.forEach((snack: IAIMealData) => {
-      if (snack?.name)
-        allMeals.push({ ...snack, category: "snack", mealData: snack });
-    });
+    const dailyMeals = [
+      { ...day.meals.breakfast, category: "breakfast" },
+      { ...day.meals.lunch, category: "lunch" },
+      { ...day.meals.dinner, category: "dinner" },
+      ...(day.meals.snacks || []).map((s) => ({ ...s, category: "snack" })),
+    ].filter((m) => m.name);
+    allMealsToSync.push(...dailyMeals);
   });
 
-  let existingMeals: any[] = [];
-  const mealLookup = new Map();
+  const mealLookup = await bulkSyncMeals(allMealsToSync);
 
-  try {
-    const mongooseConnection = mongoose.connection;
-    if (mongooseConnection.readyState === 1) {
-      const MealModel = getMealModel();
-      const findQuery = MealModel.find({
-        $or: allMeals.map((meal) => ({
-          name: meal.name,
-          category: meal.category,
-          calories: { $gte: meal.calories - 50, $lte: meal.calories + 50 },
-        })),
-      }).maxTimeMS(5000);
+  // 4. MAP & TRANSFORM (The "Hydration" Loop)
+  const transformedWeeklyPlan = weeklyPlanArray.map(
+    (day: IAIDayData, index: number) => {
+      const dayNumber = nameToDay[day.day?.toLowerCase()];
+      const dateObj = validDates[index] || new Date(); // Blueprint ensures index alignment
 
-      const timeoutPromise = new Promise<any[]>((_, reject) =>
-        setTimeout(() => reject(new Error("Meal.find() timeout")), 5000)
-      );
-
-      try {
-        existingMeals = (await Promise.race([
-          findQuery.exec(),
-          timeoutPromise,
-        ])) as any[];
-
-        existingMeals.forEach((meal) => {
-          const key = `${meal.name}-${meal.category}-${meal.calories}`;
-          mealLookup.set(key, meal);
-        });
-      } catch (timeoutError: unknown) {
-        logger.warn(`Meal query timed out, continuing without lookup`);
-      }
-    }
-  } catch (dbError: unknown) {
-    logger.warn(`Failed to query meals: ${getErrorMessage(dbError)}`);
-  }
-
-  const newMeals = allMeals.filter((meal) => {
-    const key = `${meal.name}-${meal.category}-${meal.calories}`;
-    return !mealLookup.has(key);
-  });
-
-  if (newMeals.length > 0) {
-    try {
-      const mongooseConnection = mongoose.connection;
-      if (mongooseConnection.readyState === 1) {
-        const MealModel = getMealModel();
-        const insertPromise = MealModel.insertMany(
-          newMeals.map((meal) => ({
-            ...meal.mealData,
-            category: meal.category,
-            done: false,
-          }))
-        );
-
-        const timeoutPromise = new Promise<any[]>((_, reject) =>
-          setTimeout(() => reject(new Error("insertMany timeout")), 5000)
-        );
-
-        try {
-          const createdMeals = (await Promise.race([
-            insertPromise,
-            timeoutPromise,
-          ])) as any[];
-
-          createdMeals.forEach((meal) => {
-            const key = `${meal.name}-${meal.category}-${meal.calories}`;
-            mealLookup.set(key, meal);
-          });
-        } catch (timeoutError: unknown) {
-          logger.warn(`Meal insertion timed out`);
-        }
-      }
-    } catch (err: unknown) {
-      logger.warn(`Error creating meals: ${getErrorMessage(err)}`);
-    }
-  }
-
-  allMeals.forEach((meal) => {
-    const key = `${meal.name}-${meal.category}-${meal.calories}`;
-    if (!mealLookup.has(key)) {
-      mealLookup.set(key, {
-        ...meal.mealData,
-        _id: new mongoose.Types.ObjectId(),
-        category: meal.category,
-        done: false,
-      });
-    }
-  });
-
-  const transformedWeeklyPlan = await Promise.all(
-    weeklyPlanArray.map(async (day: IAIDayData) => {
-      const findMeal = (
-        mealData: IAIMealData | undefined,
-        category: string
-      ): IMealWithStatus | null => {
-        if (!mealData?.name) return null;
-        const key = `${mealData.name}-${category}-${mealData.calories}`;
-        const meal = mealLookup.get(key);
-        const cleanedMeal = cleanMealData(mealData);
-        return meal
-          ? {
-              ...cleanedMeal,
-              _id: meal._id.toString(),
-              category: category as "breakfast" | "lunch" | "dinner" | "snack",
-              done: false,
-            }
-          : {
-              ...cleanedMeal,
-              _id: new mongoose.Types.ObjectId().toString(),
-              category: category as "breakfast" | "lunch" | "dinner" | "snack",
-              done: false,
-            };
+      const hydrate = (mealData: any, cat: string) => {
+        if (!mealData?.name) return createEmptyMeal(cat);
+        const key = `${mealData.name}-${cat}-${mealData.calories}`;
+        const dbMeal = mealLookup.get(key);
+        return {
+          ...cleanMealData(mealData),
+          _id: dbMeal
+            ? dbMeal._id.toString()
+            : new mongoose.Types.ObjectId().toString(),
+          category: cat,
+          done: false,
+        };
       };
 
-      const breakfast = findMeal(day.meals.breakfast, "breakfast");
-      const lunch = findMeal(day.meals.lunch, "lunch");
-      const dinner = findMeal(day.meals.dinner, "dinner");
-      const snacks =
-        day.meals.snacks
-          ?.map((snack: IAIMealData) => findMeal(snack, "snack"))
-          .filter((meal): meal is IMealWithStatus => meal !== null) || [];
+      const meals = {
+        breakfast: hydrate(day.meals.breakfast, "breakfast"),
+        lunch: hydrate(day.meals.lunch, "lunch"),
+        dinner: hydrate(day.meals.dinner, "dinner"),
+        snacks: (day.meals.snacks || []).map((s) => hydrate(s, "snack")),
+      };
 
-      const dayNumber = nameToDay[day.day.toLowerCase()];
-
-      // Determine the date for this day
-      // Priority: 1) validDates array (most reliable), 2) day.date from AI, 3) calculate from dayNumber
-      let dayDate: Date | undefined;
-
-      // PRIORITY 1: Try to match by day number in activeDays array (uses validDates)
-      // This is the most reliable since validDates is pre-calculated correctly
-      if (dayNumber !== undefined && validDates.length > 0) {
-        const dayIndexInActiveDays = activeDays.indexOf(dayNumber);
-        if (
-          dayIndexInActiveDays >= 0 &&
-          dayIndexInActiveDays < validDates.length
-        ) {
-          dayDate = validDates[dayIndexInActiveDays];
-        } else {
-          // If not found by index, find by matching day of week
-          for (const date of validDates) {
-            if (date.getDay() === dayNumber) {
-              dayDate = date;
-              break;
-            }
-          }
-        }
-      }
-
-      // PRIORITY 2: Try to use date from the day object itself (if not already set)
-      // But validate it's within validDates range
-      if (!dayDate && day.date) {
-        let parsedDate: Date | undefined;
-        if (day.date instanceof Date) {
-          parsedDate = day.date;
-        } else if (typeof day.date === "string") {
-          parsedDate = new Date(day.date);
-          // Validate the parsed date
-          if (isNaN(parsedDate.getTime())) {
-            parsedDate = undefined;
-          }
-        }
-
-        // Only use if it's within validDates range
-        if (parsedDate && validDates.length > 0) {
-          const dateKey = getLocalDateKey(parsedDate);
-          const isValidWeekDate = validDates.some(
-            (vd) => getLocalDateKey(vd) === dateKey
-          );
-          if (isValidWeekDate) {
-            dayDate = parsedDate;
-          }
-        }
-      }
-
-      // PRIORITY 3: Calculate from day name and validWeekStartDate (fallback)
-      if (!dayDate && dayNumber !== undefined && validDates.length > 0) {
-        // Use the first valid date as a base and calculate from there
-        const baseDate = validDates[0];
-        const currentDayOfWeek = baseDate.getDay();
-        const targetDayOfWeek = dayNumber;
-        let daysToAdd = targetDayOfWeek - currentDayOfWeek;
-        if (daysToAdd < 0) daysToAdd += 7;
-        // Ensure we don't go beyond 7 days
-        if (daysToAdd < 7) {
-          dayDate = new Date(baseDate);
-          dayDate.setDate(baseDate.getDate() + daysToAdd);
-        }
-      }
-
-      // Final fallback: use validWeekStartDate (today or provided start date)
-      if (!dayDate || isNaN(dayDate.getTime())) {
-        logger.warn(
-          `[transformWeeklyPlan] Could not determine date for day ${day.day} (dayNumber: ${dayNumber}), using weekStartDate as fallback`
-        );
-        dayDate = new Date(validWeekStartDate);
-        dayDate.setHours(0, 0, 0, 0);
-      }
+      // Calculate totals in a single pass
+      const totals = calculateDayTotals(meals);
 
       return {
-        day: day.day.toLowerCase() as any,
-        date: dayDate,
-        meals: {
-          breakfast: breakfast || createEmptyMeal("breakfast"),
-          lunch: lunch || createEmptyMeal("lunch"),
-          dinner: dinner || createEmptyMeal("dinner"),
-          snacks,
-        },
-        totalCalories:
-          (breakfast?.calories || 0) +
-          (lunch?.calories || 0) +
-          (dinner?.calories || 0) +
-          snacks.reduce(
-            (sum: number, s: IMealWithStatus) => sum + s.calories,
-            0
-          ),
-        totalProtein:
-          (breakfast?.macros.protein || 0) +
-          (lunch?.macros.protein || 0) +
-          (dinner?.macros.protein || 0) +
-          snacks.reduce(
-            (sum: number, s: IMealWithStatus) => sum + s.macros.protein,
-            0
-          ),
-        totalCarbs:
-          (breakfast?.macros.carbs || 0) +
-          (lunch?.macros.carbs || 0) +
-          (dinner?.macros.carbs || 0) +
-          snacks.reduce(
-            (sum: number, s: IMealWithStatus) => sum + s.macros.carbs,
-            0
-          ),
-        totalFat:
-          (breakfast?.macros.fat || 0) +
-          (lunch?.macros.fat || 0) +
-          (dinner?.macros.fat || 0) +
-          snacks.reduce(
-            (sum: number, s: IMealWithStatus) => sum + s.macros.fat,
-            0
-          ),
-        // Base water intake (8 glasses) + extra water for workouts (capped at 4 glasses)
-        // Total maximum: 12 glasses per day
-        waterIntake: Math.min(
-          12, // Maximum 12 glasses (3L) per day including workout water
-          calculateBaseWaterGlasses(day.hydration?.waterTarget) +
-            calculateDayWorkoutWater(day.workouts || [])
-        ),
-        workouts: (day.workouts || []).map((w: IWorkout) => ({
-          name: w.name || "Workout",
-          category: w.category || "cardio",
-          duration: parseDuration(w.duration || 30),
-          caloriesBurned: parseCalories(w.caloriesBurned || 250),
-          time: w.time,
-          done: false,
-        })),
-        netCalories:
-          (breakfast?.calories || 0) +
-          (lunch?.calories || 0) +
-          (dinner?.calories || 0) +
-          snacks.reduce(
-            (sum: number, s: IMealWithStatus) => sum + s.calories,
-            0
-          ),
+        day: (day.day?.toLowerCase() || "monday") as any,
+        date: dateObj,
+        meals,
+        ...totals,
+        waterIntake: Math.min(12, 8 + (day.workouts?.length || 0)),
+        workouts: (day.workouts || []).map((w) => ({ ...w, done: false })),
       };
-    })
+    },
   );
 
-  const validWeeklyPlan = transformedWeeklyPlan.filter((day) => day !== null);
-
-  if (!validWeeklyPlan || validWeeklyPlan.length === 0) {
-    throw new Error("Failed to transform meal plan");
-  }
-
-  const weeklyPlanObject: IWeeklyPlanObject = {};
-
-  // Calculate all past days in the current week (before today) and add them as empty
-  const startDate = new Date(validWeekStartDate);
-  startDate.setHours(0, 0, 0, 0);
-
-  // Validate startDate
-  if (isNaN(startDate.getTime())) {
-    logger.error(
-      `[transformWeeklyPlan] Invalid startDate after conversion: ${weekStartDate}`
-    );
-    throw new Error("Invalid weekStartDate provided to transformWeeklyPlan");
-  }
-
-  const currentDay = startDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
-
-  // Calculate Monday of the current week
-  const daysToMonday = currentDay === 0 ? -6 : 1 - currentDay;
-  const mondayDate = new Date(startDate);
-  mondayDate.setDate(startDate.getDate() + daysToMonday);
-
-  // Validate mondayDate
-  if (isNaN(mondayDate.getTime())) {
-    logger.error(
-      `[transformWeeklyPlan] Invalid mondayDate calculated from startDate: ${startDate.toISOString()}`
-    );
-    throw new Error("Failed to calculate valid Monday date");
-  }
-
-  // Calculate Sunday of the current week (end of week boundary)
-  const sundayDate = new Date(mondayDate);
-  sundayDate.setDate(mondayDate.getDate() + 6);
-  sundayDate.setHours(23, 59, 59, 999);
-
-  // Create a Set of valid date keys for the week (Monday to Sunday)
-  const validWeekDateKeys = new Set<string>();
-  for (let i = 0; i < 7; i++) {
-    const weekDate = new Date(mondayDate);
-    weekDate.setDate(mondayDate.getDate() + i);
-    validWeekDateKeys.add(getLocalDateKey(weekDate));
-  }
-
-  logger.info(
-    `[transformWeeklyPlan] Week boundary: ${getLocalDateKey(mondayDate)} (Monday) to ${getLocalDateKey(sundayDate)} (Sunday). Valid dates: ${Array.from(validWeekDateKeys).sort().join(", ")}`
-  );
-
-  const dayToNameMap: Record<number, string> = {
-    1: "monday",
-    2: "tuesday",
-    3: "wednesday",
-    4: "thursday",
-    5: "friday",
-    6: "saturday",
-    0: "sunday",
-  };
-
-  const monthNames = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
-
-  // Helper function to create empty day entry
-  const createEmptyDay = (dayNumber: number, date: Date) => {
-    // Validate date before using it
-    if (!date || !(date instanceof Date) || isNaN(date.getTime())) {
-      logger.error(
-        `[transformWeeklyPlan] Invalid date in createEmptyDay for day ${dayNumber}: ${date}`
-      );
-      // Use today as fallback
-      date = new Date();
-      date.setHours(0, 0, 0, 0);
-    }
-    const dateKey = getLocalDateKey(date);
-    const formattedDate = `${monthNames[date.getMonth()]} ${date.getDate()}`;
-
-    return {
-      [dateKey]: {
-        day: dayToNameMap[dayNumber],
-        date: formattedDate,
-        meals: {
-          breakfast: {
-            _id: new mongoose.Types.ObjectId().toString(),
-            name: "No meal planned",
-            calories: 0,
-            macros: { protein: 0, carbs: 0, fat: 0 },
-            category: "breakfast",
-            ingredients: [],
-            prepTime: 0,
-            done: false,
-          },
-          lunch: {
-            _id: new mongoose.Types.ObjectId().toString(),
-            name: "No meal planned",
-            calories: 0,
-            macros: { protein: 0, carbs: 0, fat: 0 },
-            category: "lunch",
-            ingredients: [],
-            prepTime: 0,
-            done: false,
-          },
-          dinner: {
-            _id: new mongoose.Types.ObjectId().toString(),
-            name: "No meal planned",
-            calories: 0,
-            macros: { protein: 0, carbs: 0, fat: 0 },
-            category: "dinner",
-            ingredients: [],
-            prepTime: 0,
-            done: false,
-          },
-          snacks: [],
-        },
-        workouts: [],
-        waterIntake: 0,
-      },
-    };
-  };
-
-  // NOTE: We do NOT add empty placeholder days for past dates anymore
-  // The plan should only contain days from today through Sunday
-  // Past days are irrelevant and just waste data
-
-  // Track used date keys to prevent duplicates
-  const usedDateKeys = new Set<string>();
-
-  // Add only the generated days (from today through Sunday)
-  validWeeklyPlan.forEach((day: any) => {
-    let dateObj: Date;
-    if (day.date instanceof Date) {
-      dateObj = day.date;
-    } else if (typeof day.date === "string") {
-      dateObj = new Date(day.date);
-    } else {
-      logger.error(
-        `[transformWeeklyPlan] Invalid date format in day: ${JSON.stringify(day.date)}`
-      );
-      // Skip this day if date is invalid
-      return;
-    }
-
-    // Validate date before using it
-    if (isNaN(dateObj.getTime())) {
-      logger.error(
-        `[transformWeeklyPlan] Invalid date value: ${day.date}, skipping day`
-      );
-      return;
-    }
-
-    // CRITICAL: Ensure date is within the week boundary (Monday to Sunday)
-    if (dateObj < mondayDate || dateObj > sundayDate) {
-      logger.warn(
-        `[transformWeeklyPlan] Date ${getLocalDateKey(dateObj)} for day ${day.day} is outside week boundary (${getLocalDateKey(mondayDate)} to ${getLocalDateKey(sundayDate)}). Attempting to fix...`
-      );
-
-      // Try to find a valid date within the week based on day name
-      const dayNumber = nameToDay[day.day.toLowerCase()];
-      if (dayNumber !== undefined) {
-        // Calculate the correct date for this day of week within the week boundary
-        const targetDate = new Date(mondayDate);
-        const daysToAdd = dayNumber === 0 ? 6 : dayNumber - 1; // Sunday is day 0, but we want index 6
-        targetDate.setDate(mondayDate.getDate() + daysToAdd);
-        dateObj = targetDate;
-        logger.info(
-          `[transformWeeklyPlan] Fixed date for ${day.day} to ${getLocalDateKey(dateObj)}`
-        );
-      } else {
-        logger.error(
-          `[transformWeeklyPlan] Cannot determine day number for ${day.day}, skipping`
-        );
-        return;
-      }
-    }
-
-    const dateKey = getLocalDateKey(dateObj);
-
-    // CRITICAL: Validate that dateKey is within valid week dates
-    if (!validWeekDateKeys.has(dateKey)) {
-      logger.warn(
-        `[transformWeeklyPlan] Date key ${dateKey} is not in valid week dates. Skipping day ${day.day}`
-      );
-      return;
-    }
-
-    // CRITICAL: Prevent duplicate dates
-    if (usedDateKeys.has(dateKey)) {
-      logger.warn(
-        `[transformWeeklyPlan] Duplicate date ${dateKey} for day ${day.day}. Skipping duplicate.`
-      );
-      return;
-    }
-
-    usedDateKeys.add(dateKey);
-    const formattedDate = `${monthNames[dateObj.getMonth()]} ${dateObj.getDate()}`;
-
-    // Ensure workouts array exists (should have been set by distributeWorkouts)
-    let dayWorkouts = day.workouts || [];
-
-    // Post-processing: Ensure workouts are present on workout days
-    const dayNumber = nameToDay[day.day.toLowerCase()];
-    if (
-      dayWorkouts.length === 0 &&
-      dayNumber !== undefined &&
-      workoutDays.includes(dayNumber)
-    ) {
-      logger.warn(
-        `[transformWeeklyPlan] Day ${day.day} (${dateKey}) is a workout day but has no workouts! Generating default workout. Day number: ${dayNumber}`
-      );
-      // Generate a default workout for this day
-      const templateIndex =
-        workoutDays.indexOf(dayNumber) % defaultWorkoutTemplates.length;
-      const template = defaultWorkoutTemplates[templateIndex];
-      dayWorkouts = [
-        {
-          name: template.name,
-          category: template.category,
-          duration: template.duration,
-          caloriesBurned: template.caloriesBurned,
-          done: false,
-        },
-      ];
-      logger.info(
-        `[transformWeeklyPlan] Generated fallback workout "${template.name}" for ${day.day} (${dateKey})`
-      );
-    }
-
-    weeklyPlanObject[dateKey] = {
-      day: day.day,
-      date: formattedDate,
-      meals: day.meals,
-      workouts: dayWorkouts,
-      waterIntake: day.waterIntake || 8,
+  // 5. ASSEMBLE FINAL OBJECT
+  const weeklyPlanObject: Record<string, any> = {};
+  transformedWeeklyPlan.forEach((day) => {
+    const key = getLocalDateKey(day.date);
+    weeklyPlanObject[key] = {
+      ...day,
+      date: `${day.date.toLocaleString("default", { month: "short" })} ${day.date.getDate()}`,
     };
   });
 
-  // CRITICAL VALIDATION: Ensure we never have more than 7 days
-  const planDays = Object.keys(weeklyPlanObject);
-  if (planDays.length > 7) {
-    logger.error(
-      `[transformWeeklyPlan] Generated ${planDays.length} days, max is 7! Dates: ${planDays.sort().join(", ")}`
-    );
-    // Keep only the first 7 days (sorted by date)
-    const sortedDays = planDays.sort();
-    const daysToKeep = sortedDays.slice(0, 7);
-    const daysToRemove = sortedDays.slice(7);
-    logger.warn(
-      `[transformWeeklyPlan] Removing extra days: ${daysToRemove.join(", ")}`
-    );
-    for (const dayKey of daysToRemove) {
-      delete weeklyPlanObject[dayKey];
-    }
-  }
-
-  logger.info(
-    `[transformWeeklyPlan] Final plan has ${Object.keys(weeklyPlanObject).length} days: ${Object.keys(weeklyPlanObject).sort().join(", ")}`
-  );
-
   return {
-    mealPlan: {
-      weeklyPlan: weeklyPlanObject,
-    },
+    mealPlan: { weeklyPlan: weeklyPlanObject },
     planType,
     language,
     generatedAt: new Date().toISOString(),
@@ -2106,13 +1617,13 @@ export const transformWeeklyPlan = async (
  */
 export const enrichPlanWithFavoriteMeals = async (
   planResponse: MealPlanResponse,
-  userData: IUserData
+  userData: IUserData,
 ): Promise<MealPlanResponse> => {
   try {
     const weeklyPlan = planResponse.mealPlan.weeklyPlan as IWeeklyPlanObject;
     if (!weeklyPlan || typeof weeklyPlan !== "object") {
       logger.warn(
-        "[enrichPlanWithFavoriteMeals] Invalid weekly plan structure, skipping enrichment"
+        "[enrichPlanWithFavoriteMeals] Invalid weekly plan structure, skipping enrichment",
       );
       return planResponse;
     }
@@ -2121,7 +1632,7 @@ export const enrichPlanWithFavoriteMeals = async (
     const favoriteMealIds = userData.favoriteMeals || [];
     if (!favoriteMealIds || favoriteMealIds.length === 0) {
       logger.info(
-        "[enrichPlanWithFavoriteMeals] User has no favorite meals, skipping enrichment"
+        "[enrichPlanWithFavoriteMeals] User has no favorite meals, skipping enrichment",
       );
       return planResponse;
     }
@@ -2129,7 +1640,7 @@ export const enrichPlanWithFavoriteMeals = async (
     const mongooseConnection = mongoose.connection;
     if (mongooseConnection.readyState !== 1) {
       logger.warn(
-        "[enrichPlanWithFavoriteMeals] MongoDB not connected, skipping enrichment"
+        "[enrichPlanWithFavoriteMeals] MongoDB not connected, skipping enrichment",
       );
       return planResponse;
     }
@@ -2150,7 +1661,7 @@ export const enrichPlanWithFavoriteMeals = async (
 
     if (validIds.length === 0) {
       logger.warn(
-        "[enrichPlanWithFavoriteMeals] No valid favorite meal IDs found"
+        "[enrichPlanWithFavoriteMeals] No valid favorite meal IDs found",
       );
       return planResponse;
     }
@@ -2163,13 +1674,13 @@ export const enrichPlanWithFavoriteMeals = async (
 
     if (favoriteMeals.length === 0) {
       logger.warn(
-        "[enrichPlanWithFavoriteMeals] No favorite meals found in database"
+        "[enrichPlanWithFavoriteMeals] No favorite meals found in database",
       );
       return planResponse;
     }
 
     logger.info(
-      `[enrichPlanWithFavoriteMeals] Found ${favoriteMeals.length} favorite meals for user`
+      `[enrichPlanWithFavoriteMeals] Found ${favoriteMeals.length} favorite meals for user`,
     );
 
     // Organize favorite meals by category
@@ -2225,7 +1736,7 @@ export const enrichPlanWithFavoriteMeals = async (
     const targetReplacements = Math.max(1, Math.floor(totalMeals * 0.25)); // 25% (within 20-30% range)
 
     logger.info(
-      `[enrichPlanWithFavoriteMeals] Planning to replace ${targetReplacements} out of ${totalMeals} meals with favorite meals`
+      `[enrichPlanWithFavoriteMeals] Planning to replace ${targetReplacements} out of ${totalMeals} meals with favorite meals`,
     );
 
     // Randomly shuffle meals to replace
@@ -2278,18 +1789,18 @@ export const enrichPlanWithFavoriteMeals = async (
 
       replacedCount++;
       logger.info(
-        `[enrichPlanWithFavoriteMeals] Replaced ${mealType} on ${dateKey} with favorite meal: ${selectedFavorite.name}`
+        `[enrichPlanWithFavoriteMeals] Replaced ${mealType} on ${dateKey} with favorite meal: ${selectedFavorite.name}`,
       );
     }
 
     logger.info(
-      `[enrichPlanWithFavoriteMeals] Successfully replaced ${replacedCount} meals with favorite meals (${Math.round((replacedCount / totalMeals) * 100)}%)`
+      `[enrichPlanWithFavoriteMeals] Successfully replaced ${replacedCount} meals with favorite meals (${Math.round((replacedCount / totalMeals) * 100)}%)`,
     );
 
     return planResponse;
   } catch (error) {
     logger.error(
-      `[enrichPlanWithFavoriteMeals] Error enriching plan with favorite meals: ${error instanceof Error ? error.message : String(error)}`
+      `[enrichPlanWithFavoriteMeals] Error enriching plan with favorite meals: ${error instanceof Error ? error.message : String(error)}`,
     );
     // Return original plan if enrichment fails
     return planResponse;
@@ -2302,13 +1813,13 @@ export const enrichPlanWithFavoriteMeals = async (
  */
 export const enrichPlanWithDBMeals = async (
   planResponse: MealPlanResponse,
-  userData: IUserData
+  userData: IUserData,
 ): Promise<MealPlanResponse> => {
   try {
     const weeklyPlan = planResponse.mealPlan.weeklyPlan as IWeeklyPlanObject;
     if (!weeklyPlan || typeof weeklyPlan !== "object") {
       logger.warn(
-        "[enrichPlanWithDBMeals] Invalid weekly plan structure, skipping DB enrichment"
+        "[enrichPlanWithDBMeals] Invalid weekly plan structure, skipping DB enrichment",
       );
       return planResponse;
     }
@@ -2316,7 +1827,7 @@ export const enrichPlanWithDBMeals = async (
     const mongooseConnection = mongoose.connection;
     if (mongooseConnection.readyState !== 1) {
       logger.warn(
-        "[enrichPlanWithDBMeals] MongoDB not connected, skipping DB enrichment"
+        "[enrichPlanWithDBMeals] MongoDB not connected, skipping DB enrichment",
       );
       return planResponse;
     }
@@ -2327,7 +1838,7 @@ export const enrichPlanWithDBMeals = async (
     const targetReplacements = Math.max(1, Math.floor(totalMeals * 0.25)); // 25% of meals (20-30% range)
 
     logger.info(
-      `[enrichPlanWithDBMeals] Planning to replace ${targetReplacements} out of ${totalMeals} meals with DB meals`
+      `[enrichPlanWithDBMeals] Planning to replace ${targetReplacements} out of ${totalMeals} meals with DB meals`,
     );
 
     // Collect all meals that need potential replacement
@@ -2366,11 +1877,11 @@ export const enrichPlanWithDBMeals = async (
     const shuffled = [...mealsToReplace].sort(() => Math.random() - 0.5);
     const mealsToActuallyReplace = shuffled.slice(
       0,
-      Math.min(targetReplacements, mealsToReplace.length)
+      Math.min(targetReplacements, mealsToReplace.length),
     );
 
     logger.info(
-      `[enrichPlanWithDBMeals] Selected ${mealsToActuallyReplace.length} meals to replace with DB meals`
+      `[enrichPlanWithDBMeals] Selected ${mealsToActuallyReplace.length} meals to replace with DB meals`,
     );
 
     let replacedCount = 0;
@@ -2434,26 +1945,141 @@ export const enrichPlanWithDBMeals = async (
 
           replacedCount++;
           logger.info(
-            `[enrichPlanWithDBMeals] Replaced ${mealType} on ${dateKey} with DB meal: ${selectedMeal.name}`
+            `[enrichPlanWithDBMeals] Replaced ${mealType} on ${dateKey} with DB meal: ${selectedMeal.name}`,
           );
         }
       } catch (error) {
         logger.warn(
-          `[enrichPlanWithDBMeals] Failed to replace meal for ${dateKey}/${mealType}: ${error instanceof Error ? error.message : String(error)}`
+          `[enrichPlanWithDBMeals] Failed to replace meal for ${dateKey}/${mealType}: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }
 
     logger.info(
-      `[enrichPlanWithDBMeals] Successfully replaced ${replacedCount} meals with DB meals (${Math.round((replacedCount / totalMeals) * 100)}%)`
+      `[enrichPlanWithDBMeals] Successfully replaced ${replacedCount} meals with DB meals (${Math.round((replacedCount / totalMeals) * 100)}%)`,
     );
 
     return planResponse;
   } catch (error) {
     logger.error(
-      `[enrichPlanWithDBMeals] Error enriching plan with DB meals: ${error instanceof Error ? error.message : String(error)}`
+      `[enrichPlanWithDBMeals] Error enriching plan with DB meals: ${error instanceof Error ? error.message : String(error)}`,
     );
     // Return original plan if enrichment fails
     return planResponse;
   }
+};
+
+/**
+ * Synchronizes a batch of AI-generated meals with the database.
+ * 1. Finds existing meals by name/category/calories.
+ * 2. Inserts new meals that don't exist yet.
+ * 3. Returns a Map for O(1) lookup during transformation.
+ */
+export const bulkSyncMeals = async (
+  allMeals: any[],
+): Promise<Map<string, any>> => {
+  const mealLookup = new Map<string, any>();
+  if (allMeals.length === 0) return mealLookup;
+
+  try {
+    const MealModel = getMealModel(); // Uses your existing model getter
+
+    // 1. Create a unique set of meal identifiers to avoid redundant DB checks
+    const uniqueMeals = Array.from(
+      new Map(
+        allMeals.map((m) => [`${m.name}-${m.category}-${m.calories}`, m]),
+      ).values(),
+    );
+
+    // 2. BULK FIND: Check which meals already exist
+    // We use $or to match name, category, and calorie range in one go
+    const existingMeals = await MealModel.find({
+      $or: uniqueMeals.map((meal) => ({
+        name: meal.name,
+        category: meal.category,
+        calories: { $gte: meal.calories - 50, $lte: meal.calories + 50 },
+      })),
+    })
+      .lean()
+      .exec();
+
+    // Add existing meals to the lookup map
+    existingMeals.forEach((meal) => {
+      const key = `${meal.name}-${meal.category}-${meal.calories}`;
+      mealLookup.set(key, meal);
+    });
+
+    // 3. BULK INSERT: Find meals that were NOT in the DB
+    const newMeals = uniqueMeals.filter((meal) => {
+      const key = `${meal.name}-${meal.category}-${meal.calories}`;
+      return !mealLookup.has(key);
+    });
+
+    if (newMeals.length > 0) {
+      const insertedMeals = await MealModel.insertMany(
+        newMeals.map((meal) => ({
+          ...meal,
+          _id: new mongoose.Types.ObjectId(),
+          done: false,
+          generatedAt: new Date().toISOString(),
+        })),
+        { lean: true },
+      );
+
+      // Add newly created meals to the lookup map
+      insertedMeals.forEach((meal) => {
+        const key = `${meal.name}-${meal.category}-${meal.calories}`;
+        mealLookup.set(key, meal);
+      });
+
+      logger.info(
+        `[BulkSync] Inserted ${newMeals.length} new meals to database.`,
+      );
+    }
+
+    return mealLookup;
+  } catch (error) {
+    logger.error(`[BulkSync] Error syncing meals: ${error}`);
+    // Return empty map so the process can continue with temporary IDs
+    return mealLookup;
+  }
+};
+
+/**
+ * Calculates total nutrition for a single day.
+ * Replaces manual addition (breakfast.calories + lunch.calories...)
+ */
+export const calculateDayTotals = (meals: {
+  breakfast: any;
+  lunch: any;
+  dinner: any;
+  snacks: any[];
+}) => {
+  const allDayMeals = [
+    meals.breakfast,
+    meals.lunch,
+    meals.dinner,
+    ...(meals.snacks || []),
+  ];
+
+  return allDayMeals.reduce(
+    (acc, meal) => {
+      if (!meal) return acc;
+
+      return {
+        totalCalories: acc.totalCalories + (Number(meal.calories) || 0),
+        totalProtein: acc.totalProtein + (Number(meal.macros?.protein) || 0),
+        totalCarbs: acc.totalCarbs + (Number(meal.macros?.carbs) || 0),
+        totalFat: acc.totalFat + (Number(meal.macros?.fat) || 0),
+        netCalories: acc.netCalories + (Number(meal.calories) || 0),
+      };
+    },
+    {
+      totalCalories: 0,
+      totalProtein: 0,
+      totalCarbs: 0,
+      totalFat: 0,
+      netCalories: 0,
+    },
+  );
 };

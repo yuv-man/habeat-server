@@ -20,6 +20,14 @@ export class Challenge {
       "mindful_eating",
       "meal_consistency",
       "weekly_streak",
+      // CBT/mindfulness challenge types
+      "mood_tracking",
+      "mindful_meal",
+      "thought_journal",
+      "cbt_exercise",
+      "emotional_awareness",
+      "pre_meal_checkin",
+      "mindfulness_streak",
       // Legacy types (kept for backward compatibility)
       "meals_logged",
       "water_intake",
