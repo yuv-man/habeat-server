@@ -2,18 +2,42 @@ import { GoogleGenerativeAI, GenerativeModel } from "@google/generative-ai";
 import logger from "./logger";
 
 /**
- * Gemini Rate Limiter - Handles rate limiting across all Gemini API calls
+ * Gemini Rate Limiter - Token Bucket Algorithm for Free Tier
  *
- * Free tier limits (gemini-2.0-flash):
+ * Free tier limits (gemini-2.0-flash / gemini-2.5-flash-lite):
  * - 15 RPM (requests per minute)
  * - 1,000,000 TPM (tokens per minute)
  * - 1,500 RPD (requests per day)
+ *
+ * Token Bucket Strategy:
+ * - Bucket capacity: 15 tokens (max burst)
+ * - Refill rate: 1 token every 4 seconds (15 per minute)
+ * - Each request consumes 1 token
+ * - If no tokens available, wait for refill
  */
 
-// Global state for rate limiting
-let lastRequestTime = 0;
-const MIN_REQUEST_INTERVAL_MS = 4500; // ~13 RPM to stay under 15 RPM limit
+// Token bucket state
+interface TokenBucket {
+  tokens: number;
+  lastRefillTime: number;
+  capacity: number;
+  refillRateMs: number; // Time in ms to add 1 token
+}
+
+// Free tier settings (conservative to avoid 429s)
+const FREE_TIER_BUCKET: TokenBucket = {
+  tokens: 3, // Start with 3 tokens (small burst allowed)
+  lastRefillTime: Date.now(),
+  capacity: 5, // Max 5 tokens (conservative burst limit)
+  refillRateMs: 5000, // 1 token every 5 seconds = 12 RPM (under 15 RPM limit)
+};
+
+// Global request queue for serialization
 let requestQueue: Promise<void> = Promise.resolve();
+
+// Track consecutive 429 errors for adaptive backoff
+let consecutive429Count = 0;
+let lastSuccessTime = Date.now();
 
 // Helper to extract error message
 const getErrorMessage = (error: unknown): string => {
@@ -32,11 +56,11 @@ const parseRetryDelay = (errorMessage: string): number => {
   const match = errorMessage.match(/retry in (\d+(?:\.\d+)?)\s*s/i);
   if (match) {
     const seconds = parseFloat(match[1]);
-    // Add a small buffer (500ms) to ensure we're past the limit
-    return Math.ceil((seconds + 0.5) * 1000);
+    // Add a buffer (1s) to ensure we're past the limit
+    return Math.ceil((seconds + 1) * 1000);
   }
-  // Default to 8 seconds if we can't parse
-  return 8000;
+  // Default to 10 seconds if we can't parse
+  return 10000;
 };
 
 /**
@@ -78,19 +102,84 @@ const isRetryableError = (errorMessage: string): boolean => {
 };
 
 /**
- * Wait for minimum interval between requests (simple throttling)
+ * Refill tokens based on elapsed time
  */
-const waitForThrottle = async (): Promise<void> => {
+const refillTokens = (bucket: TokenBucket): void => {
   const now = Date.now();
-  const timeSinceLastRequest = now - lastRequestTime;
+  const elapsed = now - bucket.lastRefillTime;
+  const tokensToAdd = Math.floor(elapsed / bucket.refillRateMs);
 
-  if (timeSinceLastRequest < MIN_REQUEST_INTERVAL_MS) {
-    const waitTime = MIN_REQUEST_INTERVAL_MS - timeSinceLastRequest;
-    logger.info(`[GeminiRateLimiter] Throttling: waiting ${waitTime}ms before next request`);
-    await new Promise((resolve) => setTimeout(resolve, waitTime));
+  if (tokensToAdd > 0) {
+    bucket.tokens = Math.min(bucket.capacity, bucket.tokens + tokensToAdd);
+    bucket.lastRefillTime = now;
+    logger.debug(`[RateLimiter] Refilled ${tokensToAdd} tokens. Current: ${bucket.tokens}`);
+  }
+};
+
+/**
+ * Acquire a token from the bucket, waiting if necessary
+ */
+const acquireToken = async (bucket: TokenBucket): Promise<void> => {
+  // First, refill based on elapsed time
+  refillTokens(bucket);
+
+  // If we have tokens, consume one immediately
+  if (bucket.tokens >= 1) {
+    bucket.tokens -= 1;
+    logger.debug(`[RateLimiter] Token acquired. Remaining: ${bucket.tokens}`);
+    return;
   }
 
-  lastRequestTime = Date.now();
+  // No tokens available - calculate wait time
+  const waitTime = bucket.refillRateMs - (Date.now() - bucket.lastRefillTime);
+  const adjustedWait = Math.max(waitTime, 1000); // Minimum 1s wait
+
+  // Apply adaptive backoff if we've had recent 429s
+  const adaptiveMultiplier = Math.min(1 + consecutive429Count * 0.5, 3); // Max 3x slowdown
+  const finalWait = Math.ceil(adjustedWait * adaptiveMultiplier);
+
+  logger.info(
+    `[RateLimiter] No tokens available. Waiting ${finalWait}ms (adaptive: ${adaptiveMultiplier}x)`
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, finalWait));
+
+  // Refill and consume
+  refillTokens(bucket);
+  bucket.tokens = Math.max(0, bucket.tokens - 1);
+};
+
+/**
+ * Handle 429 error - update adaptive backoff and wait
+ */
+const handle429Error = async (errorMessage: string): Promise<void> => {
+  consecutive429Count++;
+  const retryDelay = parseRetryDelay(errorMessage);
+
+  // Apply exponential backoff based on consecutive 429s
+  const backoffMultiplier = Math.pow(1.5, Math.min(consecutive429Count - 1, 4));
+  const finalDelay = Math.ceil(retryDelay * backoffMultiplier);
+
+  logger.warn(
+    `[RateLimiter] 429 error #${consecutive429Count}. Waiting ${finalDelay}ms (base: ${retryDelay}ms, multiplier: ${backoffMultiplier}x)`
+  );
+
+  // Also reduce bucket tokens to prevent immediate re-429
+  FREE_TIER_BUCKET.tokens = 0;
+  FREE_TIER_BUCKET.lastRefillTime = Date.now() + finalDelay; // Push refill time into future
+
+  await new Promise((resolve) => setTimeout(resolve, finalDelay));
+};
+
+/**
+ * Mark successful request - reset consecutive 429 counter
+ */
+const markSuccess = (): void => {
+  if (consecutive429Count > 0) {
+    logger.info(`[RateLimiter] Success after ${consecutive429Count} consecutive 429s. Resetting counter.`);
+  }
+  consecutive429Count = 0;
+  lastSuccessTime = Date.now();
 };
 
 /**
@@ -100,14 +189,16 @@ const queueRequest = async <T>(fn: () => Promise<T>): Promise<T> => {
   // Chain this request after all previous ones
   const previousQueue = requestQueue;
   let resolve: () => void;
-  requestQueue = new Promise<void>((r) => { resolve = r; });
+  requestQueue = new Promise<void>((r) => {
+    resolve = r;
+  });
 
   // Wait for previous request to complete
   await previousQueue;
 
   try {
-    // Apply throttling
-    await waitForThrottle();
+    // Acquire token before making request
+    await acquireToken(FREE_TIER_BUCKET);
     return await fn();
   } finally {
     resolve!();
@@ -122,7 +213,7 @@ export interface GeminiCallOptions {
 }
 
 /**
- * Call Gemini with automatic rate limit handling, retry logic, and throttling
+ * Call Gemini with token bucket rate limiting and automatic retry
  */
 export const callGeminiWithRateLimit = async <T>(
   apiKey: string,
@@ -131,9 +222,9 @@ export const callGeminiWithRateLimit = async <T>(
   options: GeminiCallOptions = {}
 ): Promise<T> => {
   const {
-    maxRetries = 3,
-    baseDelayMs = 1000,
-    timeoutMs = 30000,
+    maxRetries = 4, // Increased retries for better resilience
+    baseDelayMs = 2000,
+    timeoutMs = 45000, // Increased timeout for larger batch requests
     context = "Gemini",
   } = options;
 
@@ -159,6 +250,8 @@ export const callGeminiWithRateLimit = async <T>(
       const result = await Promise.race([resultPromise, timeoutPromise]);
       clearTimeout(timeoutHandle!);
 
+      // Mark success and return
+      markSuccess();
       logger.info(`[${context}] Success on attempt ${attempt + 1}`);
       return result;
     } catch (error) {
@@ -166,17 +259,14 @@ export const callGeminiWithRateLimit = async <T>(
 
       // Check if it's a rate limit error
       if (isRateLimitError(errorMsg)) {
-        const retryDelay = parseRetryDelay(errorMsg);
-
         if (attempt < maxRetries - 1) {
-          logger.warn(
-            `[${context}] Rate limited on attempt ${attempt + 1}. Waiting ${retryDelay}ms before retry...`
-          );
-          await new Promise((resolve) => setTimeout(resolve, retryDelay));
+          await handle429Error(errorMsg);
           return executeWithRetry(attempt + 1);
         }
 
-        throw new Error(`[${context}] Rate limit exceeded after ${maxRetries} attempts: ${errorMsg}`);
+        throw new Error(
+          `[${context}] Rate limit exceeded after ${maxRetries} attempts: ${errorMsg}`
+        );
       }
 
       // Check if it's a retryable server error
@@ -191,7 +281,9 @@ export const callGeminiWithRateLimit = async <T>(
           return executeWithRetry(attempt + 1);
         }
 
-        throw new Error(`[${context}] Server error after ${maxRetries} attempts: ${errorMsg}`);
+        throw new Error(
+          `[${context}] Server error after ${maxRetries} attempts: ${errorMsg}`
+        );
       }
 
       // Non-retryable error (auth, invalid request, etc.)
@@ -256,6 +348,33 @@ export const generateVisionWithRateLimit = async (
     },
     options
   );
+};
+
+/**
+ * Get current rate limiter status (for debugging/monitoring)
+ */
+export const getRateLimiterStatus = (): {
+  availableTokens: number;
+  consecutive429s: number;
+  lastSuccessAgo: number;
+} => {
+  refillTokens(FREE_TIER_BUCKET);
+  return {
+    availableTokens: FREE_TIER_BUCKET.tokens,
+    consecutive429s: consecutive429Count,
+    lastSuccessAgo: Date.now() - lastSuccessTime,
+  };
+};
+
+/**
+ * Reset rate limiter state (useful for testing or after long idle periods)
+ */
+export const resetRateLimiter = (): void => {
+  FREE_TIER_BUCKET.tokens = FREE_TIER_BUCKET.capacity;
+  FREE_TIER_BUCKET.lastRefillTime = Date.now();
+  consecutive429Count = 0;
+  lastSuccessTime = Date.now();
+  logger.info("[RateLimiter] State reset");
 };
 
 // Export utility functions for use in other modules

@@ -1,29 +1,35 @@
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe } from "@nestjs/common";
 import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
+import { IoAdapter } from "@nestjs/platform-socket.io";
 import { AppModule } from "./app.module";
 import * as dotenv from "dotenv";
 import * as express from "express";
-import mongoose from "mongoose";
+import type { Connection } from "mongoose";
 import { getConnectionToken } from "@nestjs/mongoose";
 import logger from "./utils/logger";
 
 dotenv.config();
 
-const mongooseConnection = mongoose.connection;
-mongooseConnection.on("connected", () => {
-  console.log("MongoDB connected successfully");
-  logger.info("MongoDB connected successfully");
-});
-mongooseConnection.on("error", (err) => {
-  console.log("MongoDB connection error:", err);
-  logger.error(`MongoDB connection error: ${err.message}`, err);
-});
-
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     bodyParser: false, // Disable default body parser to handle raw body for Stripe webhook
   });
+
+  // Nest uses mongoose.createConnection(), not mongoose.connect(); the default
+  // mongoose.connection never opens, so listeners there never run.
+  const mongoConnection = app.get<Connection>(getConnectionToken());
+  const dbName = mongoConnection.db?.databaseName ?? "(unknown)";
+  const mongoReadyMsg = `MongoDB connected successfully (database: ${dbName})`;
+  console.log(mongoReadyMsg);
+  logger.info(mongoReadyMsg);
+  mongoConnection.on("error", (err) => {
+    console.log("MongoDB connection error:", err);
+    logger.error(`MongoDB connection error: ${err.message}`, err);
+  });
+
+  // Configure WebSocket adapter for Socket.io
+  app.useWebSocketAdapter(new IoAdapter(app));
 
   const expressApp = app.getHttpAdapter().getInstance();
   
@@ -122,18 +128,6 @@ async function bootstrap() {
   }
 
   await app.init();
-
-  try {
-    const connection = app.get(getConnectionToken());
-    if (connection.readyState !== 1) {
-      console.log("Triggering MongoDB connection...");
-      if (connection.db) {
-        await connection.db.admin().ping();
-      }
-    }
-  } catch (error) {
-    console.error("MongoDB init warning:", error.message);
-  }
 
   return app;
 }

@@ -479,6 +479,160 @@ RETURN ONLY THIS JSON (no markdown, no extra text):
 };
 
 /**
+ * Build a multi-day prompt for batched generation (reduces API calls).
+ * Generates 3-4 days per request to stay under rate limits while minimizing total requests.
+ */
+const buildMultiDayPrompt = (
+  userData: IUserData,
+  daysData: Array<{
+    dateStr: string;
+    dayName: string;
+    dayIndex: number;
+    hasWorkout: boolean;
+  }>,
+  targetCalories: number,
+  macros: { protein: number; carbs: number; fat: number },
+  goalContextStr: string,
+): string => {
+  const bCal = Math.round(targetCalories * 0.25);
+  const lCal = Math.round(targetCalories * 0.35);
+  const dCal = Math.round(targetCalories * 0.3);
+  const sCal = Math.round(targetCalories * 0.1);
+
+  const avoidList =
+    [
+      ...(userData.allergies || []),
+      ...(userData.dietaryRestrictions || []),
+      ...(userData.dislikes || []),
+    ].join(", ") || "none";
+
+  const preferList = userData.foodPreferences?.join(", ") || "none";
+
+  // Build day specifications with variety enforcement
+  const daySpecs = daysData
+    .map((d) => {
+      const cuisine = CUISINE_ROTATION[d.dayIndex % CUISINE_ROTATION.length];
+      const protein = PROTEIN_ROTATION[d.dayIndex % PROTEIN_ROTATION.length];
+      const workoutStr = d.hasWorkout ? "WORKOUT" : "REST";
+      return `- ${d.dateStr} (${d.dayName}): ${cuisine} cuisine, ${protein} protein, ${workoutStr}`;
+    })
+    .join("\n");
+
+  // Build expected JSON structure for each day
+  const dayStructures = daysData
+    .map((d) => {
+      const workoutJson = d.hasWorkout
+        ? `"workouts":[{"name":"...","category":"...","duration":30,"caloriesBurned":200}]`
+        : `"workouts":[]`;
+      return `{"date":"${d.dateStr}","day":"${d.dayName}","meals":{"breakfast":{...},"lunch":{...},"dinner":{...},"snacks":[{...}]},${workoutJson}}`;
+    })
+    .join(",\n    ");
+
+  return `Generate a ${daysData.length}-day meal plan as a JSON array. Each day MUST be unique with different meals.
+
+PERSON: ${userData.age}y ${userData.gender} ${userData.height}cm ${userData.weight}kg path=${userData.path}
+DAILY TARGETS: ${targetCalories} kcal | P:${macros.protein}g C:${macros.carbs}g F:${macros.fat}g
+AVOID: ${avoidList}
+PREFER: ${preferList}
+${goalContextStr ? `STYLE: ${goalContextStr.substring(0, 200)}` : ""}
+
+DAYS TO GENERATE (each with DIFFERENT cuisine and protein):
+${daySpecs}
+
+MEAL CALORIE TARGETS (per day):
+- breakfast: ~${bCal} kcal
+- lunch: ~${lCal} kcal
+- dinner: ~${dCal} kcal
+- snacks[0]: ~${sCal} kcal
+
+CRITICAL RULES:
+1. NO REPEATED MEALS across days - every breakfast, lunch, dinner must be unique
+2. Use the specified cuisine and protein for each day
+3. INGREDIENT FORMAT: "ingredient_name|amount|unit|category"
+   - ingredient_name: RAW only (no "chopped", "diced", "minced", "fresh", "dried")
+   - category: Proteins/Vegetables/Fruits/Grains/Dairy/Pantry/Spices
+4. Macros must add up: protein*4 + carbs*4 + fat*9 ≈ calories
+
+RETURN ONLY THIS JSON ARRAY (no markdown, no extra text):
+[
+    ${dayStructures}
+]
+
+Each meal object structure:
+{"name":"Meal Name","calories":${bCal},"macros":{"protein":20,"carbs":40,"fat":10},"ingredients":["chicken_breast|150|g|Proteins","rice|100|g|Grains"],"prepTime":15}`;
+};
+
+/**
+ * Parse multi-day response from Gemini.
+ * Handles both array format and object with weeklyPlan key.
+ */
+const parseMultiDayResponse = (text: string): any[] => {
+  let cleanedJSON = extractAndCleanJSON(text);
+  cleanedJSON = repairJSON(cleanedJSON);
+
+  const parsed = JSON.parse(cleanedJSON);
+
+  // Handle different response formats
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+  if (parsed.weeklyPlan && Array.isArray(parsed.weeklyPlan)) {
+    return parsed.weeklyPlan;
+  }
+  if (parsed.days && Array.isArray(parsed.days)) {
+    return parsed.days;
+  }
+
+  // If it's a single day object, wrap in array
+  if (parsed.date && parsed.meals) {
+    return [parsed];
+  }
+
+  throw new Error("Unable to parse multi-day response: unexpected format");
+};
+
+/**
+ * Generate multiple days in a single API call.
+ * Returns array of day objects or empty array on failure.
+ */
+const generateMultiDayPlan = async (
+  apiKey: string,
+  modelName: string,
+  prompt: string,
+  context: string,
+  maxRetries: number = 4,
+  timeoutMs: number = 60000, // Longer timeout for multi-day requests
+): Promise<any[]> => {
+  try {
+    return await callGeminiWithRateLimit(
+      apiKey,
+      modelName,
+      async (model: GenerativeModel) => {
+        const result = await model.generateContent({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.7,
+          },
+        });
+
+        const text = result.response.text();
+        return parseMultiDayResponse(text);
+      },
+      {
+        maxRetries,
+        timeoutMs,
+        context,
+      },
+    );
+  } catch (err) {
+    const errorMsg = getErrorMessage(err);
+    logger.error(`[${context}] Multi-day generation failed: ${errorMsg}`);
+    return [];
+  }
+};
+
+/**
  * Generate one day's meal plan using Gemini with rate limiting and retry logic.
  * Uses the centralized rate limiter to handle rate limits properly.
  */
@@ -519,7 +673,7 @@ const generateSingleDayPlan = async (
   }
 };
 
-// Gemini generation — sequential calls with rate limiting for free tier
+// Gemini generation — batched multi-day calls for free tier efficiency
 const generateMealPlanWithGemini = async (
   userData: IUserData,
   weekStartDate: Date,
@@ -547,7 +701,7 @@ const generateMealPlanWithGemini = async (
     planTemplate,
   );
 
-  // Pre-calculate targets once to keep the worker loop lean
+  // Pre-calculate targets once
   const goalAdjustments = planTemplate
     ? getGoalBasedAdjustments([])
     : getGoalBasedAdjustments(goals);
@@ -569,88 +723,113 @@ const generateMealPlanWithGemini = async (
   const macros = calculateMacros(targetCalories, userData.path);
   const workoutDayNums = new Set(workoutDays);
 
-  // For free tier: Process sequentially with rate limiter handling throttling
-  // The centralized rate limiter handles delays automatically
-  const BATCH_SIZE = 2; // Reduced for free tier (15 RPM limit)
-  const BATCH_DELAY_MS = 5000; // 5 seconds between batches for free tier
-  const REQUEST_TIMEOUT_MS = 30000; // 30s per request with retries
-  const MAX_CONSECUTIVE_FAILURES = 3; // Early termination if too many failures
+  // Get goal context for prompt
+  const goalContextStr = planTemplate
+    ? PLAN_TEMPLATE_STYLES[planTemplate] || ""
+    : goalAdjustments.goalDescription || "";
+
+  // BATCHED GENERATION STRATEGY:
+  // Instead of 7 separate API calls (one per day), we batch 3-4 days per request.
+  // This reduces total API calls from 7 to 2, dramatically reducing rate limit issues.
+  // Free tier: 15 RPM, so 2 requests with proper spacing is safe.
+  const DAYS_PER_BATCH = Math.min(4, dates.length); // 3-4 days per batch for optimal performance
+  const MULTI_DAY_TIMEOUT_MS = 60000; // 60s timeout for multi-day requests
+
+  // Prepare day data for batching
+  const allDaysData = dates.map((date, idx) => ({
+    date,
+    dateStr: getLocalDateKey(date),
+    dayName: dayToName[date.getDay()],
+    dayIndex: idx,
+    hasWorkout: workoutDayNums.has(date.getDay()),
+  }));
+
+  // Split into batches
+  const batches: typeof allDaysData[] = [];
+  for (let i = 0; i < allDaysData.length; i += DAYS_PER_BATCH) {
+    batches.push(allDaysData.slice(i, i + DAYS_PER_BATCH));
+  }
 
   logger.info(
-    `[Gemini] Starting generation via ${modelToUse} (${dates.length} days, batch size ${BATCH_SIZE}, free tier mode)...`,
+    `[Gemini] Starting batched generation via ${modelToUse} (${dates.length} days in ${batches.length} batches, ~${DAYS_PER_BATCH} days/batch)...`,
   );
 
+  const startTime = Date.now();
   const allDayResults: any[] = [];
-  let consecutiveFailures = 0;
 
-  // Process days in small batches to stay under rate limits
-  for (let batchStart = 0; batchStart < dates.length; batchStart += BATCH_SIZE) {
-    // Early termination if too many consecutive failures
-    if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      logger.error(
-        `[Gemini] Aborting: ${MAX_CONSECUTIVE_FAILURES} consecutive failures. Possible API issue.`,
+  // Process each batch sequentially (rate limiter handles throttling between batches)
+  for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+    const batch = batches[batchIdx];
+    const batchDaysData = batch.map((d) => ({
+      dateStr: d.dateStr,
+      dayName: d.dayName,
+      dayIndex: d.dayIndex,
+      hasWorkout: d.hasWorkout,
+    }));
+
+    logger.info(
+      `[Gemini] Batch ${batchIdx + 1}/${batches.length}: Generating ${batch.length} days (${batch.map((d) => d.dayName).join(", ")})...`,
+    );
+
+    const multiDayPrompt = buildMultiDayPrompt(
+      userData,
+      batchDaysData,
+      targetCalories,
+      macros,
+      goalContextStr,
+    );
+
+    const batchResults = await generateMultiDayPlan(
+      apiKey,
+      modelToUse,
+      multiDayPrompt,
+      `Batch${batchIdx + 1}`,
+      4, // maxRetries
+      MULTI_DAY_TIMEOUT_MS,
+    );
+
+    if (batchResults.length > 0) {
+      logger.info(
+        `[Gemini] Batch ${batchIdx + 1} success: Got ${batchResults.length} days`,
       );
-      break;
-    }
-
-    const batchEnd = Math.min(batchStart + BATCH_SIZE, dates.length);
-    const batchDates = dates.slice(batchStart, batchEnd);
-    const batchNumber = Math.floor(batchStart / BATCH_SIZE) + 1;
-    const totalBatches = Math.ceil(dates.length / BATCH_SIZE);
-
-    logger.info(`[Gemini] Processing batch ${batchNumber}/${totalBatches}...`);
-
-    // Process this batch sequentially (rate limiter handles throttling)
-    const batchResults: any[] = [];
-    for (let i = 0; i < batchDates.length; i++) {
-      const date = batchDates[i];
-      const globalIdx = batchStart + i;
-      const dateStr = getLocalDateKey(date);
-      const dayName = dayToName[date.getDay()];
-      const dayPrompt = buildDayPrompt(
-        userData,
-        dateStr,
-        dayName,
-        globalIdx,
-        workoutDayNums.has(date.getDay()),
-        targetCalories,
-        macros,
-        "",
-      );
-
-      const result = await generateSingleDayPlan(
-        apiKey,
-        modelToUse,
-        dayPrompt,
-        dayName,
-        3,
-        REQUEST_TIMEOUT_MS,
+      allDayResults.push(...batchResults);
+    } else {
+      // Fallback: Try individual day generation for failed batch
+      logger.warn(
+        `[Gemini] Batch ${batchIdx + 1} failed. Falling back to individual day generation...`,
       );
 
-      if (result !== null) {
-        consecutiveFailures = 0;
-        batchResults.push(result);
-      } else {
-        logger.warn(`[Gemini] ${dayName} failed`);
-        batchResults.push(null);
+      for (const dayData of batch) {
+        const singleDayPrompt = buildDayPrompt(
+          userData,
+          dayData.dateStr,
+          dayData.dayName,
+          dayData.dayIndex,
+          dayData.hasWorkout,
+          targetCalories,
+          macros,
+          goalContextStr,
+        );
+
+        const result = await generateSingleDayPlan(
+          apiKey,
+          modelToUse,
+          singleDayPrompt,
+          dayData.dayName,
+          3,
+          30000,
+        );
+
+        if (result !== null) {
+          allDayResults.push(result);
+        } else {
+          logger.warn(`[Gemini] Individual fallback for ${dayData.dayName} also failed`);
+        }
       }
-    }
-
-    // Track consecutive failures for early termination
-    const batchFailures = batchResults.filter((r) => r === null).length;
-    if (batchFailures === batchDates.length) {
-      consecutiveFailures++;
-    }
-
-    allDayResults.push(...batchResults);
-
-    // Add delay between batches (but not after the last batch)
-    if (batchEnd < dates.length && consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
-      logger.info(`[Gemini] Waiting ${BATCH_DELAY_MS}ms before next batch...`);
-      await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
     }
   }
 
+  const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
   const weeklyPlanArray = allDayResults.filter((d) => d !== null);
 
   if (weeklyPlanArray.length === 0) {
@@ -658,12 +837,12 @@ const generateMealPlanWithGemini = async (
   }
 
   logger.info(
-    `[Gemini] Successfully generated ${weeklyPlanArray.length}/${dates.length} days`,
+    `[Gemini] Successfully generated ${weeklyPlanArray.length}/${dates.length} days in ${elapsedSec}s`,
   );
 
   const parsedResponse = { weeklyPlan: weeklyPlanArray };
 
-  // Note: transformWeeklyPlan handles the final language and structure mapping
+  // Transform to final format
   const transformedPlan = await transformWeeklyPlan(
     parsedResponse,
     dayToName,

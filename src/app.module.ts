@@ -37,7 +37,7 @@ import logger from "./utils/logger";
 
         if (!mongoUrl) {
           logger.error(
-            "MongoDB connection string not found. Please set MONGO_URL_PROD, MONGO_URL, or MONGODB_URI environment variable."
+            "MongoDB connection string not found. Please set MONGO_URL_PROD, MONGO_URL, or MONGODB_URI environment variable.",
           );
           throw new Error("MongoDB connection string is required");
         }
