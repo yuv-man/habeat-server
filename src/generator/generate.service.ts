@@ -403,24 +403,24 @@ const generateWithFallback = async <T>(
   );
 };
 
-// Cuisine and protein rotation for variety enforcement across parallel day calls
+// Meal style rotation for variety — all simple, everyday home-cooking styles
 const CUISINE_ROTATION = [
-  "Mediterranean",
-  "Mexican",
-  "Asian",
-  "Italian",
-  "Middle Eastern",
-  "Indian",
-  "Japanese",
+  "American home cooking",
+  "simple Mediterranean",
+  "classic comfort food",
+  "simple Asian home cooking",
+  "everyday Italian",
+  "simple Mexican home cooking",
+  "classic homestyle",
 ];
 const PROTEIN_ROTATION = [
   "Chicken",
   "Beef",
-  "Salmon",
-  "Tofu",
-  "Turkey",
-  "Shrimp",
   "Eggs",
+  "Turkey",
+  "Salmon",
+  "Tuna",
+  "Ground beef",
 ];
 
 /**
@@ -463,8 +463,9 @@ DAILY TARGETS: ${targetCalories} kcal | P:${macros.protein}g C:${macros.carbs}g 
 AVOID: ${avoidList}
 PREFER: ${preferList}
 ${goalContextStr ? `STYLE: ${goalContextStr.substring(0, 200)}` : ""}
-DAY: ${dateStr} (${dayName}) | Cuisine: ${cuisine} | Primary protein: ${protein}
+DAY: ${dateStr} (${dayName}) | Style: ${cuisine} | Primary protein: ${protein}
 ${hasWorkout ? "WORKOUT: Include 1 workout today." : "REST DAY: No workout."}
+CRITICAL: Use SIMPLE, everyday home-cooked meals that normal people make. Examples: scrambled eggs with toast, oatmeal with banana, grilled chicken with rice and vegetables, pasta with tomato sauce, chicken soup, beef stir-fry with rice, tuna sandwich, turkey wrap. NO exotic restaurant dishes.
 MEAL CALORIE TARGETS:
 - breakfast: ~${bCal} kcal
 - lunch: ~${lCal} kcal
@@ -536,7 +537,7 @@ AVOID: ${avoidList}
 PREFER: ${preferList}
 ${goalContextStr ? `STYLE: ${goalContextStr.substring(0, 200)}` : ""}
 
-DAYS TO GENERATE (each with DIFFERENT cuisine and protein):
+DAYS TO GENERATE (each with DIFFERENT meal style and protein):
 ${daySpecs}
 
 MEAL CALORIE TARGETS (per day):
@@ -547,11 +548,12 @@ MEAL CALORIE TARGETS (per day):
 
 CRITICAL RULES:
 1. NO REPEATED MEALS across days - every breakfast, lunch, dinner must be unique
-2. Use the specified cuisine and protein for each day
-3. INGREDIENT FORMAT: "ingredient_name|amount|unit|category"
+2. SIMPLE, everyday home-cooked meals only. Examples: scrambled eggs, oatmeal, grilled chicken with rice, pasta with tomato sauce, chicken soup, beef tacos, tuna sandwich, turkey wrap, stir-fry, grilled salmon with vegetables. NO exotic restaurant dishes.
+3. Use the specified meal style and protein for each day
+4. INGREDIENT FORMAT: "ingredient_name|amount|unit|category"
    - ingredient_name: RAW only (no "chopped", "diced", "minced", "fresh", "dried")
    - category: Proteins/Vegetables/Fruits/Grains/Dairy/Pantry/Spices
-4. Macros must add up: protein*4 + carbs*4 + fat*9 ≈ calories
+5. Macros must add up: protein*4 + carbs*4 + fat*9 ≈ calories
 
 RETURN ONLY THIS JSON ARRAY (no markdown, no extra text):
 [
@@ -565,28 +567,30 @@ Each meal object structure:
 /**
  * Parse multi-day response from Gemini.
  * Handles both array format and object with weeklyPlan key.
+ *
+ * NOTE: extractAndCleanJSON only extracts the FIRST complete JSON object, so if
+ * Gemini returns `[{day1},{day2},...]` it would discard all days after day1.
+ * We try a direct JSON.parse first (works when responseMimeType:"application/json"),
+ * and only fall back to extraction for malformed/markdown-wrapped responses.
  */
 const parseMultiDayResponse = (text: string): any[] => {
-  let cleanedJSON = extractAndCleanJSON(text);
-  cleanedJSON = repairJSON(cleanedJSON);
+  let parsed: any;
 
-  const parsed = JSON.parse(cleanedJSON);
+  // 1. Try direct parse first — Gemini JSON-mode returns clean JSON
+  try {
+    parsed = JSON.parse(text.trim());
+  } catch (_) {
+    // 2. Fallback: manual extraction for markdown-wrapped or malformed responses
+    let cleanedJSON = extractAndCleanJSON(text);
+    cleanedJSON = repairJSON(cleanedJSON);
+    parsed = JSON.parse(cleanedJSON);
+  }
 
   // Handle different response formats
-  if (Array.isArray(parsed)) {
-    return parsed;
-  }
-  if (parsed.weeklyPlan && Array.isArray(parsed.weeklyPlan)) {
-    return parsed.weeklyPlan;
-  }
-  if (parsed.days && Array.isArray(parsed.days)) {
-    return parsed.days;
-  }
-
-  // If it's a single day object, wrap in array
-  if (parsed.date && parsed.meals) {
-    return [parsed];
-  }
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed.weeklyPlan && Array.isArray(parsed.weeklyPlan)) return parsed.weeklyPlan;
+  if (parsed.days && Array.isArray(parsed.days)) return parsed.days;
+  if (parsed.date && parsed.meals) return [parsed]; // single day
 
   throw new Error("Unable to parse multi-day response: unexpected format");
 };
@@ -682,6 +686,7 @@ const generateMealPlanWithGemini = async (
   apiKey: string,
   goals: IGoal[] = [],
   planTemplate?: string,
+  datesOverride?: Date[], // Optional: generate only these specific dates (two-phase support)
 ): Promise<MealPlanResponse> => {
   const models = await getAvailableGeminiModelsCached(apiKey);
 
@@ -692,7 +697,8 @@ const generateMealPlanWithGemini = async (
       ? "gemini-2.5-flash"
       : models[0];
 
-  const { dayToName, nameToDay, dates, activeDays, workoutDays } = buildPrompt(
+  // buildPrompt gives us the full-week context (workout distribution, day names, etc.)
+  const { dayToName, nameToDay, dates: fullWeekDates, activeDays, workoutDays } = buildPrompt(
     userData,
     planType,
     language,
@@ -700,6 +706,12 @@ const generateMealPlanWithGemini = async (
     goals,
     planTemplate,
   );
+
+  // datesOverride lets callers generate a specific subset (e.g., just today, or remaining days).
+  // Workout distribution is still derived from the full-week schedule for correctness.
+  const datesToGenerate = (datesOverride && datesOverride.length > 0)
+    ? datesOverride
+    : fullWeekDates;
 
   // Pre-calculate targets once
   const goalAdjustments = planTemplate
@@ -729,14 +741,12 @@ const generateMealPlanWithGemini = async (
     : goalAdjustments.goalDescription || "";
 
   // BATCHED GENERATION STRATEGY:
-  // Instead of 7 separate API calls (one per day), we batch 3-4 days per request.
-  // This reduces total API calls from 7 to 2, dramatically reducing rate limit issues.
-  // Free tier: 15 RPM, so 2 requests with proper spacing is safe.
-  const DAYS_PER_BATCH = Math.min(4, dates.length); // 3-4 days per batch for optimal performance
-  const MULTI_DAY_TIMEOUT_MS = 60000; // 60s timeout for multi-day requests
+  // Batch up to 4 days per request — reduces total API calls, stays well under 15 RPM.
+  const DAYS_PER_BATCH = Math.min(4, datesToGenerate.length);
+  const MULTI_DAY_TIMEOUT_MS = 60000;
 
   // Prepare day data for batching
-  const allDaysData = dates.map((date, idx) => ({
+  const allDaysData = datesToGenerate.map((date, idx) => ({
     date,
     dateStr: getLocalDateKey(date),
     dayName: dayToName[date.getDay()],
@@ -751,7 +761,7 @@ const generateMealPlanWithGemini = async (
   }
 
   logger.info(
-    `[Gemini] Starting batched generation via ${modelToUse} (${dates.length} days in ${batches.length} batches, ~${DAYS_PER_BATCH} days/batch)...`,
+    `[Gemini] Starting batched generation via ${modelToUse} (${datesToGenerate.length} days in ${batches.length} batches, ~${DAYS_PER_BATCH} days/batch)...`,
   );
 
   const startTime = Date.now();
@@ -837,18 +847,18 @@ const generateMealPlanWithGemini = async (
   }
 
   logger.info(
-    `[Gemini] Successfully generated ${weeklyPlanArray.length}/${dates.length} days in ${elapsedSec}s`,
+    `[Gemini] Successfully generated ${weeklyPlanArray.length}/${datesToGenerate.length} days in ${elapsedSec}s`,
   );
 
   const parsedResponse = { weeklyPlan: weeklyPlanArray };
 
-  // Transform to final format
+  // Transform to final format — pass only the dates we actually generated
   const transformedPlan = await transformWeeklyPlan(
     parsedResponse,
     dayToName,
     nameToDay,
-    dates,
-    activeDays,
+    datesToGenerate,
+    datesToGenerate.map((d) => d.getDay()),
     workoutDays,
     planType,
     language,
@@ -867,6 +877,7 @@ const generateMealPlanWithAI = async (
   useMock: boolean = false,
   goals: IGoal[] = [],
   planTemplate?: string,
+  datesOverride?: Date[], // Optional: generate only these specific dates
 ): Promise<MealPlanResponse> => {
   try {
     if (useMock) {
@@ -898,6 +909,7 @@ const generateMealPlanWithAI = async (
           apiKey,
           goals,
           planTemplate,
+          datesOverride,
         );
       } catch (geminiError: unknown) {
         logger.warn(

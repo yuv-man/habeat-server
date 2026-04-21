@@ -120,6 +120,18 @@ export class AuthService {
     });
 
     if (existingUser) {
+      if (!(existingUser as any).kycCompleted) {
+        // User started signup but never finished KYC — let them continue
+        return {
+          status: "success",
+          data: {
+            user: existingUser,
+            plan: null,
+            token: generateToken(existingUser._id.toString()),
+            isNewUser: true,
+          },
+        };
+      }
       throw new ConflictException(
         "User already exists. Please use sign in instead."
       );
@@ -186,6 +198,7 @@ export class AuthService {
         user: user,
         plan: initialPlan,
         token: generateToken(user._id.toString()),
+        isNewUser: true,
       },
     };
   }
@@ -296,8 +309,17 @@ export class AuthService {
     let user = await this.userModel.findOne({ email: googleUser.email });
 
     if (mode === "signup") {
-      // For signup: user should NOT exist
+      // For signup: user should NOT exist (unless they started but never finished KYC)
       if (user) {
+        if (!(user as any).kycCompleted) {
+          // User exists but never finished KYC — let them continue
+          const jwtToken = generateToken(user._id.toString());
+          const redirectUrl = new URL(frontendRedirectUri);
+          redirectUrl.searchParams.set("token", jwtToken);
+          redirectUrl.searchParams.set("userId", user._id.toString());
+          redirectUrl.searchParams.set("isNewUser", "true");
+          return redirectUrl.toString();
+        }
         throw new ConflictException(
           "User already exists. Please use sign in instead."
         );
@@ -368,6 +390,9 @@ export class AuthService {
     const redirectUrl = new URL(frontendRedirectUri);
     redirectUrl.searchParams.set("token", jwtToken);
     redirectUrl.searchParams.set("userId", user._id.toString());
+    if (mode === "signup") {
+      redirectUrl.searchParams.set("isNewUser", "true");
+    }
 
     return redirectUrl.toString();
   }

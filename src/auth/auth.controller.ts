@@ -932,7 +932,11 @@ export class AuthController {
       }
       // Redirect to frontend with error
       const errorUrl = new URL(frontendRedirectUri);
-      errorUrl.searchParams.set("error", "authentication_failed");
+      const isConflict = error?.status === 409;
+      errorUrl.searchParams.set(
+        "error",
+        isConflict ? "user_already_exists" : "authentication_failed",
+      );
       errorUrl.searchParams.set(
         "error_description",
         error?.message || "OAuth authentication failed",

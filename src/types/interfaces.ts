@@ -340,6 +340,7 @@ export interface IPlan extends Document {
   };
   language: string;
   generatedAt: Date;
+  generationStatus: "generating" | "complete";
   createdAt: Date;
   updatedAt: Date;
 }

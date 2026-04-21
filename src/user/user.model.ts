@@ -230,6 +230,8 @@ const userSchemaDefinition = {
   },
   // Device tokens for push notifications
   deviceTokens: { type: [String], default: [] },
+  // Onboarding
+  kycCompleted: { type: Boolean, required: false, default: false },
 };
 
 // Export schema for NestJS

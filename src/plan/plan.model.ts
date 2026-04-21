@@ -123,6 +123,11 @@ const planSchema = new Schema<IPlan>(
       type: String,
       default: "en",
     },
+    generationStatus: {
+      type: String,
+      enum: ["generating", "complete"],
+      default: "generating",
+    },
   },
   {
     timestamps: true,
