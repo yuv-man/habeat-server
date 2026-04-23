@@ -20,6 +20,7 @@ import {
 } from "../utils/oauth";
 import { JwtService } from "@nestjs/jwt";
 import { PlanService } from "../plan/plan.service";
+import { isMongoObjectIdString } from "../utils/mongoObjectId";
 
 @Injectable()
 export class AuthService {
@@ -51,11 +52,20 @@ export class AuthService {
       preferences: data.userData.preferences || {},
     });
 
-    const initialPlan = await this.planService.createInitialPlanFunction(
-      user._id.toString(),
-      data.userData,
-      "en"
-    );
+    // Only create initial plan if KYC data is present (age, height, weight, path are required for plan)
+    const hasKycData =
+      data.userData.age &&
+      data.userData.height &&
+      data.userData.weight &&
+      data.userData.path;
+
+    const initialPlan = hasKycData
+      ? await this.planService.createInitialPlanFunction(
+          user._id.toString(),
+          data.userData,
+          "en"
+        )
+      : null;
 
     return {
       status: "success",
@@ -550,6 +560,9 @@ export class AuthService {
   }
 
   async getUser(userId: string) {
+    if (!isMongoObjectIdString(userId)) {
+      throw new BadRequestException("Invalid user id");
+    }
     const user = await this.userModel.findById(userId);
     if (!user) {
       throw new UnauthorizedException("Unauthorized");

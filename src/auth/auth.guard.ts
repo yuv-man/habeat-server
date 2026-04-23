@@ -13,6 +13,7 @@ import { IUserData } from "../types/interfaces";
 import logger from "../utils/logger";
 import { JwtPayload } from "../types/interfaces";
 import { User } from "src/user/user.model";
+import { isMongoObjectIdString } from "../utils/mongoObjectId";
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -34,7 +35,7 @@ export class AuthGuard implements CanActivate {
       // Try to get test user ID from config, or use a default mock user
       const testUserId = this.configService.get<string>("TEST_USER_ID");
 
-      if (testUserId) {
+      if (testUserId && isMongoObjectIdString(testUserId)) {
         // Use the specified test user if it exists
         const user = await this.userModel
           .findById(testUserId)
@@ -89,6 +90,9 @@ export class AuthGuard implements CanActivate {
         secret: jwtSecret,
       });
 
+      if (!isMongoObjectIdString(payload.id)) {
+        throw new UnauthorizedException("Not authorized, invalid subject in token");
+      }
       const user = await this.userModel
         .findById(payload.id)
         .select("-password")

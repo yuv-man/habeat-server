@@ -6,6 +6,7 @@ import { Model } from "mongoose";
 import { ConfigService } from "@nestjs/config";
 import { User } from "../user/user.model";
 import { IUserData, JwtPayload } from "../types/interfaces";
+import { isMongoObjectIdString } from "../utils/mongoObjectId";
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -23,6 +24,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   async validate(payload: JwtPayload) {
+    if (!isMongoObjectIdString(payload.id)) {
+      throw new UnauthorizedException("Invalid subject in token");
+    }
     const user = await this.userModel
       .findById(payload.id)
       .select("-password")

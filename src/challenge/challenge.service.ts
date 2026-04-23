@@ -722,9 +722,26 @@ export class ChallengeService {
       }
     }
 
-    // If no weekly challenges, assign one (long-term goal)
+    // If no weekly challenges, assign one (long-term goal).
+    // Do NOT call assignChallenges() here — it calls getActiveChallenges(), which calls
+    // ensureChallengeBalance() again and causes infinite recursion / stack overflow.
     if (weeklyChallenges.length === 0) {
-      await this.assignChallenges(userId);
+      const activeTypes = new Set(activeChallenges.map((c) => c.type));
+      const weeklyTemplates = HABIT_CHALLENGE_TEMPLATES.filter(
+        (t) => t.period === "weekly" && !activeTypes.has(t.type)
+      );
+      const shuffledWeekly = this.shuffleArray([...weeklyTemplates]);
+      const sortedWeekly = shuffledWeekly.sort((a, b) => {
+        const difficultyOrder = { starter: 0, building: 1, established: 2 };
+        return difficultyOrder[a.difficulty] - difficultyOrder[b.difficulty];
+      });
+      if (sortedWeekly.length > 0) {
+        const template = sortedWeekly[0];
+        await this.createHabitChallenge(userId, template);
+        logger.info(
+          `[ChallengeService] Auto-assigned weekly challenge "${template.title}" to user ${userId}`
+        );
+      }
     }
   }
 

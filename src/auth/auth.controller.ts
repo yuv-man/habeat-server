@@ -26,6 +26,7 @@ import { AuthGuard } from "./auth.guard";
 import { SignupDto } from "./dto/signup.dto";
 import { IUserData } from "../types/interfaces";
 import logger from "../utils/logger";
+import { isMongoObjectIdString } from "../utils/mongoObjectId";
 
 @ApiTags("auth")
 @Controller("auth")
@@ -777,8 +778,8 @@ export class AuthController {
       throw new BadRequestException("accessToken is required");
     }
 
-    // If userId is provided, this is a redirect flow completion
-    if (body.userId) {
+    // If a valid userId is provided, this is a redirect flow completion
+    if (isMongoObjectIdString(body.userId)) {
       const data = await this.authService.getUser(body.userId);
       res.json({
         status: "success",

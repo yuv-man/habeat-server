@@ -28,31 +28,31 @@ export class UserDataDto {
   @IsString()
   password?: string;
 
-  @ApiProperty({ example: 30 })
-  @IsNotEmpty()
+  @ApiProperty({ example: 30, required: false })
+  @IsOptional()
   @IsNumber()
-  age: number;
+  age?: number;
 
-  @ApiProperty({ example: "male", enum: ["male", "female"] })
-  @IsNotEmpty()
+  @ApiProperty({ example: "male", enum: ["male", "female"], required: false })
+  @IsOptional()
   @IsEnum(["male", "female"])
-  gender: "male" | "female";
+  gender?: "male" | "female";
 
-  @ApiProperty({ example: 175 })
-  @IsNotEmpty()
+  @ApiProperty({ example: 175, required: false })
+  @IsOptional()
   @IsNumber()
-  height: number;
+  height?: number;
 
-  @ApiProperty({ example: 70 })
-  @IsNotEmpty()
+  @ApiProperty({ example: 70, required: false })
+  @IsOptional()
   @IsNumber()
-  weight: number;
+  weight?: number;
 
   @ApiProperty({
     example: 3,
     required: false,
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsNumber()
   workoutFrequency?: number;
 
@@ -76,8 +76,9 @@ export class UserDataDto {
       "lose-weight",
       "fasting",
     ],
+    required: false,
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsEnum([
     "keto",
     "healthy",
@@ -86,7 +87,7 @@ export class UserDataDto {
     "lose-weight",
     "fasting",
   ])
-  path:
+  path?:
     | "keto"
     | "healthy"
     | "gain-muscle"
