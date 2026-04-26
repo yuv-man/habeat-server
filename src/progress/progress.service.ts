@@ -293,15 +293,17 @@ export class ProgressService {
     // Use dateKey (YYYY-MM-DD) for timezone-safe querying
     const todayDateKey = this.getLocalDateKey(today);
 
-    // Fetch progress and plan in parallel for better performance
+    // Fetch progress and plan in parallel. Do not populate meals: snapshot subdocs already
+    // include name/calories/macros/etc.; populate() was N+1 queries to Meal on every poll.
     const [progress, plan] = await Promise.all([
-      this.progressModel
-        .findOne<IDailyProgress>({
-          userId,
-          dateKey: todayDateKey,
-        })
-        .populate("meals.breakfast meals.lunch meals.dinner meals.snacks"),
-      this.planModel.findOne({ userId }).lean(), // Use lean() for plan since we only read from it
+      this.progressModel.findOne<IDailyProgress>({
+        userId,
+        dateKey: todayDateKey,
+      }),
+      this.planModel
+        .findOne({ userId })
+        .select("weeklyPlan userMetrics _id")
+        .lean(),
     ]);
 
     const weeklyPlan = (plan as any)?.weeklyPlan || {};
@@ -352,11 +354,6 @@ export class ProgressService {
         carbs: { consumed: 0, goal: macroGoals.carbs },
         fat: { consumed: 0, goal: macroGoals.fat },
       });
-
-      // Populate meals after creation
-      await progressDoc.populate(
-        "meals.breakfast meals.lunch meals.dinner meals.snacks"
-      );
     } else {
       // Progress exists - check if meals need to be populated from plan
       const needsUpdate =
@@ -369,42 +366,42 @@ export class ProgressService {
         // Ensure meals are saved to DB
         const meals = await this.processMealsForProgress(dayPlan);
 
-        progressDoc = await this.progressModel
-          .findByIdAndUpdate(
-            progressDoc._id,
-            {
-              $set: {
-                "meals.breakfast": meals.breakfast,
-                "meals.lunch": meals.lunch,
-                "meals.dinner": meals.dinner,
-                "meals.snacks": meals.snacks,
-                workouts:
-                  dayPlan?.workouts?.map((w: any) => ({
-                    name: w.name,
-                    duration: parseDuration(w.duration),
-                    category: w.category,
-                    caloriesBurned: parseCalories(w.caloriesBurned),
-                    time: w.time,
-                    done: false,
-                  })) ||
-                  progressDoc.workouts ||
-                  [],
-              },
+        progressDoc = await this.progressModel.findByIdAndUpdate(
+          progressDoc._id,
+          {
+            $set: {
+              "meals.breakfast": meals.breakfast,
+              "meals.lunch": meals.lunch,
+              "meals.dinner": meals.dinner,
+              "meals.snacks": meals.snacks,
+              workouts:
+                dayPlan?.workouts?.map((w: any) => ({
+                  name: w.name,
+                  duration: parseDuration(w.duration),
+                  category: w.category,
+                  caloriesBurned: parseCalories(w.caloriesBurned),
+                  time: w.time,
+                  done: false,
+                })) ||
+                progressDoc.workouts ||
+                [],
             },
-            { new: true }
-          )
-          .populate("meals.breakfast meals.lunch meals.dinner meals.snacks");
+          },
+          { new: true },
+        );
       }
 
-      // Sync water goal from plan (only if it changed, avoid unnecessary saves)
+      // Sync water goal from plan (only if it changed) — updateOne avoids full document save()
       const planWaterIntake = dayPlan?.waterIntake ?? 8;
       if (progressDoc.water?.goal !== planWaterIntake) {
+        await this.progressModel.updateOne(
+          { _id: progressDoc._id },
+          { $set: { "water.goal": planWaterIntake } },
+        );
         progressDoc.water = {
           consumed: progressDoc.water?.consumed || 0,
           goal: planWaterIntake,
         };
-        progressDoc.markModified("water");
-        await progressDoc.save();
       }
     }
 
