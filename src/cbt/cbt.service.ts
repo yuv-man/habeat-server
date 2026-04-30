@@ -764,6 +764,152 @@ export class CBTService {
     };
   }
 
+  private calculateRawSignalScore(correlation: IMealMoodCorrelation): number {
+    let score = 0;
+
+    const hunger = correlation.hungerLevelBefore ?? 0;
+    if (hunger === 1) score += 0.40;
+    else if (hunger === 2) score += 0.25;
+    else if (hunger === 3) score += 0.10;
+
+    const emotionalCategories = ["stressed", "anxious", "sad", "angry"];
+    const moodCat = correlation.moodBefore?.moodCategory ?? "";
+    if (emotionalCategories.includes(moodCat)) score += 0.25;
+    else if (moodCat === "tired") score += 0.15;
+
+    if (
+      emotionalCategories.includes(moodCat) &&
+      (correlation.moodBefore?.moodLevel ?? 0) >= 4
+    ) {
+      score += 0.15;
+    }
+
+    const hour = new Date(correlation.createdAt).getHours();
+    if (correlation.mealType === "snacks" && hour >= 21) score += 0.10;
+
+    if (
+      correlation.moodAfter &&
+      correlation.moodBefore &&
+      correlation.moodAfter.moodLevel <= correlation.moodBefore.moodLevel
+    ) {
+      score += 0.10;
+    }
+
+    return Math.min(1.0, score);
+  }
+
+  private applyScoreOverrides(
+    raw: number,
+    wasEmotionalEating: boolean
+  ): number {
+    if (wasEmotionalEating) return Math.max(raw, 0.85);
+    return Math.min(raw, 0.30);
+  }
+
+  private async buildPatternMap(
+    userId: string
+  ): Promise<Map<string, number>> {
+    const totalCount = await this.mealMoodModel.countDocuments({
+      userId: new mongoose.Types.ObjectId(userId),
+    });
+
+    if (totalCount < 20) return new Map();
+
+    const history = await this.mealMoodModel
+      .find({ userId: new mongoose.Types.ObjectId(userId) })
+      .lean()
+      .exec();
+
+    const counts = new Map<string, number>();
+    history.forEach((c) => {
+      if (c.moodBefore?.moodCategory) {
+        const dow = new Date(c.createdAt).getDay();
+        const key = `${dow}-${c.moodBefore.moodCategory}-${c.mealType}`;
+        counts.set(key, (counts.get(key) ?? 0) + 1);
+      }
+    });
+    return counts;
+  }
+
+  private calculateFinalScore(
+    correlation: IMealMoodCorrelation,
+    patternMap: Map<string, number>
+  ): number {
+    let raw = this.calculateRawSignalScore(correlation);
+
+    if (correlation.moodBefore?.moodCategory && patternMap.size > 0) {
+      const dow = new Date(correlation.createdAt).getDay();
+      const key = `${dow}-${correlation.moodBefore.moodCategory}-${correlation.mealType}`;
+      if ((patternMap.get(key) ?? 0) >= 3) {
+        raw = Math.min(1.0, raw + 0.15);
+      }
+    }
+
+    return this.applyScoreOverrides(raw, correlation.wasEmotionalEating);
+  }
+
+  private generatePatternSpotlight(
+    patternMap: Map<string, number>
+  ): string | null {
+    const top = [...patternMap.entries()]
+      .filter(([, count]) => count >= 3)
+      .sort(([, a], [, b]) => b - a)[0];
+
+    if (!top) return null;
+
+    const [key] = top;
+    const [dow, moodCategory, mealType] = key.split("-");
+    const dayNames = [
+      "Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday",
+    ];
+    return `We noticed you tend to reach for ${mealType} when feeling ${moodCategory} on ${dayNames[parseInt(dow)]}s`;
+  }
+
+  private async calculateWeeklyTrend(
+    userId: string
+  ): Promise<{ week: string; score: number }[]> {
+    const now = new Date();
+    const cutoff = new Date(now);
+    cutoff.setDate(cutoff.getDate() - 28);
+
+    const allCorrelations = await this.mealMoodModel
+      .find({
+        userId: new mongoose.Types.ObjectId(userId),
+        date: { $gte: cutoff.toISOString().split("T")[0] },
+      })
+      .lean()
+      .exec();
+
+    const emptyMap = new Map<string, number>();
+    const result: { week: string; score: number }[] = [];
+
+    for (let i = 3; i >= 0; i--) {
+      const weekEnd = new Date(now);
+      weekEnd.setDate(weekEnd.getDate() - i * 7);
+      const weekStart = new Date(weekEnd);
+      weekStart.setDate(weekStart.getDate() - 7);
+
+      const startStr = weekStart.toISOString().split("T")[0];
+      const endStr = weekEnd.toISOString().split("T")[0];
+
+      const week = allCorrelations.filter(
+        (c) => c.date >= startStr && c.date <= endStr
+      );
+
+      if (week.length === 0) {
+        result.push({ week: startStr, score: 100 });
+      } else {
+        const scores = week.map((c) => this.calculateFinalScore(c, emptyMap));
+        const eePercent = Math.round(
+          (scores.reduce((s, x) => s + x, 0) / week.length) * 100
+        );
+        result.push({ week: startStr, score: 100 - eePercent });
+      }
+    }
+
+    return result;
+  }
+
   async getEmotionalEatingInsights(
     userId: string,
     period: "week" | "month" = "week"
@@ -780,76 +926,92 @@ export class CBTService {
     const startDateStr = startDate.toISOString().split("T")[0];
     const endDateStr = now.toISOString().split("T")[0];
 
-    const correlations = await this.mealMoodModel
-      .find({
-        userId: new mongoose.Types.ObjectId(userId),
-        date: { $gte: startDateStr, $lte: endDateStr },
-      })
-      .lean()
-      .exec();
+    const [correlations, emotionalMoods, patternMap, weeklyTrend] =
+      await Promise.all([
+        this.mealMoodModel
+          .find({
+            userId: new mongoose.Types.ObjectId(userId),
+            date: { $gte: startDateStr, $lte: endDateStr },
+          })
+          .lean()
+          .exec(),
+        this.moodModel
+          .find({
+            userId: new mongoose.Types.ObjectId(userId),
+            date: { $gte: startDateStr, $lte: endDateStr },
+            linkedMealId: { $exists: true },
+          })
+          .lean()
+          .exec(),
+        this.buildPatternMap(userId),
+        this.calculateWeeklyTrend(userId),
+      ]);
 
-    // Calculate insights
     const totalMeals = correlations.length;
-    const emotionalEatingInstances = correlations.filter(
-      (c) => c.wasEmotionalEating
-    ).length;
-    const emotionalEatingPercentage =
-      totalMeals > 0
-        ? Math.round((emotionalEatingInstances / totalMeals) * 100)
-        : 0;
+    const scores = correlations.map((c) =>
+      this.calculateFinalScore(c, patternMap)
+    );
+    const scoreSum = scores.reduce((s, x) => s + x, 0);
 
-    // Analyze triggers from related mood entries
-    const emotionalMoods = await this.moodModel
-      .find({
-        userId: new mongoose.Types.ObjectId(userId),
-        date: { $gte: startDateStr, $lte: endDateStr },
-        linkedMealId: { $exists: true },
-      })
-      .lean()
-      .exec();
+    const emotionalEatingPercentage =
+      totalMeals > 0 ? Math.round((scoreSum / totalMeals) * 100) : 0;
+    const mindfulEatingScore = 100 - emotionalEatingPercentage;
+    const emotionalEatingInstances = scores.filter((s) => s > 0.5).length;
 
     const triggerCounts: Record<string, number> = {};
     const emotionCounts: Record<string, number> = {};
-
     emotionalMoods.forEach((mood) => {
-      mood.triggers?.forEach((trigger) => {
-        triggerCounts[trigger] = (triggerCounts[trigger] || 0) + 1;
+      mood.triggers?.forEach((t) => {
+        triggerCounts[t] = (triggerCounts[t] || 0) + 1;
       });
       emotionCounts[mood.moodCategory] =
         (emotionCounts[mood.moodCategory] || 0) + 1;
     });
 
-    // Meal type breakdown
     const mealTypeBreakdown = {
-      breakfast: correlations.filter(
-        (c) => c.mealType === "breakfast" && c.wasEmotionalEating
-      ).length,
-      lunch: correlations.filter(
-        (c) => c.mealType === "lunch" && c.wasEmotionalEating
-      ).length,
-      dinner: correlations.filter(
-        (c) => c.mealType === "dinner" && c.wasEmotionalEating
-      ).length,
-      snacks: correlations.filter(
-        (c) => c.mealType === "snacks" && c.wasEmotionalEating
-      ).length,
+      breakfast: 0,
+      lunch: 0,
+      dinner: 0,
+      snacks: 0,
+    };
+    const mealTypeScoreSum: Record<string, number> = {
+      breakfast: 0, lunch: 0, dinner: 0, snacks: 0,
+    };
+    const mealTypeCount: Record<string, number> = {
+      breakfast: 0, lunch: 0, dinner: 0, snacks: 0,
     };
 
-    // Generate recommendations
-    const recommendations: string[] = [];
+    correlations.forEach((c, i) => {
+      if (scores[i] > 0.5) mealTypeBreakdown[c.mealType]++;
+      mealTypeScoreSum[c.mealType] += scores[i];
+      mealTypeCount[c.mealType]++;
+    });
 
+    const strongestMealType =
+      Object.entries(mealTypeCount)
+        .filter(([, count]) => count >= 2)
+        .map(([type]) => ({
+          type,
+          avg: mealTypeScoreSum[type] / mealTypeCount[type],
+        }))
+        .sort((a, b) => a.avg - b.avg)[0]?.type ?? null;
+
+    const recommendations: string[] = [];
     if (emotionalEatingPercentage > 30) {
       recommendations.push(
         "Consider practicing urge surfing when you feel the urge to eat emotionally"
       );
     }
-
-    if (mealTypeBreakdown.snacks > mealTypeBreakdown.breakfast + mealTypeBreakdown.lunch + mealTypeBreakdown.dinner) {
+    if (
+      mealTypeBreakdown.snacks >
+      mealTypeBreakdown.breakfast +
+        mealTypeBreakdown.lunch +
+        mealTypeBreakdown.dinner
+    ) {
       recommendations.push(
         "Snacking seems to be your main emotional eating pattern. Try the mindful eating exercise before snacks"
       );
     }
-
     const topTrigger = Object.entries(triggerCounts).sort(
       ([, a], [, b]) => b - a
     )[0];
@@ -858,7 +1020,6 @@ export class CBTService {
         `${topTrigger[0]} appears to be a common trigger. Try breathing exercises when you notice this trigger`
       );
     }
-
     if (recommendations.length === 0) {
       recommendations.push(
         "Keep tracking your meals and moods to identify patterns"
@@ -873,6 +1034,10 @@ export class CBTService {
           totalMeals,
           emotionalEatingInstances,
           emotionalEatingPercentage,
+          mindfulEatingScore,
+          patternSpotlight: this.generatePatternSpotlight(patternMap),
+          weeklyTrend,
+          strongestMealType,
           commonTriggers: Object.entries(triggerCounts)
             .map(([trigger, count]) => ({ trigger, count }))
             .sort((a, b) => b.count - a.count)

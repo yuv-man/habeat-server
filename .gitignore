@@ -15,3 +15,20 @@
 .cursorignore
 
 .skills/*
+
+.cursorignore
+.env
+.agents/*
+skills-lock.json
+scripts/*
+.cursorignore
+.env
+.agents/*
+skills-lock.json
+scripts/*
+.cursorignore
+.agents/*
+skills-lock.json
+scripts/*
+.claude
+.augment

@@ -1565,6 +1565,7 @@ export class PlanService {
         // Sync water goal from plan (plan is source of truth)
         // dayPlan.waterIntake was just updated above, so use that value
         (progress as any).water.goal = dayPlan.waterIntake;
+        (progress as any).markModified("workouts");
         (progress as any).markModified("water");
         await progress.save();
         
@@ -1690,6 +1691,7 @@ export class PlanService {
       });
       if (progress) {
         (progress as any).meals.snacks.push(snack);
+        (progress as any).markModified("meals.snacks");
         await progress.save();
       }
     }
