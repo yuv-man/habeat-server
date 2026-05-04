@@ -10,8 +10,10 @@ import { Model } from "mongoose";
 import { DailyProgress } from "./progress.model";
 import { Plan } from "../plan/plan.model";
 import { Meal } from "../meal/meal.model";
+import { User } from "../user/user.model";
 import { EngagementService } from "../engagement/engagement.service";
 import { ChallengeService } from "../challenge/challenge.service";
+import { updateMealLearningProfile } from "../utils/meal-learning";
 import logger from "../utils/logger";
 import {
   formatProgressStats,
@@ -32,6 +34,7 @@ import {
   IDailyPlan,
   IDayPlan,
   IMeal,
+  IUserData,
 } from "../types/interfaces";
 import crypto from "crypto";
 
@@ -42,6 +45,7 @@ export class ProgressService {
     private progressModel: Model<IDailyProgress>,
     @InjectModel(Plan.name) private planModel: Model<IPlan>,
     @InjectModel(Meal.name) private mealModel: Model<IMeal>,
+    @InjectModel(User.name) private userModel: Model<IUserData>,
     @Inject(forwardRef(() => EngagementService))
     private engagementService: EngagementService,
     @Inject(forwardRef(() => ChallengeService))
@@ -554,6 +558,11 @@ export class ProgressService {
     }
 
     await progress.save();
+
+    // Fire-and-forget: update meal learning profile
+    if (meal.done && meal.name) {
+      updateMealLearningProfile(this.userModel, userId, meal.name, "complete").catch(() => {});
+    }
 
     // Update plan's weekly macros
     const plan = await this.planModel.findOne({ userId });

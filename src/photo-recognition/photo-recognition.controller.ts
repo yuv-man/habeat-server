@@ -108,11 +108,16 @@ export class PhotoRecognitionController {
     );
 
     if (!nutrition) {
-      logger.info(`[PhotoRecognition] No USDA data found for: ${body.mealName}`);
+      logger.info(`[PhotoRecognition] No USDA data for "${body.mealName}", trying AI fallback`);
+      const aiNutrition = await this.photoRecognitionService.getNutritionFromAI(body.mealName);
+      if (aiNutrition) {
+        logger.info(`[PhotoRecognition] AI estimate: ${aiNutrition.calories} cal`);
+        return { success: true, data: aiNutrition };
+      }
       return {
         success: false,
         data: null,
-        message: `No nutrition data found for "${body.mealName}". Try a more specific or simpler food name.`,
+        message: `No nutrition data found for "${body.mealName}". Please enter manually.`,
       };
     }
 

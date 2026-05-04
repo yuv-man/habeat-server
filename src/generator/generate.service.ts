@@ -1087,6 +1087,56 @@ const PLAN_TEMPLATE_STYLES: Record<string, string> = {
 - Simple cooking methods, no exotic ingredients`,
 };
 
+const buildLearningProfileSection = (userData: IUserData): string => {
+  const profile = (userData as any).mealLearningProfile;
+  if (!profile) return "";
+
+  const completed: Array<{ name: string; count: number }> = profile.completedMeals || [];
+  const swapped: Array<{ name: string; count: number }> = profile.swappedMeals || [];
+  const scores: Record<string, number> =
+    profile.cuisineScores instanceof Map
+      ? Object.fromEntries(profile.cuisineScores)
+      : profile.cuisineScores || {};
+
+  const hasData =
+    completed.length > 0 ||
+    swapped.length > 0 ||
+    Object.keys(scores).length > 0;
+
+  if (!hasData) return "";
+
+  const topCompleted = [...completed]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+    .map((m) => m.name)
+    .join(", ");
+
+  const topSwapped = [...swapped]
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5)
+    .map((m) => m.name)
+    .join(", ");
+
+  const topCuisines = Object.entries(scores)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 5)
+    .map(([c, s]) => `${c}: ${s.toFixed(1)}`)
+    .join(", ");
+
+  return `
+LEARNED PREFERENCES (from actual usage — treat as strong signals):
+- Enjoyed meals (completed regularly): ${topCompleted || "none yet"}
+- Meals to avoid (frequently swapped): ${topSwapped || "none yet"}
+- Cuisine affinity: ${topCuisines || "none yet"}
+
+Rules:
+- Never suggest a meal from the avoid list.
+- Occasionally include meals similar to the enjoyed list (not a copy, a variation).
+- Weight cuisine affinity scores alongside stated preferences — higher score = more inspired by that cuisine.
+- Avoid list is a hard constraint. Enjoy list is a soft suggestion.
+`;
+};
+
 const buildPrompt = (
   userData: IUserData,
   planType: "daily" | "weekly",
@@ -1309,9 +1359,9 @@ DIETARY RULES (STRICTLY ENFORCE):
 - Allergies: ${userData.allergies ? userData.allergies.join(", ") : "None"}
 - Restrictions: ${userData.dietaryRestrictions ? userData.dietaryRestrictions.join(", ") : "None"}
 - Dislikes: ${dislikes}
-- Food Preferences (MUST INCORPORATE): ${foodPrefs}
-  ${userData.foodPreferences?.length ? `*** CRITICAL: You MUST incorporate these food preferences into the meal plan. At least 50% of meals should feature or include these preferred foods/cuisines. For example, if "Japanese food" is preferred, include meals like sushi, ramen, teriyaki, miso soup, etc. throughout the week. ***` : ""}
-
+- Food Preferences (inspiration, ~25% of meals): ${foodPrefs}
+  ${userData.foodPreferences?.length ? `Draw inspiration from these preferences for approximately 25% of meals. The remaining meals should be varied, healthy, and simple. Never repeat the same cuisine two days in a row. Health quality and cooking simplicity always take priority over preference matching.` : ""}
+${buildLearningProfileSection(userData)}
 MEAL FRAMEWORKS (Approximate):
 - Breakfast: ~${breakfastTarget} kcal (P:${breakfastMacros.protein}g, C:${breakfastMacros.carbs}g, F:${breakfastMacros.fat}g)
 - Lunch: ~${lunchTarget} kcal (P:${lunchMacros.protein}g, C:${lunchMacros.carbs}g, F:${lunchMacros.fat}g)
@@ -1699,6 +1749,7 @@ ALL meals must be variations of "${requestedMeal}".
 ${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
 ${mealCriteria.preferences?.length ? `- Food Preferences (MUST INCORPORATE): ${mealCriteria.preferences.join(", ")} - *** CRITICAL: Incorporate these preferences into the variations where possible. ***` : ""}
 ${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
+- Cooking level: Home cooking (beginner to intermediate). Use simple, everyday methods (boiling, frying, baking, grilling, sautéing). No advanced culinary techniques unless the user specifically requests them.
 
 Return a JSON object with a "meals" array containing exactly ${numberOfSuggestions} meal objects.
 
@@ -1748,6 +1799,7 @@ Each meal MUST have ALL these fields:
 ${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
 ${mealCriteria.preferences?.length ? `- Food Preferences (MUST INCORPORATE): ${mealCriteria.preferences.join(", ")} - *** CRITICAL: ALL meals should feature or be inspired by these preferences. For example, if "Japanese food" is preferred, generate meals like sushi, ramen, teriyaki, miso soup, etc. ***` : ""}
 ${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
+- Cooking level: Home cooking (beginner to intermediate). Use simple, everyday methods (boiling, frying, baking, grilling, sautéing). No advanced culinary techniques unless the user specifically requests them.
 ${mealCriteria.aiRules ? `- Additional rules: ${mealCriteria.aiRules}` : ""}
 
 ## Response Format:

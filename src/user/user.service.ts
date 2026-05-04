@@ -7,6 +7,7 @@ import logger from "../utils/logger";
 import mongoose from "mongoose";
 import { IUserData, IMeal } from "../types/interfaces";
 import { compressImage, isBase64Image } from "../utils/imageCompression";
+import { updateMealLearningProfile } from "../utils/meal-learning";
 
 @Injectable()
 export class UserService {
@@ -114,6 +115,14 @@ export class UserService {
       success: true,
       data: favoriteMeals,
     };
+  }
+
+  async updateMealLearningProfile(
+    userId: string,
+    mealName: string,
+    action: "complete" | "swap"
+  ): Promise<void> {
+    await updateMealLearningProfile(this.userModel, userId, mealName, action);
   }
 
   async updateUserFavoriteMeals(

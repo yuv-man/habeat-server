@@ -51,6 +51,7 @@ import {
 } from "../utils/healthCalculations";
 import { PATH_WATER_INTAKE, PATH_WORKOUTS_GOAL } from "../enums/enumPaths";
 import { UsdaNutritionService } from "../utils/usda-nutrition.service";
+import { updateMealLearningProfile } from "../utils/meal-learning";
 
 @Injectable()
 export class PlanService {
@@ -1220,6 +1221,11 @@ export class PlanService {
     }
     if (dayPlan.totalFat !== undefined) {
       dayPlan.totalFat = Math.round((dayPlan.totalFat || 0) + fatDiff);
+    }
+
+    // Fire-and-forget: record the swapped-away meal in learning profile
+    if (oldMeal?.name) {
+      updateMealLearningProfile(this.userModel, userId, oldMeal.name, "swap").catch(() => {});
     }
 
     // Mark weeklyPlan as modified so Mongoose saves the nested changes

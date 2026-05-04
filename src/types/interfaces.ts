@@ -155,9 +155,17 @@ export interface IUserData {
   // Notification preferences
   notificationPreferences?: INotificationPreferences;
   deviceTokens?: string[]; // FCM/APNs tokens for push notifications
+  // Behavioural meal learning
+  mealLearningProfile?: IMealLearningProfile;
   createdAt?: Date;
   updatedAt?: Date;
   comparePassword?: (candidatePassword: string) => Promise<boolean>;
+}
+
+export interface IMealLearningProfile {
+  completedMeals: Array<{ name: string; count: number; lastEaten: Date }>;
+  swappedMeals: Array<{ name: string; count: number }>;
+  cuisineScores: Record<string, number>;
 }
 
 export interface IMeal {

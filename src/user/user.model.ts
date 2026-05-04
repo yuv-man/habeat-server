@@ -81,6 +81,33 @@ const engagementSchema = new Schema(
   { _id: false }
 );
 
+// Meal learning profile schemas
+const completedMealEntrySchema = new Schema(
+  {
+    name: { type: String, required: true },
+    count: { type: Number, default: 1 },
+    lastEaten: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const swappedMealEntrySchema = new Schema(
+  {
+    name: { type: String, required: true },
+    count: { type: Number, default: 1 },
+  },
+  { _id: false }
+);
+
+const mealLearningProfileSchema = new Schema(
+  {
+    completedMeals: { type: [completedMealEntrySchema], default: [] },
+    swappedMeals: { type: [swappedMealEntrySchema], default: [] },
+    cuisineScores: { type: Map, of: Number, default: new Map() },
+  },
+  { _id: false }
+);
+
 // Notification preferences schema
 const notificationPreferencesSchema = new Schema(
   {
@@ -232,6 +259,12 @@ const userSchemaDefinition = {
   deviceTokens: { type: [String], default: [] },
   // Onboarding
   kycCompleted: { type: Boolean, required: false, default: false },
+  // Behavioural meal learning
+  mealLearningProfile: {
+    type: mealLearningProfileSchema,
+    required: false,
+    default: () => ({ completedMeals: [], swappedMeals: [], cuisineScores: new Map() }),
+  },
 };
 
 // Export schema for NestJS

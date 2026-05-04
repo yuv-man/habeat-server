@@ -8,6 +8,7 @@ import {
 } from "./dto/recognize-meal.dto";
 import {
   generateVisionWithRateLimit,
+  generateTextWithRateLimit,
   getErrorMessage,
 } from "../utils/gemini-rate-limiter";
 
@@ -166,7 +167,27 @@ Rules:
         },
       });
 
-      const foods = searchResponse.data.foods;
+      let foods = searchResponse.data.foods;
+
+      // If no results, retry with a simplified query (strip connector words like "with", "and")
+      if (!foods || foods.length === 0) {
+        const simplified = mealName
+          .replace(/\b(with|and|&|or|topped|served|on|a|of)\b/gi, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (simplified.toLowerCase() !== mealName.toLowerCase().trim()) {
+          logger.info(`[PhotoRecognition] Retrying USDA with simplified query: "${simplified}"`);
+          const retryResponse = await axios.get(`${this.USDA_API_BASE}/foods/search`, {
+            params: {
+              api_key: apiKey,
+              query: simplified,
+              pageSize: 5,
+              dataType: ["Survey (FNDDS)", "Foundation", "SR Legacy"].join(","),
+            },
+          });
+          foods = retryResponse.data.foods;
+        }
+      }
 
       if (!foods || foods.length === 0) {
         logger.info(`[PhotoRecognition] No USDA results for: ${mealName}`);
@@ -216,6 +237,56 @@ Rules:
     } catch (error) {
       const errorMsg = getErrorMessage(error);
       logger.error(`[PhotoRecognition] USDA API error: ${errorMsg}`);
+      return null;
+    }
+  }
+
+  /**
+   * Estimate nutrition using AI (Gemini) when USDA has no match
+   */
+  async getNutritionFromAI(mealName: string): Promise<NutritionResponse | null> {
+    if (!this.apiKey) {
+      logger.warn("[PhotoRecognition] Gemini API key not set, cannot estimate nutrition");
+      return null;
+    }
+
+    const prompt = `You are a professional nutritionist. Estimate the nutrition for a typical home serving of "${mealName}".
+
+Respond ONLY with valid JSON in this exact format (no markdown, no extra text):
+{
+  "calories": 350,
+  "macros": {
+    "protein": 12,
+    "carbs": 45,
+    "fat": 8
+  },
+  "servingSize": "1 serving (approximately 250g)"
+}
+
+Base your estimate on a realistic home-cooked serving size. Be accurate — this is for health tracking.`;
+
+    try {
+      const text = await generateTextWithRateLimit(
+        this.apiKey,
+        "gemini-2.5-flash-lite",
+        prompt,
+        { maxRetries: 2, timeoutMs: 10000, context: "NutritionEstimate" }
+      );
+      const cleaned = extractAndCleanJSON(text);
+      const parsed = JSON.parse(cleaned);
+      logger.info(`[PhotoRecognition] AI nutrition estimate for "${mealName}": ${parsed.calories} cal`);
+      return {
+        calories: Math.round(parsed.calories || 0),
+        macros: {
+          protein: Math.round(parsed.macros?.protein || 0),
+          carbs: Math.round(parsed.macros?.carbs || 0),
+          fat: Math.round(parsed.macros?.fat || 0),
+        },
+        servingSize: parsed.servingSize || "1 serving",
+        source: "AI Estimate",
+      };
+    } catch (error) {
+      logger.error(`[PhotoRecognition] AI nutrition estimate failed: ${getErrorMessage(error)}`);
       return null;
     }
   }
