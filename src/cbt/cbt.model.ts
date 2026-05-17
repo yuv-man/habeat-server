@@ -118,6 +118,15 @@ export interface ICBTExerciseCompletion extends Document {
   createdAt: Date;
 }
 
+export interface IBiometricSnapshot {
+  heartRate?: number;
+  restingHeartRate?: number;
+  stressLevel?: 'low' | 'moderate' | 'high';
+  sleepHours?: number;
+  sleepQuality?: 'poor' | 'fair' | 'good';
+  stepCount?: number;
+}
+
 export interface IMealMoodCorrelation extends Document {
   userId: mongoose.Types.ObjectId;
   mealId: mongoose.Types.ObjectId;
@@ -136,6 +145,7 @@ export interface IMealMoodCorrelation extends Document {
   hungerLevelBefore?: MoodLevel;
   satisfactionAfter?: MoodLevel;
   notes?: string;
+  biometrics?: IBiometricSnapshot;
   createdAt: Date;
 }
 
@@ -450,6 +460,14 @@ const mealMoodCorrelationSchema = new Schema(
       max: 5,
     },
     notes: String,
+    biometrics: {
+      heartRate: Number,
+      restingHeartRate: Number,
+      stressLevel: { type: String, enum: ['low', 'moderate', 'high'] },
+      sleepHours: Number,
+      sleepQuality: { type: String, enum: ['poor', 'fair', 'good'] },
+      stepCount: Number,
+    },
   },
   {
     timestamps: { createdAt: true, updatedAt: false },

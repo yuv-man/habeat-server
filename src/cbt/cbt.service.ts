@@ -722,6 +722,7 @@ export class CBTService {
       hungerLevelBefore: dto.hungerLevelBefore,
       satisfactionAfter: dto.satisfactionAfter,
       notes: dto.notes,
+      biometrics: dto.biometrics,
     });
 
     logger.info(
@@ -793,6 +794,24 @@ export class CBTService {
       correlation.moodAfter.moodLevel <= correlation.moodBefore.moodLevel
     ) {
       score += 0.10;
+    }
+
+    const bio = correlation.biometrics;
+    if (bio) {
+      if (bio.stressLevel === 'high') score += 0.20;
+      else if (bio.stressLevel === 'moderate') score += 0.10;
+
+      if (bio.heartRate !== undefined) {
+        const elevated =
+          bio.heartRate > 100 ||
+          (bio.restingHeartRate !== undefined && bio.heartRate > bio.restingHeartRate * 1.15);
+        if (elevated) score += 0.10;
+      }
+
+      if (bio.sleepQuality === 'poor') score += 0.10;
+      else if (bio.sleepQuality === 'fair') score += 0.05;
+
+      if (bio.stepCount !== undefined && bio.stepCount < 3000) score += 0.05;
     }
 
     return Math.min(1.0, score);

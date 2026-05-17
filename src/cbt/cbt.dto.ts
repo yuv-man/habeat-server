@@ -350,6 +350,38 @@ export class CompleteExerciseDto {
 }
 
 // Meal-Mood DTOs
+export class BiometricsDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  heartRate?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  restingHeartRate?: number;
+
+  @ApiPropertyOptional({ enum: ['low', 'moderate', 'high'] })
+  @IsOptional()
+  @IsString()
+  stressLevel?: 'low' | 'moderate' | 'high';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  sleepHours?: number;
+
+  @ApiPropertyOptional({ enum: ['poor', 'fair', 'good'] })
+  @IsOptional()
+  @IsString()
+  sleepQuality?: 'poor' | 'fair' | 'good';
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumber()
+  stepCount?: number;
+}
+
 export class MoodStateDto {
   @ApiProperty({ minimum: 1, maximum: 5 })
   @IsNumber()
@@ -425,6 +457,12 @@ export class LinkMoodToMealDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiPropertyOptional({ type: BiometricsDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => BiometricsDto)
+  biometrics?: BiometricsDto;
 }
 
 // Query DTOs
