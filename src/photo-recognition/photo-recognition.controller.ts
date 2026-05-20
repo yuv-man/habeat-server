@@ -1,6 +1,7 @@
 import { Controller, Post, Body, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from "@nestjs/swagger";
 import { AuthGuard } from "../auth/auth.guard";
+import { SubscriptionGuard, RequiresFeature } from "../auth/guards/subscription.guard";
 import { PhotoRecognitionService } from "./photo-recognition.service";
 import {
   RecognizeMealDto,
@@ -12,7 +13,8 @@ import logger from "../utils/logger";
 
 @ApiTags("Photo Recognition")
 @Controller("photo")
-@UseGuards(AuthGuard)
+@UseGuards(AuthGuard, SubscriptionGuard)
+@RequiresFeature("photoRecognition")
 @ApiBearerAuth("JWT-auth")
 export class PhotoRecognitionController {
   constructor(private readonly photoRecognitionService: PhotoRecognitionService) {}

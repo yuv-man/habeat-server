@@ -21,6 +21,7 @@ import {
   ApiBearerAuth,
   ApiBody,
 } from "@nestjs/swagger";
+import { Throttle } from "@nestjs/throttler";
 import { AuthService } from "./auth.service";
 import { AuthGuard } from "./auth.guard";
 import { SignupDto } from "./dto/signup.dto";
@@ -34,6 +35,7 @@ export class AuthController {
   constructor(private authService: AuthService) {}
 
   @Post("signup")
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @ApiOperation({ summary: "Register a new user" })
   @ApiResponse({ status: 201, description: "User successfully registered" })
   @ApiResponse({ status: 400, description: "User already exists" })
@@ -65,6 +67,7 @@ export class AuthController {
   }
 
   @Post("login")
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Login user" })
   @ApiResponse({ status: 200, description: "User successfully logged in" })

@@ -30,6 +30,7 @@ export const TIER_FEATURES = {
   blendedPlans: SubscriptionTier.PREMIUM,
   personalizedPortions: SubscriptionTier.PREMIUM,
   weeklyInsights: SubscriptionTier.PREMIUM,
+  photoRecognition: SubscriptionTier.PREMIUM,
 } as const;
 
 export type FeatureKey = keyof typeof TIER_FEATURES;

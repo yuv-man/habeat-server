@@ -1,6 +1,8 @@
 import { Module } from "@nestjs/common";
+import { APP_GUARD } from "@nestjs/core";
 import { MongooseModule } from "@nestjs/mongoose";
 import { ConfigModule, ConfigService } from "@nestjs/config";
+import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
 import { AuthModule } from "./auth/auth.module";
 import { UserModule } from "./user/user.module";
 import { GeneratorModule } from "./generator/generator.module";
@@ -27,6 +29,10 @@ import logger from "./utils/logger";
       isGlobal: true,
       envFilePath: ".env",
     }),
+    ThrottlerModule.forRoot([{
+      ttl: 60000,
+      limit: 20,
+    }]),
     MongooseModule.forRootAsync({
       useFactory: () => {
         const mongoUrl =
@@ -87,6 +93,9 @@ import logger from "./utils/logger";
     SubscriptionModule,
     CBTModule,
     SocialModule,
+  ],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}

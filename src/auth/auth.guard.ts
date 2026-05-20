@@ -8,7 +8,6 @@ import { JwtService } from "@nestjs/jwt";
 import { ConfigService } from "@nestjs/config";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
-import mongoose from "mongoose";
 import { IUserData } from "../types/interfaces";
 import logger from "../utils/logger";
 import { JwtPayload } from "../types/interfaces";
@@ -26,53 +25,6 @@ export class AuthGuard implements CanActivate {
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
 
-    // Check if test mode is enabled
-    const testMode = this.configService.get<string>("TEST_MODE") === "true";
-
-    if (testMode) {
-      logger.warn("⚠️  TEST MODE ENABLED - Authentication is bypassed");
-
-      // Try to get test user ID from config, or use a default mock user
-      const testUserId = this.configService.get<string>("TEST_USER_ID");
-
-      if (testUserId && isMongoObjectIdString(testUserId)) {
-        // Use the specified test user if it exists
-        const user = await this.userModel
-          .findById(testUserId)
-          .select("-password")
-          .lean();
-
-        if (user) {
-          request.user = user;
-          return true;
-        }
-        logger.warn(
-          `Test user with ID ${testUserId} not found, using mock user`
-        );
-      }
-
-      // Create a mock user for testing with a valid ObjectId
-      // Use a consistent ObjectId for test mode so it can be reused
-      const testObjectId = new mongoose.Types.ObjectId();
-      request.user = {
-        _id: testObjectId,
-        email: "test@example.com",
-        name: "Test User",
-        age: 30,
-        gender: "male",
-        height: 175,
-        weight: 70,
-        path: "healthy",
-        allergies: [],
-        dietaryRestrictions: [],
-        foodPreferences: [],
-        favoriteMeals: [],
-      } as any;
-
-      return true;
-    }
-
-    // Normal authentication flow
     const token = this.extractTokenFromHeader(request);
 
     if (!token) {

@@ -141,26 +141,25 @@ export class ProgressService {
       planWaterIntake = 8;
     }
 
-    // Always sync water goal from plan (plan is source of truth)
-    // Always update to ensure consistency, even if value appears the same
     const currentGoal = progress.water?.goal;
-    const currentConsumed = progress.water?.consumed || 0;
+    if (currentGoal === planWaterIntake) return;
 
-    // Always update water goal from plan to ensure it matches
-    progress.water = {
-      consumed: currentConsumed,
-      goal: planWaterIntake,
-    };
+    // Atomically update only the goal field to avoid overwriting consumed count
+    await this.progressModel.findByIdAndUpdate(
+      progress._id,
+      { $set: { "water.goal": planWaterIntake } }
+    );
 
-    // Mark as modified and save
-    progress.markModified("water");
-    await progress.save();
-
-    if (currentGoal !== planWaterIntake) {
-      logger.info(
-        `[syncWaterGoalFromPlan] Synced water goal from plan: ${currentGoal} -> ${planWaterIntake} glasses for date ${dateKey}`
-      );
+    // Keep in-memory object consistent for this request
+    if (!progress.water) {
+      progress.water = { consumed: 0, goal: planWaterIntake };
+    } else {
+      progress.water.goal = planWaterIntake;
     }
+
+    logger.info(
+      `[syncWaterGoalFromPlan] Synced water goal from plan: ${currentGoal} -> ${planWaterIntake} glasses for date ${dateKey}`
+    );
   }
 
   // Helper to get local date key in YYYY-MM-DD format (avoids timezone issues with toISOString which uses UTC)

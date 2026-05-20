@@ -43,7 +43,7 @@ export class SubscriptionGuard implements CanActivate {
     }
 
     const request = context.switchToHttp().getRequest();
-    const userId = request.user?.id || request.params?.userId;
+    const userId = request.user?._id?.toString() || request.params?.userId;
 
     if (!userId) {
       throw new ForbiddenException("User not found");

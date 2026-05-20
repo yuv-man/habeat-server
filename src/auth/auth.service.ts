@@ -39,7 +39,7 @@ export class AuthService {
     const userExists = await this.userModel.findOne({ email: data.email });
 
     if (userExists) {
-      throw new ConflictException("User already exists");
+      throw new ConflictException("An account with this email already exists. Please sign in or use a different email.");
     }
 
     const user = await this.userModel.create({
@@ -102,6 +102,36 @@ export class AuthService {
       status: "success",
       message: "Logged out successfully",
     };
+  }
+
+  private isAllowedRedirectUri(uri: string): boolean {
+    try {
+      const parsed = new URL(uri);
+      const allowedOrigins = [
+        process.env.FRONTEND_REDIRECT_URI,
+        process.env.PROD_CLIENT_SITE,
+        process.env.DEV_CLIENT_SITE,
+      ].filter(Boolean);
+
+      // Allow localhost for development
+      if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
+        return true;
+      }
+      // Allow Capacitor/Ionic mobile schemes
+      if (["capacitor:", "ionic:", "file:"].includes(parsed.protocol)) {
+        return true;
+      }
+      // Check against explicitly configured origins
+      return allowedOrigins.some((allowed) => {
+        try {
+          return new URL(allowed!).origin === parsed.origin;
+        } catch {
+          return false;
+        }
+      });
+    } catch {
+      return false;
+    }
   }
 
   async googleSignup(idToken: string, userData?: Partial<IUserData>) {
@@ -260,8 +290,12 @@ export class AuthService {
         try {
           // Try to parse as JSON (new format with URIs and mode)
           const stateData = JSON.parse(decodedState);
-          frontendRedirectUri =
-            stateData.frontendRedirectUri || frontendRedirectUri;
+          const candidateUri = stateData.frontendRedirectUri;
+          if (candidateUri && this.isAllowedRedirectUri(candidateUri)) {
+            frontendRedirectUri = candidateUri;
+          } else if (candidateUri) {
+            logger.warn("OAuth state contained disallowed frontendRedirectUri, using default", { candidateUri });
+          }
           backendRedirectUri =
             stateData.backendRedirectUri || backendRedirectUri;
           mode = stateData.mode || "signin"; // Default to signin if not specified

@@ -7,6 +7,7 @@ import {
   Request,
   Headers,
   BadRequestException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { SubscriptionService } from './subscription.service';
 import { AuthGuard } from '../auth/auth.guard';
@@ -18,23 +19,27 @@ import { ChangeTierDto } from './dto/change-tier.dto';
 
 @Controller('subscription')
 export class SubscriptionController {
-  private stripe: Stripe;
-  private webhookSecret: string;
+  private stripe: Stripe | null = null;
+  private webhookSecret: string | null = null;
 
   constructor(
     private subscriptionService: SubscriptionService,
     private configService: ConfigService,
   ) {
     const stripeSecretKey = this.configService.get<string>('STRIPE_SECRET_KEY');
-    this.webhookSecret = this.configService.get<string>('STRIPE_WEBHOOK_SECRET') || '';
-    
-    if (!stripeSecretKey) {
-      throw new Error('STRIPE_SECRET_KEY is not defined in environment variables');
+    const webhookSecret = this.configService.get<string>('STRIPE_WEBHOOK_SECRET');
+
+    if (stripeSecretKey) {
+      this.stripe = new Stripe(stripeSecretKey, { apiVersion: '2026-01-28.clover' });
+      this.webhookSecret = webhookSecret || null;
     }
-    
-    this.stripe = new Stripe(stripeSecretKey, {
-      apiVersion: '2026-01-28.clover',
-    });
+  }
+
+  private requireStripe(): Stripe {
+    if (!this.stripe) {
+      throw new ServiceUnavailableException('Payment processing is not configured yet.');
+    }
+    return this.stripe;
   }
 
   /**
@@ -46,7 +51,8 @@ export class SubscriptionController {
     @Request() req: any,
     @Body() body: CreateCheckoutSessionDto,
   ) {
-    const userId = req.user.userId;
+    this.requireStripe();
+    const userId = req.user._id.toString();
     const { tier, successUrl, cancelUrl } = body;
 
     const checkoutUrl = await this.subscriptionService.createCheckoutSession(
@@ -65,7 +71,8 @@ export class SubscriptionController {
   @Post('create-portal-session')
   @UseGuards(AuthGuard)
   async createPortalSession(@Request() req: any, @Body() body: CreatePortalSessionDto) {
-    const userId = req.user.userId;
+    this.requireStripe();
+    const userId = req.user._id.toString();
     const { returnUrl } = body;
 
     const portalUrl = await this.subscriptionService.createPortalSession(userId, returnUrl);
@@ -79,7 +86,7 @@ export class SubscriptionController {
   @Get('details')
   @UseGuards(AuthGuard)
   async getSubscriptionDetails(@Request() req: any) {
-    const userId = req.user.userId;
+    const userId = req.user._id.toString();
     return this.subscriptionService.getSubscriptionDetails(userId);
   }
 
@@ -89,7 +96,8 @@ export class SubscriptionController {
   @Post('cancel')
   @UseGuards(AuthGuard)
   async cancelSubscription(@Request() req: any) {
-    const userId = req.user.userId;
+    this.requireStripe();
+    const userId = req.user._id.toString();
     await this.subscriptionService.cancelSubscription(userId);
     return { message: 'Subscription canceled successfully' };
   }
@@ -100,7 +108,8 @@ export class SubscriptionController {
   @Post('change-tier')
   @UseGuards(AuthGuard)
   async changeSubscription(@Request() req: any, @Body() body: ChangeTierDto) {
-    const userId = req.user.userId;
+    this.requireStripe();
+    const userId = req.user._id.toString();
     const { tier } = body;
 
     await this.subscriptionService.changeSubscription(userId, tier);
@@ -113,22 +122,21 @@ export class SubscriptionController {
    */
   @Post('webhook')
   async handleWebhook(@Request() req: any, @Headers('stripe-signature') signature: string) {
+    const stripe = this.requireStripe();
+
     if (!signature) {
       throw new BadRequestException('Missing stripe-signature header');
+    }
+
+    if (!this.webhookSecret) {
+      throw new BadRequestException('Webhook secret not configured');
     }
 
     let event: Stripe.Event;
 
     try {
-      // Get raw body from request
       const rawBody = req.body;
-      
-      // Verify webhook signature
-      event = this.stripe.webhooks.constructEvent(
-        rawBody,
-        signature,
-        this.webhookSecret,
-      );
+      event = stripe.webhooks.constructEvent(rawBody, signature, this.webhookSecret);
     } catch (err) {
       console.error('Webhook signature verification failed:', err.message);
       throw new BadRequestException(`Webhook Error: ${err.message}`);

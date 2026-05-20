@@ -1,13 +1,13 @@
 import {
   Controller,
   Get,
-  Post,
   Put,
   Delete,
   Body,
   Param,
   UseGuards,
   Request,
+  ForbiddenException,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -19,27 +19,11 @@ import {
 } from "@nestjs/swagger";
 import { UserService } from "./user.service";
 import { AuthGuard } from "../auth/auth.guard";
-import generateToken from "../utils/generateToken";
 
 @ApiTags("users")
 @Controller("users")
 export class UserController {
   constructor(private userService: UserService) {}
-
-  @Get()
-  findAll() {
-    return this.userService.findAll();
-  }
-
-  @Post()
-  create(@Body() userData: any) {
-    return this.userService.create(userData);
-  }
-
-  @Post("search")
-  search(@Body() searchCriteria: any) {
-    return this.userService.search(searchCriteria);
-  }
 
   @Get("me")
   @UseGuards(AuthGuard)
@@ -55,25 +39,40 @@ export class UserController {
     const user = await this.userService.findById(userId);
     return {
       status: "success",
-      data: {
-        user,
-        token: generateToken(userId),
-      },
+      data: { user },
     };
   }
 
   @Get(":id")
-  findById(@Param("id") id: string) {
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth("JWT-auth")
+  findById(@Param("id") id: string, @Request() req) {
+    const requesterId = req.user._id.toString();
+    if (requesterId !== id) {
+      throw new ForbiddenException("Access denied");
+    }
     return this.userService.findById(id);
   }
 
   @Put(":id")
-  update(@Param("id") id: string, @Body() updateData: any) {
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth("JWT-auth")
+  update(@Param("id") id: string, @Body() updateData: any, @Request() req) {
+    const requesterId = req.user._id.toString();
+    if (requesterId !== id) {
+      throw new ForbiddenException("Access denied");
+    }
     return this.userService.update(id, updateData);
   }
 
   @Delete(":id")
-  delete(@Param("id") id: string) {
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth("JWT-auth")
+  delete(@Param("id") id: string, @Request() req) {
+    const requesterId = req.user._id.toString();
+    if (requesterId !== id) {
+      throw new ForbiddenException("Access denied");
+    }
     return this.userService.delete(id);
   }
 

@@ -5,6 +5,7 @@ import { IoAdapter } from "@nestjs/platform-socket.io";
 import { AppModule } from "./app.module";
 import * as dotenv from "dotenv";
 import * as express from "express";
+import helmet from "helmet";
 import type { Connection } from "mongoose";
 import { getConnectionToken } from "@nestjs/mongoose";
 import logger from "./utils/logger";
@@ -27,6 +28,8 @@ async function bootstrap() {
     console.log("MongoDB connection error:", err);
     logger.error(`MongoDB connection error: ${err.message}`, err);
   });
+
+  app.use(helmet());
 
   // Configure WebSocket adapter for Socket.io
   app.useWebSocketAdapter(new IoAdapter(app));
