@@ -4,6 +4,7 @@ import {
   ConflictException,
   BadRequestException,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import { User } from "../user/user.model";
@@ -21,6 +22,7 @@ import {
 import { JwtService } from "@nestjs/jwt";
 import { PlanService } from "../plan/plan.service";
 import { isMongoObjectIdString } from "../utils/mongoObjectId";
+import { applyAdminPrivileges } from "./admin-privileges";
 
 @Injectable()
 export class AuthService {
@@ -28,8 +30,28 @@ export class AuthService {
     @InjectModel(User.name) private userModel: Model<IUserData>,
     @InjectModel(Plan.name) private planModel: Model<IPlan>,
     private jwtService: JwtService,
-    private planService: PlanService
+    private planService: PlanService,
+    private configService: ConfigService
   ) {}
+
+  private async withAdminPrivileges<T extends { user: IUserData }>(
+    payload: T
+  ): Promise<T> {
+    payload.user = await applyAdminPrivileges(
+      payload.user,
+      this.userModel,
+      this.configService
+    );
+    return payload;
+  }
+
+  private async privilegeUser(user: unknown): Promise<IUserData> {
+    return applyAdminPrivileges(
+      user as IUserData,
+      this.userModel,
+      this.configService
+    );
+  }
 
   async register(data: {
     email: string;
@@ -67,13 +89,15 @@ export class AuthService {
         )
       : null;
 
+    const authPayload = await this.withAdminPrivileges({
+      user: user as IUserData,
+      plan: initialPlan,
+      token: generateToken((user as any)._id.toString()),
+    });
+
     return {
       status: "success",
-      data: {
-        user: user,
-        plan: initialPlan,
-        token: generateToken((user as any)._id.toString()),
-      },
+      data: authPayload,
     };
   }
 
@@ -85,12 +109,14 @@ export class AuthService {
       (user as any).comparePassword &&
       (await (user as any).comparePassword(password))
     ) {
+      const authPayload = await this.withAdminPrivileges({
+        user: user as IUserData,
+        token: generateToken((user as any)._id.toString()),
+      });
+
       return {
         status: "success",
-        data: {
-          user: user,
-          token: generateToken((user as any)._id.toString()),
-        },
+        data: authPayload,
       };
     } else {
       throw new UnauthorizedException("Invalid email or password");
@@ -162,14 +188,15 @@ export class AuthService {
     if (existingUser) {
       if (!(existingUser as any).kycCompleted) {
         // User started signup but never finished KYC — let them continue
+        const data = await this.withAdminPrivileges({
+          user: existingUser as IUserData,
+          plan: null,
+          token: generateToken(existingUser._id.toString()),
+          isNewUser: true,
+        });
         return {
           status: "success",
-          data: {
-            user: existingUser,
-            plan: null,
-            token: generateToken(existingUser._id.toString()),
-            isNewUser: true,
-          },
+          data,
         };
       }
       throw new ConflictException(
@@ -232,14 +259,16 @@ export class AuthService {
       "en"
     );
 
+    const data = await this.withAdminPrivileges({
+      user: user as IUserData,
+      plan: initialPlan,
+      token: generateToken(user._id.toString()),
+      isNewUser: true,
+    });
+
     return {
       status: "success",
-      data: {
-        user: user,
-        plan: initialPlan,
-        token: generateToken(user._id.toString()),
-        isNewUser: true,
-      },
+      data,
     };
   }
 
@@ -467,7 +496,7 @@ export class AuthService {
 
     return {
       token: generateToken(user._id.toString()),
-      user: user,
+      user: await this.privilegeUser(user),
     };
   }
 
@@ -553,13 +582,15 @@ export class AuthService {
       "en"
     );
 
+    const data = await this.withAdminPrivileges({
+      user: user as IUserData,
+      plan: initialPlan,
+      token: generateToken(user._id.toString()),
+    });
+
     return {
       status: "success",
-      data: {
-        user: user,
-        plan: initialPlan,
-        token: generateToken(user._id.toString()),
-      },
+      data,
     };
   }
 
@@ -589,7 +620,7 @@ export class AuthService {
 
     return {
       token: generateToken(user._id.toString()),
-      user: user,
+      user: await this.privilegeUser(user),
     };
   }
 
@@ -601,12 +632,17 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException("Unauthorized");
     }
+    const privilegedUser = await applyAdminPrivileges(
+      user as IUserData,
+      this.userModel,
+      this.configService
+    );
     const plan = await this.planModel.findOne({ userId: user._id });
     // Plan may be null for OAuth users who haven't completed onboarding
     return {
       status: "success",
       data: {
-        user: user,
+        user: privilegedUser,
         plan: plan || null,
         token: generateToken(userId),
       },

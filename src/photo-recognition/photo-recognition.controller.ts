@@ -14,12 +14,12 @@ import logger from "../utils/logger";
 @ApiTags("Photo Recognition")
 @Controller("photo")
 @UseGuards(AuthGuard, SubscriptionGuard)
-@RequiresFeature("photoRecognition")
 @ApiBearerAuth("JWT-auth")
 export class PhotoRecognitionController {
   constructor(private readonly photoRecognitionService: PhotoRecognitionService) {}
 
   @Post("recognize")
+  @RequiresFeature("photoRecognition")
   @ApiOperation({
     summary: "Recognize meal from photo",
     description: "Uses AI vision to identify a meal from a base64 encoded photo",

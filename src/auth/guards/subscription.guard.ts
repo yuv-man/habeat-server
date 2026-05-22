@@ -13,7 +13,7 @@ import { IUserData } from "../../types/interfaces";
 import {
   SubscriptionTier,
   FeatureKey,
-  hasFeatureAccess,
+  hasFeatureAccessForUser,
 } from "../../enums/enumSubscription";
 
 export const REQUIRED_FEATURE_KEY = "requiredFeature";
@@ -49,7 +49,10 @@ export class SubscriptionGuard implements CanActivate {
       throw new ForbiddenException("User not found");
     }
 
-    const user = await this.userModel.findById(userId).select("subscriptionTier").lean();
+    const user = await this.userModel
+      .findById(userId)
+      .select("subscriptionTier role")
+      .lean();
 
     if (!user) {
       throw new ForbiddenException("User not found");
@@ -58,8 +61,9 @@ export class SubscriptionGuard implements CanActivate {
     const userTier =
       ((user as any).subscriptionTier as SubscriptionTier) ||
       SubscriptionTier.FREE;
+    const role = (user as any).role as string | undefined;
 
-    if (!hasFeatureAccess(userTier, requiredFeature)) {
+    if (!hasFeatureAccessForUser(userTier, requiredFeature, role)) {
       throw new ForbiddenException(
         `This feature requires a ${requiredFeature} subscription. Please upgrade your plan.`
       );

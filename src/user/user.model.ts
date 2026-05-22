@@ -186,6 +186,12 @@ const userSchemaDefinition = {
   bmr: { type: Number, required: false }, // Basal Metabolic Rate
   tdee: { type: Number, required: false }, // Total Daily Energy Expenditure
   idealWeight: { type: Number, required: false },
+  role: {
+    type: String,
+    enum: ["user", "admin"],
+    default: "user",
+    required: false,
+  },
   // Subscription tier
   subscriptionTier: {
     type: String,

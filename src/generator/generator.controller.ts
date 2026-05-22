@@ -19,6 +19,10 @@ import { ConfigService } from "@nestjs/config";
 import { GeneratorService } from "./generator.service";
 import { AuthGuard } from "../auth/auth.guard";
 import {
+  SubscriptionGuard,
+  RequiresFeature,
+} from "../auth/guards/subscription.guard";
+import {
   GenerateWeeklyMealPlanDto,
   GenerateRecipeDto,
   GenerateGoalDto,
@@ -163,6 +167,8 @@ Optional parameters that can be passed as query strings or in the request body. 
   }
 
   @Post("meal-suggestions/:userId")
+  @UseGuards(SubscriptionGuard)
+  @RequiresFeature("aiMealSuggestions")
   @ApiOperation({
     summary: "Generate meal suggestions based on user and meal criteria",
   })

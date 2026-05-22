@@ -6,6 +6,7 @@ import { ConfigModule, ConfigService } from "@nestjs/config";
 import { AuthController } from "./auth.controller";
 import { AuthService } from "./auth.service";
 import { AuthGuard } from "./auth.guard";
+import { SubscriptionGuard } from "./guards/subscription.guard";
 import { JwtStrategy } from "./jwt.strategy";
 import { User, UserSchema } from "../user/user.model";
 import { Plan, PlanSchema } from "../plan/plan.model";
@@ -32,7 +33,7 @@ import { PlanModule } from "../plan/plan.module";
     forwardRef(() => PlanModule),
   ],
   controllers: [AuthController],
-  providers: [AuthService, AuthGuard, JwtStrategy],
-  exports: [AuthService, AuthGuard, JwtModule],
+  providers: [AuthService, AuthGuard, JwtStrategy, SubscriptionGuard],
+  exports: [AuthService, AuthGuard, JwtModule, SubscriptionGuard],
 })
 export class AuthModule {}

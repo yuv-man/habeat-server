@@ -111,6 +111,7 @@ export interface IChallenge {
 }
 
 export interface IUserData {
+  _id?: mongoose.Types.ObjectId | string;
   email: string;
   password: string;
   name: string;
@@ -139,6 +140,7 @@ export interface IUserData {
   bmr?: number; // Basal Metabolic Rate
   tdee?: number; // Total Daily Energy Expenditure
   idealWeight?: number;
+  role?: "user" | "admin";
   subscriptionTier?: SubscriptionTier;
   // Stripe fields
   stripeCustomerId?: string;
