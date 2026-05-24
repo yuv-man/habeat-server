@@ -814,6 +814,9 @@ export class CBTService {
       if (bio.stepCount !== undefined && bio.stepCount < 3000) score += 0.05;
     }
 
+    // Self-report is a strong signal, but weighted alongside others rather than overriding them
+    if (correlation.wasEmotionalEating) score += 0.30;
+
     return Math.min(1.0, score);
   }
 
@@ -821,8 +824,9 @@ export class CBTService {
     raw: number,
     wasEmotionalEating: boolean
   ): number {
-    if (wasEmotionalEating) return Math.max(raw, 0.85);
-    return Math.min(raw, 0.30);
+    // If the user explicitly said this wasn't emotional eating, trust them
+    if (!wasEmotionalEating) return Math.min(raw, 0.35);
+    return raw;
   }
 
   private async buildPatternMap(

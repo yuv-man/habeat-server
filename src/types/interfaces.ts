@@ -159,6 +159,8 @@ export interface IUserData {
   deviceTokens?: string[]; // FCM/APNs tokens for push notifications
   // Behavioural meal learning
   mealLearningProfile?: IMealLearningProfile;
+  // Sensory & Routine Profile
+  sensoryProfile?: ISensoryProfile | null;
   createdAt?: Date;
   updatedAt?: Date;
   comparePassword?: (candidatePassword: string) => Promise<boolean>;
@@ -168,6 +170,22 @@ export interface IMealLearningProfile {
   completedMeals: Array<{ name: string; count: number; lastEaten: Date }>;
   swappedMeals: Array<{ name: string; count: number }>;
   cuisineScores: Record<string, number>;
+}
+
+export type TextureKey = 'mushy' | 'crunchy' | 'chewy' | 'slimy' | 'grainy' | 'gooey';
+export type SmellKey = 'pungent' | 'fermented' | 'spicy' | 'fishy';
+
+export interface ISensoryProfile {
+  enabled: boolean;
+  safeFoods: string[];
+  avoidedFoods: string[];
+  avoidedTextures: TextureKey[];
+  avoidedSmells: SmellKey[];
+  temperaturePreference: 'warm' | 'cold' | 'room_temp' | 'any';
+  repetitionMode: 'low' | 'medium' | 'high';
+  foodChaining: boolean;
+  routineLock: boolean;
+  interoceptionCheckIns: boolean;
 }
 
 export interface IMeal {

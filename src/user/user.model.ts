@@ -155,6 +155,30 @@ const notificationPreferencesSchema = new Schema(
   { _id: false }
 );
 
+const sensoryProfileSchema = new Schema(
+  {
+    enabled: { type: Boolean, default: true },
+    safeFoods: { type: [String], default: [] },
+    avoidedFoods: { type: [String], default: [] },
+    avoidedTextures: { type: [String], default: [] },
+    avoidedSmells: { type: [String], default: [] },
+    temperaturePreference: {
+      type: String,
+      enum: ["warm", "cold", "room_temp", "any"],
+      default: "any",
+    },
+    repetitionMode: {
+      type: String,
+      enum: ["low", "medium", "high"],
+      default: "medium",
+    },
+    foodChaining: { type: Boolean, default: false },
+    routineLock: { type: Boolean, default: false },
+    interoceptionCheckIns: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
 // project schema - All fields are optional for debugging
 const userSchemaDefinition = {
   name: { type: String, required: false },
@@ -270,6 +294,12 @@ const userSchemaDefinition = {
     type: mealLearningProfileSchema,
     required: false,
     default: () => ({ completedMeals: [], swappedMeals: [], cuisineScores: new Map() }),
+  },
+  // Sensory & Routine Profile
+  sensoryProfile: {
+    type: sensoryProfileSchema,
+    required: false,
+    default: null,
   },
 };
 
