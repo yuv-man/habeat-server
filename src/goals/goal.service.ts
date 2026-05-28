@@ -151,7 +151,16 @@ export class GoalService {
     milestone.completed = completed;
     if (completed && !milestone.completedDate) {
       milestone.completedDate = new Date().toISOString().split("T")[0];
+    } else if (!completed) {
+      milestone.completedDate = undefined;
     }
+
+    // Sync goal.current to the highest completed milestone's targetValue
+    const completedMilestones = goal.milestones.filter((m) => m.completed);
+    goal.current =
+      completedMilestones.length > 0
+        ? Math.max(...completedMilestones.map((m) => m.targetValue))
+        : 0;
 
     await goal.save();
 
