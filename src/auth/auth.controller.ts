@@ -789,7 +789,7 @@ export class AuthController {
         data: {
           user: data.data.user,
           plan: data.data.plan,
-          token: body.accessToken,
+          token: data.data.token,
         },
       });
       return;

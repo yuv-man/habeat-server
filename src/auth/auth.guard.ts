@@ -56,6 +56,11 @@ export class AuthGuard implements CanActivate {
       request.user = user;
     } catch (error) {
       logger.error("Auth guard error:", error);
+      if (error instanceof Error && error.message === "invalid algorithm") {
+        throw new UnauthorizedException(
+          "Invalid token type. Please sign in again.",
+        );
+      }
       throw new UnauthorizedException("Not authorized, token failed");
     }
 
