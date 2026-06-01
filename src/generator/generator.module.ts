@@ -9,6 +9,7 @@ import { Meal, MealSchema } from "src/meal/meal.model";
 import { Goal, GoalSchema } from "../goals/goal.model";
 import { DailyProgress, DailyProgressSchema } from "../progress/progress.model";
 import { ShoppingList, ShoppingListSchema } from "../shopping/shopping-list.model";
+import { MoodEntry, MoodEntrySchema } from "../cbt/cbt.model";
 import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 import { StreamingGeneratorService } from "./streaming/streaming.service";
 import { GeneratorGateway } from "./streaming/generator.gateway";
@@ -23,6 +24,7 @@ import { UserModule } from "../user/user.module";
       { name: Goal.name, schema: GoalSchema },
       { name: DailyProgress.name, schema: DailyProgressSchema },
       { name: ShoppingList.name, schema: ShoppingListSchema },
+      { name: MoodEntry.name, schema: MoodEntrySchema },
     ]),
     JwtModule.register({
       secret: process.env.JWT_SECRET,

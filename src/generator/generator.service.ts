@@ -10,6 +10,7 @@ import { User } from "../user/user.model";
 import { Goal } from "../goals/goal.model";
 import { DailyProgress } from "../progress/progress.model";
 import { ShoppingList } from "../shopping/shopping-list.model";
+import { MoodEntry, IMoodEntry } from "../cbt/cbt.model";
 import aiService from "./generate.service";
 import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 import logger from "../utils/logger";
@@ -55,6 +56,7 @@ export class GeneratorService {
     private progressModel: Model<IDailyProgress>,
     @InjectModel(ShoppingList.name)
     private shoppingListModel: Model<IShoppingList>,
+    @InjectModel(MoodEntry.name) private moodModel: Model<IMoodEntry>,
     private usdaNutritionService: UsdaNutritionService
   ) {}
 
@@ -269,6 +271,12 @@ export class GeneratorService {
       );
     }
 
+    // Fetch mood context from the last 7 days
+    const moodContext = await this.buildMoodContext(userId);
+    if (moodContext) {
+      logger.info(`[generateWeeklyMealPlan] Mood context: ${moodContext}`);
+    }
+
     // Pre-calculate user metrics (shared by both phases)
     const bmr = calculateBMR(userData.weight, userData.height, userData.age, userData.gender);
     const tdee = calculateTDEE(bmr, userData.workoutFrequency);
@@ -300,7 +308,8 @@ export class GeneratorService {
       useMock,
       activeGoals,
       planTemplate,
-      [today] // datesOverride: only today
+      [today], // datesOverride: only today
+      moodContext
     );
 
     if (!mealPlan?.weeklyPlan || Object.keys(mealPlan.weeklyPlan).length === 0) {
@@ -368,7 +377,8 @@ export class GeneratorService {
           activeGoals,
           planTemplate,
           targetCalories,
-          macros
+          macros,
+          moodContext
         ).catch((err) =>
           logger.error(
             `[Phase2] Background generation failed for user ${userId}: ${err?.message || err}`
@@ -424,7 +434,8 @@ export class GeneratorService {
     goals: IGoal[],
     planTemplate: string | undefined,
     targetCalories: number,
-    macros: { protein: number; carbs: number; fat: number }
+    macros: { protein: number; carbs: number; fat: number },
+    moodContext?: string | null
   ): Promise<void> {
     logger.info(
       `[Phase2] Generating ${remainingDates.length} remaining days for user ${userId}: ` +
@@ -439,7 +450,8 @@ export class GeneratorService {
       false,
       goals,
       planTemplate,
-      remainingDates // datesOverride: only remaining days
+      remainingDates, // datesOverride: only remaining days
+      moodContext
     );
 
     if (!mealPlan?.weeklyPlan || Object.keys(mealPlan.weeklyPlan).length === 0) {
@@ -1481,5 +1493,65 @@ export class GeneratorService {
         originalMealName: originalMeal.name || "Unknown meal",
       },
     };
+  }
+
+  // Build a short mood context string from the last 7 days of mood entries.
+  // Returns null when there is no mood data.
+  private async buildMoodContext(userId: string): Promise<string | null> {
+    try {
+      const since = new Date();
+      since.setDate(since.getDate() - 7);
+      const sinceKey = since.toISOString().split("T")[0];
+
+      const entries = await this.moodModel
+        .find({ userId: new mongoose.Types.ObjectId(userId), date: { $gte: sinceKey } })
+        .lean()
+        .exec();
+
+      if (!entries.length) return null;
+
+      // Average mood and stress levels
+      const avgMood = entries.reduce((s, e) => s + e.moodLevel, 0) / entries.length;
+      const stressEntries = entries.filter((e) => e.stressLevel != null);
+      const avgStress = stressEntries.length
+        ? stressEntries.reduce((s, e) => s + (e.stressLevel ?? 0), 0) / stressEntries.length
+        : null;
+
+      // Dominant mood category
+      const categoryCounts: Record<string, number> = {};
+      for (const e of entries) {
+        categoryCounts[e.moodCategory] = (categoryCounts[e.moodCategory] || 0) + 1;
+      }
+      const dominantCategory = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1])[0][0];
+
+      // Build context sentence
+      const moodDesc = avgMood >= 4 ? "generally positive" : avgMood >= 3 ? "mixed" : "low";
+      let context = `The user's mood over the past week has been ${moodDesc} (avg ${avgMood.toFixed(1)}/5, dominant state: ${dominantCategory}).`;
+
+      // Specific dietary guidance per mood state
+      const guidance: Record<string, string> = {
+        stressed:  "Prioritise magnesium-rich foods (leafy greens, nuts, seeds) and complex carbohydrates to support serotonin. Avoid heavy caffeine.",
+        anxious:   "Include calming, anti-inflammatory foods: omega-3 rich fish, walnuts, chamomile. Limit sugar spikes and caffeine.",
+        sad:       "Include mood-boosting foods: oily fish (omega-3), dark chocolate, fermented foods (probiotics), vitamin-D rich foods.",
+        angry:     "Include calming anti-inflammatory ingredients: turmeric, omega-3, magnesium. Avoid high-sugar or processed meals.",
+        tired:     "Prioritise iron-rich foods, B-vitamins, and complex carbs for sustained energy. Avoid heavy, slow-digesting meals.",
+        happy:     "Maintain the positive state with balanced, nutritious meals. Good time to introduce new healthy ingredients.",
+        calm:      "Maintain balance with varied, nutritious meals. Lean proteins and whole grains work well.",
+        energetic: "Support high energy with adequate complex carbs and lean proteins. Keep meals light and well-balanced.",
+        neutral:   "",
+      };
+
+      const dietNote = guidance[dominantCategory] ?? "";
+      if (dietNote) context += ` ${dietNote}`;
+
+      if (avgStress !== null && avgStress >= 4) {
+        context += " Stress levels have been high — include stress-reducing snacks like nuts, seeds, and herbal teas.";
+      }
+
+      return context;
+    } catch (err) {
+      logger.warn(`[buildMoodContext] Failed to fetch mood data: ${err}`);
+      return null;
+    }
   }
 }

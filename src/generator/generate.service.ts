@@ -436,6 +436,7 @@ const buildDayPrompt = (
   targetCalories: number,
   macros: { protein: number; carbs: number; fat: number },
   goalContextStr: string,
+  moodContext?: string,
 ): string => {
   const bCal = Math.round(targetCalories * 0.25);
   const lCal = Math.round(targetCalories * 0.35);
@@ -463,6 +464,7 @@ DAILY TARGETS: ${targetCalories} kcal | P:${macros.protein}g C:${macros.carbs}g 
 AVOID: ${avoidList}
 PREFER: ${preferList}
 ${goalContextStr ? `STYLE: ${goalContextStr.substring(0, 200)}` : ""}
+${moodContext ? `MOOD & WELLNESS: ${moodContext}` : ""}
 DAY: ${dateStr} (${dayName}) | Style: ${cuisine} | Primary protein: ${protein}
 ${hasWorkout ? "WORKOUT: Include 1 workout today." : "REST DAY: No workout."}
 CRITICAL: Use SIMPLE, everyday home-cooked meals that normal people make. Examples: scrambled eggs with toast, oatmeal with banana, grilled chicken with rice and vegetables, pasta with tomato sauce, chicken soup, beef stir-fry with rice, tuna sandwich, turkey wrap. NO exotic restaurant dishes.
@@ -494,6 +496,7 @@ const buildMultiDayPrompt = (
   targetCalories: number,
   macros: { protein: number; carbs: number; fat: number },
   goalContextStr: string,
+  moodContext?: string,
 ): string => {
   const bCal = Math.round(targetCalories * 0.25);
   const lCal = Math.round(targetCalories * 0.35);
@@ -536,6 +539,7 @@ DAILY TARGETS: ${targetCalories} kcal | P:${macros.protein}g C:${macros.carbs}g 
 AVOID: ${avoidList}
 PREFER: ${preferList}
 ${goalContextStr ? `STYLE: ${goalContextStr.substring(0, 200)}` : ""}
+${moodContext ? `MOOD & WELLNESS: ${moodContext}` : ""}
 
 DAYS TO GENERATE (each with DIFFERENT meal style and protein):
 ${daySpecs}
@@ -687,6 +691,7 @@ const generateMealPlanWithGemini = async (
   goals: IGoal[] = [],
   planTemplate?: string,
   datesOverride?: Date[], // Optional: generate only these specific dates (two-phase support)
+  moodContext?: string,
 ): Promise<MealPlanResponse> => {
   const models = await getAvailableGeminiModelsCached(apiKey);
 
@@ -787,6 +792,7 @@ const generateMealPlanWithGemini = async (
       targetCalories,
       macros,
       goalContextStr,
+      moodContext,
     );
 
     const batchResults = await generateMultiDayPlan(
@@ -819,6 +825,7 @@ const generateMealPlanWithGemini = async (
           targetCalories,
           macros,
           goalContextStr,
+          moodContext,
         );
 
         const result = await generateSingleDayPlan(
@@ -878,6 +885,7 @@ const generateMealPlanWithAI = async (
   goals: IGoal[] = [],
   planTemplate?: string,
   datesOverride?: Date[], // Optional: generate only these specific dates
+  moodContext?: string | null,
 ): Promise<MealPlanResponse> => {
   try {
     if (useMock) {
@@ -910,6 +918,7 @@ const generateMealPlanWithAI = async (
           goals,
           planTemplate,
           datesOverride,
+          moodContext ?? undefined,
         );
       } catch (geminiError: unknown) {
         logger.warn(
@@ -931,6 +940,7 @@ const generateMealPlanWithAI = async (
         false,
         goals,
         planTemplate,
+        moodContext ?? undefined,
       );
     } catch (llamaError: unknown) {
       throw new Error(
@@ -1415,6 +1425,7 @@ const generateMealPlanWithLlama2 = async (
   useMock: boolean = false,
   goals: IGoal[] = [],
   planTemplate?: string,
+  moodContext?: string,
 ): Promise<MealPlanResponse> => {
   try {
     if (useMock) {
@@ -1441,8 +1452,10 @@ const generateMealPlanWithLlama2 = async (
     const ollamaModel = process.env.OLLAMA_MODEL || "phi";
     logger.info(`[Llama] Using model: ${ollamaModel}`);
 
+    const moodSection = moodContext ? `\n\n====== MOOD & WELLNESS CONTEXT ======\n${moodContext}` : "";
     const fullPrompt =
       prompt +
+      moodSection +
       "\n\nReturn ONLY valid JSON. No variable assignments, code, or explanations.";
 
     const isWeeklyPlan = planType === "weekly";
