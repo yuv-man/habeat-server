@@ -21,6 +21,7 @@ import { PhotoRecognitionModule } from "./photo-recognition/photo-recognition.mo
 import { SubscriptionModule } from "./subscription/subscription.module";
 import { CBTModule } from "./cbt/cbt.module";
 import { SocialModule } from "./social/social.module";
+import { EatingProfileModule } from "./eating-profile/eating-profile.module";
 import logger from "./utils/logger";
 
 @Module({
@@ -93,6 +94,7 @@ import logger from "./utils/logger";
     SubscriptionModule,
     CBTModule,
     SocialModule,
+    EatingProfileModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

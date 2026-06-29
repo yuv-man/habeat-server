@@ -197,6 +197,8 @@ const userSchemaDefinition = {
   foodPreferences: { type: [String], required: false, default: [] }, // food preferences from KYC (e.g., "Italian", "Seafood")
   favoriteMeals: { type: [String], required: false, default: [] }, // actual meal IDs that user has favorited
   dislikes: { type: [String], required: false, default: [] }, // disliked meals/foods
+  foodRelationship: { type: String, required: false, default: "" },
+  emotionalTriggers: { type: [String], required: false, default: [] },
   fastingHours: { type: Number, required: false }, // For 8-16 fasting diet type
   fastingStartTime: { type: String, required: false }, // Fasting start time
   preferences: {

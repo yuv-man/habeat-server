@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, NotFoundException, Inject, forwardRef } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import mongoose from "mongoose";
@@ -20,6 +20,7 @@ import {
   generateTextWithRateLimit,
   getErrorMessage,
 } from "../utils/gemini-rate-limiter";
+import { EatingProfileService } from "../eating-profile/eating-profile.service";
 
 interface ChatContext {
   currentScreen?: string;
@@ -60,7 +61,9 @@ export class ChatAIService {
     @InjectModel(Plan.name) private planModel: Model<IPlan>,
     @InjectModel(Goal.name) private goalModel: Model<IGoal>,
     @InjectModel(DailyProgress.name)
-    private progressModel: Model<IDailyProgress>
+    private progressModel: Model<IDailyProgress>,
+    @Inject(forwardRef(() => EatingProfileService))
+    private eatingProfileService: EatingProfileService,
   ) {}
 
   /**
@@ -286,11 +289,14 @@ IMPORTANT:
 
     try {
       // Build context
-      const { user, plan, goals, todayProgress, todayMeals } =
-        await this.buildContext(userId);
+      const [{ user, plan, goals, todayProgress, todayMeals }, eatingProfile] =
+        await Promise.all([
+          this.buildContext(userId),
+          this.eatingProfileService.getProfile(userId),
+        ]);
 
       // Generate system prompt
-      const systemPrompt = this.generateSystemPrompt(
+      let systemPrompt = this.generateSystemPrompt(
         user,
         plan,
         goals,
@@ -298,6 +304,10 @@ IMPORTANT:
         todayMeals,
         context
       );
+
+      if (eatingProfile) {
+        systemPrompt += `\n## Eating Profile:\n${this.eatingProfileService.profileSummaryText(eatingProfile)}\n`;
+      }
 
       const fullPrompt = `${systemPrompt}
 

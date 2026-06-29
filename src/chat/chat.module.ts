@@ -10,6 +10,7 @@ import { Goal, GoalSchema } from "../goals/goal.model";
 import { DailyProgress, DailyProgressSchema } from "../progress/progress.model";
 import { PlanModule } from "../plan/plan.module";
 import { ProgressModule } from "../progress/progress.module";
+import { EatingProfileModule } from "../eating-profile/eating-profile.module";
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { ProgressModule } from "../progress/progress.module";
     ]),
     forwardRef(() => PlanModule),
     forwardRef(() => ProgressModule),
+    forwardRef(() => EatingProfileModule),
   ],
   controllers: [ChatController],
   providers: [ChatService, ChatAIService],

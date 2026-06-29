@@ -915,7 +915,7 @@ export class GeneratorService {
       const aiCriteria = {
         ...mealCriteria,
         numberOfSuggestions,
-        aiRules: `Generate ${numberOfSuggestions} different variations of "${mealNameFromRules}". Each variation should be unique (e.g., different cooking methods, seasonings, sides, or preparations) but all based on "${mealNameFromRules}". Examples: "Grilled ${mealNameFromRules}", "Pan-Seared ${mealNameFromRules}", "${mealNameFromRules} with Herbs", etc.`,
+        aiRules: `Generate ${numberOfSuggestions} different ${mealCriteria.category} variations of "${mealNameFromRules}". Each variation should be unique (e.g., different cooking methods, seasonings, sides, or preparations) but all based on "${mealNameFromRules}". Examples: "Grilled ${mealNameFromRules}", "Pan-Seared ${mealNameFromRules}", "${mealNameFromRules} with Herbs", etc.`,
       };
 
       const aiMeals = await aiService.generateMealSuggestions(aiCriteria, language);
@@ -986,7 +986,7 @@ export class GeneratorService {
         const additionalCriteria = {
           ...mealCriteria,
           numberOfSuggestions: needed,
-          aiRules: `Generate ${needed} different variations of "${mealNameFromRules}". Each variation MUST include "${mealNameFromRules}" in the name. Examples: "Grilled ${mealNameFromRules}", "Pan-Seared ${mealNameFromRules}", "${mealNameFromRules} with Herbs".`,
+          aiRules: `Generate ${needed} different ${mealCriteria.category} variations of "${mealNameFromRules}". Each variation MUST include "${mealNameFromRules}" in the name. Examples: "Grilled ${mealNameFromRules}", "Pan-Seared ${mealNameFromRules}", "${mealNameFromRules} with Herbs".`,
         };
         
         const additionalMeals = await aiService.generateMealSuggestions(additionalCriteria, language);

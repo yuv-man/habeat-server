@@ -22,9 +22,12 @@ import {
   CompleteExerciseDto,
   LinkMoodToMealDto,
 } from "./cbt.dto";
+import { IUserData } from "../types/interfaces";
+import { User } from "../user/user.model";
 import logger from "../utils/logger";
 import { ChallengeService } from "../challenge/challenge.service";
 import { EngagementService } from "../engagement/engagement.service";
+import { EatingProfileService } from "../eating-profile/eating-profile.service";
 
 // Built-in exercise library
 const EXERCISE_LIBRARY = [
@@ -258,10 +261,13 @@ export class CBTService {
     private exerciseCompletionModel: Model<ICBTExerciseCompletion>,
     @InjectModel(MealMoodCorrelation.name)
     private mealMoodModel: Model<IMealMoodCorrelation>,
+    @InjectModel(User.name) private userModel: Model<IUserData>,
     @Inject(forwardRef(() => ChallengeService))
     private challengeService: ChallengeService,
     @Inject(forwardRef(() => EngagementService))
-    private engagementService: EngagementService
+    private engagementService: EngagementService,
+    @Inject(forwardRef(() => EatingProfileService))
+    private eatingProfileService: EatingProfileService,
   ) {}
 
   // ============== MOOD ENDPOINTS ==============
@@ -729,6 +735,11 @@ export class CBTService {
       `Meal-mood correlation logged for user ${userId}: ${dto.mealName}`
     );
 
+    // Trigger eating profile update (fire-and-forget)
+    this.eatingProfileService.onNewCorrelation(userId).catch((e) =>
+      logger.error(`[CBTService] Eating profile update failed: ${e}`)
+    );
+
     // Update challenge progress
     try {
       await this.challengeService.onMealMoodLinked(userId);
@@ -836,7 +847,7 @@ export class CBTService {
       userId: new mongoose.Types.ObjectId(userId),
     });
 
-    if (totalCount < 20) return new Map();
+    if (totalCount < 5) return new Map();
 
     const history = await this.mealMoodModel
       .find({ userId: new mongoose.Types.ObjectId(userId) })
@@ -875,7 +886,7 @@ export class CBTService {
     patternMap: Map<string, number>
   ): string | null {
     const top = [...patternMap.entries()]
-      .filter(([, count]) => count >= 3)
+      .filter(([, count]) => count >= 2)
       .sort(([, a], [, b]) => b - a)[0];
 
     if (!top) return null;
@@ -939,19 +950,25 @@ export class CBTService {
   ) {
     const now = new Date();
     const startDate = new Date();
-
+    const days = period === "week" ? 7 : 30;
     if (period === "week") {
       startDate.setDate(now.getDate() - 7);
     } else {
       startDate.setMonth(now.getMonth() - 1);
     }
-
     const startDateStr = startDate.toISOString().split("T")[0];
     const endDateStr = now.toISOString().split("T")[0];
 
-    const [correlations, emotionalMoods, patternMap, weeklyTrend] =
+    const [correlations, moodEntries, mealLinkedMoods, user, patternMap, weeklyTrend] =
       await Promise.all([
         this.mealMoodModel
+          .find({
+            userId: new mongoose.Types.ObjectId(userId),
+            date: { $gte: startDateStr, $lte: endDateStr },
+          })
+          .lean()
+          .exec(),
+        this.moodModel
           .find({
             userId: new mongoose.Types.ObjectId(userId),
             date: { $gte: startDateStr, $lte: endDateStr },
@@ -966,14 +983,13 @@ export class CBTService {
           })
           .lean()
           .exec(),
+        this.userModel.findById(userId).lean().exec(),
         this.buildPatternMap(userId),
         this.calculateWeeklyTrend(userId),
       ]);
 
     const totalMeals = correlations.length;
-    const scores = correlations.map((c) =>
-      this.calculateFinalScore(c, patternMap)
-    );
+    const scores = correlations.map((c) => this.calculateFinalScore(c, patternMap));
     const scoreSum = scores.reduce((s, x) => s + x, 0);
 
     const emotionalEatingPercentage =
@@ -981,28 +997,70 @@ export class CBTService {
     const mindfulEatingScore = 100 - emotionalEatingPercentage;
     const emotionalEatingInstances = scores.filter((s) => s > 0.5).length;
 
+    // ── Satiety rate: meals eaten for genuine hunger (hungerLevelBefore ≥ 3) ──
+    const hungerDrivenMeals = correlations.filter(
+      (c) => (c.hungerLevelBefore ?? 0) >= 3
+    ).length;
+    const satietyRate =
+      totalMeals > 0 ? Math.round((hungerDrivenMeals / totalMeals) * 100) : 0;
+
+    // ── Triggers: derive from emotional eating correlations + meal-linked mood entries ──
+    // Maps moodCategory → eating trigger vocabulary
+    const MOOD_TO_EATING_TRIGGER: Partial<Record<MoodCategory, string>> = {
+      stressed: "stress",
+      anxious: "anxiety",
+      sad: "sadness",
+      tired: "tiredness",
+      angry: "stress",
+      neutral: "habit",
+    };
+
     const triggerCounts: Record<string, number> = {};
-    const emotionCounts: Record<string, number> = {};
-    emotionalMoods.forEach((mood) => {
-      mood.triggers?.forEach((t) => {
-        triggerCounts[t] = (triggerCounts[t] || 0) + 1;
+
+    // From emotional eating correlations — derive trigger from moodBefore emotion
+    correlations
+      .filter((c) => c.wasEmotionalEating && c.moodBefore?.moodCategory)
+      .forEach((c) => {
+        const trigger = MOOD_TO_EATING_TRIGGER[c.moodBefore!.moodCategory];
+        if (trigger) triggerCounts[trigger] = (triggerCounts[trigger] || 0) + 1;
       });
-      emotionCounts[mood.moodCategory] =
-        (emotionCounts[mood.moodCategory] || 0) + 1;
+
+    // From mood entries explicitly linked to meals — use their trigger tags
+    mealLinkedMoods.forEach((m) => {
+      m.triggers?.forEach((t) => {
+        // Map situational triggers to eating trigger vocabulary
+        const mapped =
+          t === "work" || t === "health" || t === "finances" ? "stress"
+          : t === "social" ? "social"
+          : t === "sleep" ? "tiredness"
+          : null;
+        if (mapped) triggerCounts[mapped] = (triggerCounts[mapped] || 0) + 1;
+      });
     });
 
-    const mealTypeBreakdown = {
-      breakfast: 0,
-      lunch: 0,
-      dinner: 0,
-      snacks: 0,
-    };
-    const mealTypeScoreSum: Record<string, number> = {
-      breakfast: 0, lunch: 0, dinner: 0, snacks: 0,
-    };
-    const mealTypeCount: Record<string, number> = {
-      breakfast: 0, lunch: 0, dinner: 0, snacks: 0,
-    };
+    // Seed from KYC emotionalTriggers when no observed data yet
+    if (Object.keys(triggerCounts).length === 0 && user?.emotionalTriggers?.length) {
+      user.emotionalTriggers.forEach((t) => {
+        triggerCounts[t] = 0; // Weight 0 = seeded from KYC, not yet observed
+      });
+    }
+
+    // ── Emotions: from meal-linked mood entries + correlation moodBefore ──
+    const emotionCounts: Record<string, number> = {};
+    mealLinkedMoods.forEach((m) => {
+      emotionCounts[m.moodCategory] = (emotionCounts[m.moodCategory] || 0) + 1;
+    });
+    correlations.forEach((c) => {
+      if (c.moodBefore?.moodCategory) {
+        emotionCounts[c.moodBefore.moodCategory] =
+          (emotionCounts[c.moodBefore.moodCategory] || 0) + 1;
+      }
+    });
+
+    // ── Meal type breakdown ──
+    const mealTypeBreakdown = { breakfast: 0, lunch: 0, dinner: 0, snacks: 0 };
+    const mealTypeScoreSum: Record<string, number> = { breakfast: 0, lunch: 0, dinner: 0, snacks: 0 };
+    const mealTypeCount: Record<string, number> = { breakfast: 0, lunch: 0, dinner: 0, snacks: 0 };
 
     correlations.forEach((c, i) => {
       if (scores[i] > 0.5) mealTypeBreakdown[c.mealType]++;
@@ -1013,41 +1071,67 @@ export class CBTService {
     const strongestMealType =
       Object.entries(mealTypeCount)
         .filter(([, count]) => count >= 2)
-        .map(([type]) => ({
-          type,
-          avg: mealTypeScoreSum[type] / mealTypeCount[type],
-        }))
+        .map(([type]) => ({ type, avg: mealTypeScoreSum[type] / mealTypeCount[type] }))
         .sort((a, b) => a.avg - b.avg)[0]?.type ?? null;
 
-    const recommendations: string[] = [];
-    if (emotionalEatingPercentage > 30) {
-      recommendations.push(
-        "Consider practicing urge surfing when you feel the urge to eat emotionally"
+    // ── Daily breakdown for the 7/30-day chart ──
+    const dailyBreakdown: {
+      date: string;
+      mindfulScore: number | null;
+      moodAvg: number | null;
+      hasData: boolean;
+    }[] = [];
+
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const dateStr = d.toISOString().split("T")[0];
+
+      const dayCorrelations = correlations.filter((c) => c.date === dateStr);
+      const dayMoods = moodEntries.filter((m) => m.date === dateStr);
+
+      const dayMindfulScore =
+        dayCorrelations.length > 0
+          ? 100 -
+            Math.round(
+              (dayCorrelations.reduce(
+                (s, c) => s + this.calculateFinalScore(c, patternMap),
+                0
+              ) /
+                dayCorrelations.length) *
+                100
+            )
+          : null;
+
+      const dayMoodAvg =
+        dayMoods.length > 0
+          ? dayMoods.reduce((s, m) => s + m.moodLevel, 0) / dayMoods.length
+          : null;
+
+      dailyBreakdown.push({
+        date: dateStr,
+        mindfulScore: dayMindfulScore,
+        moodAvg: dayMoodAvg,
+        hasData: dayCorrelations.length > 0 || dayMoods.length > 0,
+      });
+    }
+
+    // ── Pattern spotlight — include KYC-seeded insight for new users ──
+    let patternSpotlight = this.generatePatternSpotlight(patternMap);
+    if (!patternSpotlight && totalMeals < 3 && user?.foodRelationship) {
+      patternSpotlight = this.buildOnboardingSpotlight(
+        user.foodRelationship,
+        user.emotionalTriggers ?? []
       );
     }
-    if (
-      mealTypeBreakdown.snacks >
-      mealTypeBreakdown.breakfast +
-        mealTypeBreakdown.lunch +
-        mealTypeBreakdown.dinner
-    ) {
-      recommendations.push(
-        "Snacking seems to be your main emotional eating pattern. Try the mindful eating exercise before snacks"
-      );
-    }
-    const topTrigger = Object.entries(triggerCounts).sort(
-      ([, a], [, b]) => b - a
-    )[0];
-    if (topTrigger) {
-      recommendations.push(
-        `${topTrigger[0]} appears to be a common trigger. Try breathing exercises when you notice this trigger`
-      );
-    }
-    if (recommendations.length === 0) {
-      recommendations.push(
-        "Keep tracking your meals and moods to identify patterns"
-      );
-    }
+
+    // ── Personalised recommendations ──
+    const recommendations = this.buildRecommendations(
+      triggerCounts,
+      emotionalEatingPercentage,
+      mealTypeBreakdown,
+      user?.foodRelationship ?? ""
+    );
 
     return {
       success: true,
@@ -1058,9 +1142,11 @@ export class CBTService {
           emotionalEatingInstances,
           emotionalEatingPercentage,
           mindfulEatingScore,
-          patternSpotlight: this.generatePatternSpotlight(patternMap),
+          satietyRate,
+          patternSpotlight,
           weeklyTrend,
           strongestMealType,
+          dailyBreakdown,
           commonTriggers: Object.entries(triggerCounts)
             .map(([trigger, count]) => ({ trigger, count }))
             .sort((a, b) => b.count - a.count)
@@ -1074,6 +1160,78 @@ export class CBTService {
         },
       },
     };
+  }
+
+  private buildOnboardingSpotlight(
+    foodRelationship: string,
+    emotionalTriggers: string[]
+  ): string {
+    const triggerList = emotionalTriggers.slice(0, 2).join(" and ");
+    switch (foodRelationship) {
+      case "very-emotional":
+        return triggerList
+          ? `You've told us ${triggerList} drive your eating. Log a meal with a mood check to start seeing your real pattern.`
+          : "You've shared that food and emotions are connected for you. Your first mood-linked meal will reveal your pattern.";
+      case "sometimes-emotional":
+        return triggerList
+          ? `You mentioned ${triggerList} sometimes pushes you to eat. Log meals to track when it happens vs. when you eat for hunger.`
+          : "You sometimes eat emotionally. Logging a meal with mood context will help identify when and why.";
+      case "fuel":
+        return "You eat mostly for fuel. Your first mood-linked meal will confirm that — and flag any exceptions worth noticing.";
+      default:
+        return "Log your first meal with a mood check to start discovering your eating patterns.";
+    }
+  }
+
+  private buildRecommendations(
+    triggerCounts: Record<string, number>,
+    eePercentage: number,
+    mealTypeBreakdown: { breakfast: number; lunch: number; dinner: number; snacks: number },
+    foodRelationship: string
+  ): string[] {
+    const recs: string[] = [];
+    const topTrigger = Object.entries(triggerCounts)
+      .filter(([, count]) => count > 0)
+      .sort(([, a], [, b]) => b - a)[0]?.[0];
+
+    // Trigger-specific recommendations
+    const TRIGGER_RECS: Record<string, string> = {
+      stress: "When stress hits, try the 4-7-8 breathing exercise before reaching for food — it reduces cortisol within minutes.",
+      boredom: "Boredom eating? Try a 10-minute delay: drink water and do one physical activity before deciding to eat.",
+      sadness: "Sadness can trigger comfort eating. The self-compassion exercise can meet that emotional need without food.",
+      anxiety: "Anxiety-driven eating responds well to body scan exercises — they calm the nervous system before a meal.",
+      habit: "Mindless habit eating is broken by adding friction: put your snacks out of sight and use the mindful eating exercise.",
+      social: "Social eating is natural. Focus on slowing down and rating your hunger before second portions.",
+      tiredness: "Tiredness cravings are often thirst or need for movement. Try 5 minutes of walking before eating.",
+      procrastination: "Procrastination eating? Set a 25-minute focus timer before allowing yourself a snack break.",
+      "late-night": "Late-night eating is hard to resist. Try herbal tea and the body scan exercise instead — both signal rest to your body.",
+      celebration: "Celebratory eating is healthy. Focus on mindful enjoyment rather than restriction during these moments.",
+    };
+
+    if (topTrigger && TRIGGER_RECS[topTrigger]) {
+      recs.push(TRIGGER_RECS[topTrigger]);
+    }
+
+    if (eePercentage > 40) {
+      recs.push("Your emotional eating score shows a pattern worth addressing — try the urge surfing exercise the next time a craving hits.");
+    }
+
+    if (
+      mealTypeBreakdown.snacks >
+      mealTypeBreakdown.breakfast + mealTypeBreakdown.lunch + mealTypeBreakdown.dinner
+    ) {
+      recs.push("Snacks are your highest-risk window. Try the mindful eating exercise before any unplanned snack.");
+    }
+
+    if (foodRelationship === "very-emotional" && recs.length < 2) {
+      recs.push("Pause before eating and ask: 'Am I actually hungry?' Rating hunger 1–10 is the single most effective habit for emotional eaters.");
+    }
+
+    if (recs.length === 0) {
+      recs.push("Keep logging meals with mood context — patterns become visible after 5–7 entries.");
+    }
+
+    return recs.slice(0, 3);
   }
 
   // ============== MOOD-BASED MEAL RECOMMENDATIONS ==============

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, NotFoundException, Inject, forwardRef } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import { User } from "./user.model";
@@ -8,12 +8,15 @@ import mongoose from "mongoose";
 import { IUserData, IMeal } from "../types/interfaces";
 import { compressImage, isBase64Image } from "../utils/imageCompression";
 import { updateMealLearningProfile } from "../utils/meal-learning";
+import { EatingProfileService } from "../eating-profile/eating-profile.service";
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectModel(User.name) private userModel: Model<IUserData>,
-    @InjectModel(Meal.name) private mealModel: Model<IMeal>
+    @InjectModel(Meal.name) private mealModel: Model<IMeal>,
+    @Inject(forwardRef(() => EatingProfileService))
+    private eatingProfileService: EatingProfileService,
   ) {}
 
   async findAll() {
@@ -66,6 +69,14 @@ export class UserService {
     if (!user) {
       throw new NotFoundException(`User with ID ${id} not found`);
     }
+
+    // Seed eating profile on KYC completion
+    if (updateData.kycCompleted === true) {
+      this.eatingProfileService.seed(id).catch((e) =>
+        logger.error(`[UserService] Eating profile seed failed for ${id}: ${e}`)
+      );
+    }
+
     return user;
   }
 

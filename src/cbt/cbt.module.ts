@@ -15,6 +15,7 @@ import {
 import { User, UserSchema } from "../user/user.model";
 import { ChallengeModule } from "../challenge/challenge.module";
 import { EngagementModule } from "../engagement/engagement.module";
+import { EatingProfileModule } from "../eating-profile/eating-profile.module";
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { EngagementModule } from "../engagement/engagement.module";
     ]),
     forwardRef(() => ChallengeModule),
     forwardRef(() => EngagementModule),
+    forwardRef(() => EatingProfileModule),
   ],
   controllers: [CBTController],
   providers: [CBTService],

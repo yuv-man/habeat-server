@@ -136,6 +136,8 @@ export interface IUserData {
   dislikes?: string[]; // disliked meals
   fastingHours?: number; // For 8-16 fasting diet type
   fastingStartTime?: string;
+  foodRelationship?: string;
+  emotionalTriggers?: string[];
   workoutFrequency?: number; // Number of workouts per week
   bmr?: number; // Basal Metabolic Rate
   tdee?: number; // Total Daily Energy Expenditure
