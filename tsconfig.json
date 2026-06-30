@@ -20,6 +20,6 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "include": ["src/**/*", "../knowledge/**/*"],
+  "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

@@ -7,7 +7,7 @@ import { MealMoodCorrelation, IMealMoodCorrelation, MoodEntry, IMoodEntry } from
 import { IUserData } from "../types/interfaces";
 import { User } from "../user/user.model";
 import { callGeminiWithRateLimit } from "../utils/gemini-rate-limiter";
-import { loadKnowledge } from "../../../knowledge/loader";
+import { loadKnowledge } from "../knowledge/loader";
 import logger from "../utils/logger";
 
 // ─── Gemini system prompt (send once per context cache TTL) ─────────────────
