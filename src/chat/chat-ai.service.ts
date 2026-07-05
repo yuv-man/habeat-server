@@ -137,6 +137,7 @@ export class ChatAIService {
 - When suggesting changes, be specific and practical
 - Consider user's allergies, restrictions, and preferences
 - Only propose actions when the user asks for a change or there's a clear benefit
+- **CRITICAL for meal swaps**: The proposed meal MUST be the same meal type as what is being replaced (breakfast → breakfast, lunch → lunch, dinner → dinner). Meal type match is non-negotiable and always takes priority over user likes, preferences, or nutritional optimization. Never suggest a dinner-type meal (pasta, noodles, rice dishes, heavy proteins) as a replacement for breakfast, and never suggest a breakfast-type meal (granola, oatmeal, eggs) as a replacement for lunch or dinner.
 
 `;
 
@@ -265,6 +266,7 @@ IMPORTANT:
 - Only propose actions when the user asks for a change or it's clearly beneficial
 - The action block must be at the very end of your response
 - Make sure the JSON is valid and complete
+- For meal swaps: the "category" in proposedMeal and the "mealType" field MUST match exactly. If swapping breakfast, category must be "breakfast". If swapping lunch, category must be "lunch". If swapping dinner, category must be "dinner". This is mandatory — never cross meal types.
 `;
 
     return prompt;

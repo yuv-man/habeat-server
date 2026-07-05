@@ -918,7 +918,10 @@ export class GeneratorService {
         aiRules: `Generate ${numberOfSuggestions} different ${mealCriteria.category} variations of "${mealNameFromRules}". Each variation should be unique (e.g., different cooking methods, seasonings, sides, or preparations) but all based on "${mealNameFromRules}". Examples: "Grilled ${mealNameFromRules}", "Pan-Seared ${mealNameFromRules}", "${mealNameFromRules} with Herbs", etc.`,
       };
 
-      const aiMeals = await aiService.generateMealSuggestions(aiCriteria, language);
+      const aiMeals = (await aiService.generateMealSuggestions(aiCriteria, language)).map((meal) => ({
+        ...meal,
+        category: mealCriteria.category,
+      }));
 
       // Calculate nutrition using USDA for each generated meal
       const mealsWithUsdaNutrition: IMeal[] = [];
@@ -1094,7 +1097,10 @@ export class GeneratorService {
         `[generateMealSuggestions] Generating ${aiCriteria.numberOfSuggestions} meals via AI with aiRules`
       );
 
-      const aiMeals = await aiService.generateMealSuggestions(aiCriteria, language);
+      const aiMeals = (await aiService.generateMealSuggestions(aiCriteria, language)).map((meal) => ({
+        ...meal,
+        category: mealCriteria.category,
+      }));
 
       // Calculate USDA nutrition for AI-generated meals
       const mealsWithUsdaNutrition: IMeal[] = [];
@@ -1227,7 +1233,10 @@ export class GeneratorService {
           aiRules: enhancedAiRules || undefined,
         };
 
-        aiMeals = await aiService.generateMealSuggestions(aiCriteria, language);
+        aiMeals = (await aiService.generateMealSuggestions(aiCriteria, language)).map((meal) => ({
+          ...meal,
+          category: mealCriteria.category,
+        }));
 
         // Calculate USDA nutrition for AI-generated meals
         for (const meal of aiMeals) {

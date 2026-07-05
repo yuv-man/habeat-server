@@ -25,6 +25,7 @@ import {
 } from "../utils/healthCalculations";
 import { PATH_WORKOUTS_GOAL } from "../enums/enumPaths";
 import { pathGuidelines, workoutCategories } from "./helper";
+import { loadKnowledge } from "../knowledge/loader";
 import {
   transformWeeklyPlan,
   enrichPlanWithFavoriteMeals,
@@ -1348,11 +1349,14 @@ const buildPrompt = (
     fat: Math.round(macros.fat * 0.25),
   };
 
+  // Load knowledge base for grounding — reduces AI reasoning time and improves accuracy
+  const knowledgeBlock = loadKnowledge("meal-generator", { maxTokens: 1400 });
+
   // THE OPTIMIZED PROMPT
   const prompt = `
 You are a precision nutritionist and structured data generator. Create a highly varied ${planType} plan for a ${userData.age}y ${userData.gender} (${userData.height}cm/${userData.weight}kg).
 
-====== CRITICAL VARIETY ENFORCEMENT ======
+${knowledgeBlock ? `${knowledgeBlock}\n\n` : ""}====== CRITICAL VARIETY ENFORCEMENT ======
 The user will reject this plan if meals are repeated. 
 1. **NO REPEATS:** You must generate 21 unique distinct meals (7 breakfasts, 7 lunches, 7 dinners).
 2. **PROTEIN ROTATION:** You must use a different primary protein source for every Lunch and Dinner (e.g., Mon=Chicken, Tue=Beef, Wed=Tofu, Thu=Fish, etc.).
@@ -1733,6 +1737,12 @@ const generateMealSuggestions = async (
       : mealCriteria.aiRules.trim();
   }
 
+  // Load knowledge for grounding (dietary paths + slot rules only — keep suggestions fast)
+  const suggestionKnowledge = loadKnowledge("meal-generator", {
+    maxTokens: 700,
+    topics: ["dietary-paths", "meal-slot-rules"],
+  });
+
   // Build prompt with priority handling for meal name requests
   let prompt = "";
 
@@ -1755,7 +1765,7 @@ DO NOT generate meals that don't include "${requestedMeal}" in the name.
 DO NOT generate completely different meals.
 ALL meals must be variations of "${requestedMeal}".
 
-## Requirements:
+${suggestionKnowledge ? `${suggestionKnowledge}\n\n` : ""}## Requirements:
 - Category: ${mealCriteria.category}
 - Target calories per meal: approximately ${targetCalories} calories (±10%)
 - Language for meal names and ingredients: ${language}
@@ -1805,12 +1815,21 @@ Each meal MUST have ALL these fields:
     // STANDARD MODE: General meal suggestions
     prompt = `You are a professional nutritionist. Generate exactly ${numberOfSuggestions} unique ${mealCriteria.category} meal suggestions.
 
+${suggestionKnowledge ? `${suggestionKnowledge}\n\n` : ""}====== NON-NEGOTIABLE CONSTRAINT ======
+Meal type: ${mealCriteria.category.toUpperCase()}
+ALL suggestions MUST be suitable for ${mealCriteria.category}. This overrides everything else.
+- breakfast: morning foods (eggs, oatmeal, yogurt, toast, smoothies, granola, pancakes, etc.)
+- lunch: midday meals (salads, sandwiches, soups, wraps, light hot dishes, etc.)
+- dinner: evening meals (proteins with sides, pasta, rice dishes, stews, grilled mains, etc.)
+- snack: small bites between meals (fruit, nuts, hummus, protein bars, etc.)
+Never suggest a dinner-type food (noodles, pasta, rice dishes, heavy proteins) for breakfast, or a breakfast food for dinner.
+=======================================
+
 ## Requirements:
-- Category: ${mealCriteria.category}
 - Target calories per meal: approximately ${targetCalories} calories (±10%)
 - Language for meal names and ingredients: ${language}
 ${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
-${mealCriteria.preferences?.length ? `- Food Preferences (MUST INCORPORATE): ${mealCriteria.preferences.join(", ")} - *** CRITICAL: ALL meals should feature or be inspired by these preferences. For example, if "Japanese food" is preferred, generate meals like sushi, ramen, teriyaki, miso soup, etc. ***` : ""}
+${mealCriteria.preferences?.length ? `- Food Preferences (incorporate where compatible with ${mealCriteria.category}): ${mealCriteria.preferences.join(", ")} — apply these only when they fit the meal type. For example, if the category is breakfast and the preference is "Japanese food", suggest Japanese breakfast items like tamago gohan, miso soup, or Japanese-style eggs — NOT ramen or noodles.` : ""}
 ${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
 - Cooking level: Home cooking (beginner to intermediate). Use simple, everyday methods (boiling, frying, baking, grilling, sautéing). No advanced culinary techniques unless the user specifically requests them.
 ${mealCriteria.aiRules ? `- Additional rules: ${mealCriteria.aiRules}` : ""}
