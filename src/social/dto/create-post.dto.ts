@@ -58,6 +58,11 @@ class PostContentDto {
 
   @ApiProperty({ required: false })
   @IsOptional()
+  @IsNumber()
+  healthScore?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
   weeklyData?: {
     daysTracked?: number;
     consistencyScore?: number;

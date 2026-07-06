@@ -9,6 +9,9 @@ export enum PostType {
   HABIT_SCORE = "habit_score",
   CBT_MILESTONE = "cbt_milestone",
   TEXT = "text",
+  GOAL_REACHED = "goal_reached",
+  MEAL_SHARE = "meal_share",
+  MINDFUL_MOMENT = "mindful_moment",
 }
 
 export enum PostVisibility {
@@ -37,6 +40,7 @@ const postContentSchema = new Schema(
     badgeIcon: { type: String },
     streakDays: { type: Number },
     habitScore: { type: Number },
+    healthScore: { type: Number },
     weeklyData: {
       daysTracked: { type: Number },
       consistencyScore: { type: Number },
