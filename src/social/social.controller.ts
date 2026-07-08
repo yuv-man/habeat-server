@@ -26,7 +26,7 @@ export class SocialController {
   @Post("posts")
   @ApiOperation({ summary: "Create a new shareable post" })
   async createPost(@Req() req: any, @Body() createPostDto: CreatePostDto) {
-    return this.socialService.createPost(req.user.userId, createPostDto);
+    return this.socialService.createPost(req.user._id.toString(), createPostDto);
   }
 
   @Get("posts/feed")
@@ -39,7 +39,7 @@ export class SocialController {
     @Query("limit") limit?: string
   ) {
     return this.socialService.getFeed(
-      req.user.userId,
+      req.user._id.toString(),
       page ? parseInt(page, 10) : 1,
       limit ? parseInt(limit, 10) : 20
     );
@@ -48,13 +48,13 @@ export class SocialController {
   @Get("posts/:id")
   @ApiOperation({ summary: "Get a single post by ID" })
   async getPost(@Req() req: any, @Param("id") postId: string) {
-    return this.socialService.getPostById(postId, req.user.userId);
+    return this.socialService.getPostById(postId, req.user._id.toString());
   }
 
   @Delete("posts/:id")
   @ApiOperation({ summary: "Delete own post" })
   async deletePost(@Req() req: any, @Param("id") postId: string) {
-    return this.socialService.deletePost(postId, req.user.userId);
+    return this.socialService.deletePost(postId, req.user._id.toString());
   }
 
   @Get("users/:userId/posts")
@@ -69,7 +69,7 @@ export class SocialController {
   ) {
     return this.socialService.getUserPosts(
       targetUserId,
-      req.user.userId,
+      req.user._id.toString(),
       page ? parseInt(page, 10) : 1,
       limit ? parseInt(limit, 10) : 20
     );
@@ -80,7 +80,7 @@ export class SocialController {
   @Post("posts/:id/like")
   @ApiOperation({ summary: "Like or unlike a post" })
   async toggleLike(@Req() req: any, @Param("id") postId: string) {
-    return this.socialService.toggleLike(postId, req.user.userId);
+    return this.socialService.toggleLike(postId, req.user._id.toString());
   }
 
   // ========== COMMENTS ==========
@@ -92,7 +92,7 @@ export class SocialController {
     @Param("id") postId: string,
     @Body() addCommentDto: AddCommentDto
   ) {
-    return this.socialService.addComment(postId, req.user.userId, addCommentDto);
+    return this.socialService.addComment(postId, req.user._id.toString(), addCommentDto);
   }
 
   @Delete("posts/:postId/comments/:commentId")
@@ -102,7 +102,7 @@ export class SocialController {
     @Param("postId") postId: string,
     @Param("commentId") commentId: string
   ) {
-    return this.socialService.deleteComment(postId, commentId, req.user.userId);
+    return this.socialService.deleteComment(postId, commentId, req.user._id.toString());
   }
 
   // ========== FOLLOWS ==========
@@ -110,13 +110,13 @@ export class SocialController {
   @Post("follow/:userId")
   @ApiOperation({ summary: "Follow a user" })
   async follow(@Req() req: any, @Param("userId") userId: string) {
-    return this.socialService.follow(req.user.userId, userId);
+    return this.socialService.follow(req.user._id.toString(), userId);
   }
 
   @Delete("follow/:userId")
   @ApiOperation({ summary: "Unfollow a user" })
   async unfollow(@Req() req: any, @Param("userId") userId: string) {
-    return this.socialService.unfollow(req.user.userId, userId);
+    return this.socialService.unfollow(req.user._id.toString(), userId);
   }
 
   @Get("followers")
@@ -129,7 +129,7 @@ export class SocialController {
     @Query("limit") limit?: string
   ) {
     return this.socialService.getFollowers(
-      req.user.userId,
+      req.user._id.toString(),
       page ? parseInt(page, 10) : 1,
       limit ? parseInt(limit, 10) : 50
     );
@@ -145,7 +145,7 @@ export class SocialController {
     @Query("limit") limit?: string
   ) {
     return this.socialService.getFollowing(
-      req.user.userId,
+      req.user._id.toString(),
       page ? parseInt(page, 10) : 1,
       limit ? parseInt(limit, 10) : 50
     );
@@ -186,7 +186,7 @@ export class SocialController {
   @Get("users/:userId/follow-status")
   @ApiOperation({ summary: "Check if current user is following a user" })
   async getFollowStatus(@Req() req: any, @Param("userId") userId: string) {
-    const isFollowing = await this.socialService.isFollowing(req.user.userId, userId);
+    const isFollowing = await this.socialService.isFollowing(req.user._id.toString(), userId);
     const counts = await this.socialService.getFollowCounts(userId);
     return { isFollowing, ...counts };
   }
@@ -199,7 +199,7 @@ export class SocialController {
     @Query("limit") limit?: string
   ) {
     return this.socialService.getSuggestedUsers(
-      req.user.userId,
+      req.user._id.toString(),
       limit ? parseInt(limit, 10) : 10
     );
   }
