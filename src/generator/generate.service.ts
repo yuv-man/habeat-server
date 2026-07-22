@@ -453,7 +453,10 @@ const buildDayPrompt = (
       ...(userData.dislikes || []),
     ].join(", ") || "none";
 
-  const preferList = userData.foodPreferences?.join(", ") || "none";
+  const rawPreferList = userData.foodPreferences?.join(", ") || "none";
+  const preferList = rawPreferList !== "none"
+    ? `${rawPreferList} — apply ONLY to lunch/dinner slots. Breakfast must always be morning foods (eggs, oatmeal, yogurt, toast, fruit). Never put dinner-type foods (steak, pasta, beef dishes, etc.) in breakfast.`
+    : "none";
 
   const workoutLine = hasWorkout
     ? `"workouts":[{"name":"<name>","category":"<cat>","duration":<min>,"caloriesBurned":<cal>}]`
@@ -511,7 +514,11 @@ const buildMultiDayPrompt = (
       ...(userData.dislikes || []),
     ].join(", ") || "none";
 
-  const preferList = userData.foodPreferences?.join(", ") || "none";
+  const rawPreferList = userData.foodPreferences?.join(", ") || "none";
+  // Preferences apply to lunch/dinner only where they genuinely fit; breakfast must remain breakfast foods
+  const preferList = rawPreferList !== "none"
+    ? `${rawPreferList} — IMPORTANT: apply ONLY to lunch or dinner when appropriate. Breakfast must always use typical morning foods (eggs, oatmeal, yogurt, toast, fruit, granola, smoothies). Never place a dinner-type preference (meat dish, pasta, rice bowl, steak, etc.) in a breakfast slot.`
+    : "none";
 
   // Build day specifications with variety enforcement
   const daySpecs = daysData
@@ -1310,7 +1317,7 @@ const buildPrompt = (
         : "GOAL: Maintain healthy lifestyle";
 
   const foodPrefs = userData.foodPreferences?.length
-    ? `PREFERENCES: ${userData.foodPreferences.join(", ")}`
+    ? `PREFERENCES (lunch/dinner only — never breakfast): ${userData.foodPreferences.join(", ")}`
     : "No specific preferences";
 
   const dislikes = userData.dislikes?.length
@@ -1373,8 +1380,8 @@ DIETARY RULES (STRICTLY ENFORCE):
 - Allergies: ${userData.allergies ? userData.allergies.join(", ") : "None"}
 - Restrictions: ${userData.dietaryRestrictions ? userData.dietaryRestrictions.join(", ") : "None"}
 - Dislikes: ${dislikes}
-- Food Preferences (inspiration, ~25% of meals): ${foodPrefs}
-  ${userData.foodPreferences?.length ? `Draw inspiration from these preferences for approximately 25% of meals. The remaining meals should be varied, healthy, and simple. Never repeat the same cuisine two days in a row. Health quality and cooking simplicity always take priority over preference matching.` : ""}
+- Food Preferences (inspiration for ~25% of meals, LUNCH/DINNER ONLY): ${foodPrefs}
+  ${userData.foodPreferences?.length ? `Use preferences as INSPIRATION for roughly 25% of lunch and dinner slots only. The remaining meals must be varied, healthy, and simple.\n  CRITICAL: Breakfast must ALWAYS be a breakfast food (eggs, oatmeal, yogurt, toast, fruit, granola, smoothies, pancakes). NEVER place a preference-driven protein dish (steak, beef filet, pasta, curry, rice bowls, etc.) at breakfast — even if the user prefers it. Breakfast = morning-appropriate foods only.` : ""}
 ${buildLearningProfileSection(userData)}
 MEAL FRAMEWORKS (Approximate):
 - Breakfast: ~${breakfastTarget} kcal (P:${breakfastMacros.protein}g, C:${breakfastMacros.carbs}g, F:${breakfastMacros.fat}g)
@@ -1822,14 +1829,15 @@ ALL suggestions MUST be suitable for ${mealCriteria.category}. This overrides ev
 - lunch: midday meals (salads, sandwiches, soups, wraps, light hot dishes, etc.)
 - dinner: evening meals (proteins with sides, pasta, rice dishes, stews, grilled mains, etc.)
 - snack: small bites between meals (fruit, nuts, hummus, protein bars, etc.)
-Never suggest a dinner-type food (noodles, pasta, rice dishes, heavy proteins) for breakfast, or a breakfast food for dinner.
+Never suggest a dinner-type food (noodles, pasta, rice dishes, heavy proteins, steak, beef filet, curry) for breakfast, or a breakfast food for dinner.
+If the category is breakfast, you MUST suggest morning foods only — regardless of user preferences. If a user preference is a lunch/dinner food, ignore it for breakfast and suggest a breakfast-appropriate alternative instead.
 =======================================
 
 ## Requirements:
 - Target calories per meal: approximately ${targetCalories} calories (±10%)
 - Language for meal names and ingredients: ${language}
 ${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
-${mealCriteria.preferences?.length ? `- Food Preferences (incorporate where compatible with ${mealCriteria.category}): ${mealCriteria.preferences.join(", ")} — apply these only when they fit the meal type. For example, if the category is breakfast and the preference is "Japanese food", suggest Japanese breakfast items like tamago gohan, miso soup, or Japanese-style eggs — NOT ramen or noodles.` : ""}
+${mealCriteria.preferences?.length ? `- Food Preferences (use as INSPIRATION, not literal): ${mealCriteria.preferences.join(", ")}\n  CRITICAL: Only apply these preferences if they naturally fit the ${mealCriteria.category} slot. For breakfast, use only morning foods (eggs, yogurt, oatmeal, toast, fruit, smoothies, granola). A preference like "beef filet" or "pasta" must NEVER appear at breakfast — instead, find a breakfast item that reflects the spirit of the preference (e.g., a high-protein breakfast bowl). For lunch/dinner, preferences can be applied more directly.` : ""}
 ${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
 - Cooking level: Home cooking (beginner to intermediate). Use simple, everyday methods (boiling, frying, baking, grilling, sautéing). No advanced culinary techniques unless the user specifically requests them.
 ${mealCriteria.aiRules ? `- Additional rules: ${mealCriteria.aiRules}` : ""}

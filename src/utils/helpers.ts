@@ -2172,7 +2172,29 @@ export const enrichPlanWithFavoriteMeals = async (
       `[enrichPlanWithFavoriteMeals] Found ${favoriteMeals.length} favorite meals for user`
     );
 
-    // Organize favorite meals by category
+    // Keywords that mark a meal as unsuitable for breakfast regardless of its stored category
+    const DINNER_LUNCH_KEYWORDS = [
+      "steak", "filet", "fillet", "roast", "grilled salmon", "grilled beef",
+      "beef", "pork chop", "lamb", "pasta", "curry", "noodle", "ramen",
+      "burger", "pizza", "taco", "burrito", "fried rice", "stir fry", "stew",
+      "casserole", "lasagna", "risotto", "soup", "chili",
+    ];
+
+    // Return true if the meal is genuinely appropriate for the target slot
+    const isMealAppropriateForSlot = (meal: any, slot: string): boolean => {
+      const name = (meal.name || "").toLowerCase();
+      const calories = meal.calories || 0;
+
+      if (slot === "breakfast") {
+        if (calories > 700) return false;
+        if (DINNER_LUNCH_KEYWORDS.some((kw) => name.includes(kw))) return false;
+      }
+      if (slot === "snack" && calories > 450) return false;
+      if ((slot === "lunch" || slot === "dinner") && calories < 150) return false;
+      return true;
+    };
+
+    // Organize favorite meals by category, applying slot-appropriateness validation
     const favoritesByCategory: Record<string, any[]> = {
       breakfast: [],
       lunch: [],
@@ -2183,7 +2205,17 @@ export const enrichPlanWithFavoriteMeals = async (
     favoriteMeals.forEach((meal: any) => {
       const category = meal.category;
       if (category && favoritesByCategory[category]) {
-        favoritesByCategory[category].push(meal);
+        // Only add if the meal is genuinely appropriate for that slot
+        if (isMealAppropriateForSlot(meal, category)) {
+          favoritesByCategory[category].push(meal);
+        } else {
+          // Re-file to the most appropriate alternative slot
+          if (["lunch", "dinner"].includes(category) && !["lunch", "dinner"].includes(category)) return;
+          const altSlot = ["breakfast", "snack"].includes(category) ? "lunch" : category;
+          if (favoritesByCategory[altSlot] && isMealAppropriateForSlot(meal, altSlot)) {
+            favoritesByCategory[altSlot].push(meal);
+          }
+        }
       }
     });
 
@@ -2231,6 +2263,8 @@ export const enrichPlanWithFavoriteMeals = async (
     // Randomly shuffle meals to replace
     const shuffled = [...mealsToReplace].sort(() => Math.random() - 0.5);
     let replacedCount = 0;
+    // Track which favorite meals have already been placed to prevent repetition
+    const usedFavoriteIds = new Set<string>();
 
     // Replace meals with matching favorite meals
     for (const { dateKey, mealType, targetCalories } of shuffled) {
@@ -2239,11 +2273,11 @@ export const enrichPlanWithFavoriteMeals = async (
       const categoryFavorites = favoritesByCategory[mealType] || [];
       if (categoryFavorites.length === 0) continue;
 
-      // Filter favorites by calorie range (±150 calories tolerance)
-      const calorieTolerance = 150;
+      // Filter favorites by calorie range (±200 cal) and exclude already-used ones
+      const calorieTolerance = 200;
       const matchingFavorites = categoryFavorites.filter((fav: any) => {
         const calorieDiff = Math.abs((fav.calories || 0) - targetCalories);
-        return calorieDiff <= calorieTolerance;
+        return calorieDiff <= calorieTolerance && !usedFavoriteIds.has(fav._id.toString());
       });
 
       if (matchingFavorites.length === 0) continue;
@@ -2276,6 +2310,7 @@ export const enrichPlanWithFavoriteMeals = async (
         // Ignore analytics update errors
       }
 
+      usedFavoriteIds.add(selectedFavorite._id.toString());
       replacedCount++;
       logger.info(
         `[enrichPlanWithFavoriteMeals] Replaced ${mealType} on ${dateKey} with favorite meal: ${selectedFavorite.name}`

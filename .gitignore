@@ -6,10 +6,6 @@
 /temp
 /cache
 
-.env
-.env.bak
-.log
-
 .cursor
 .cursorrules
 .cursorignore
@@ -17,12 +13,10 @@
 .skills/*
 
 .cursorignore
-.env
 .agents/*
 skills-lock.json
 scripts/*
 .cursorignore
-.env
 .agents/*
 skills-lock.json
 scripts/*
@@ -32,3 +26,6 @@ skills-lock.json
 scripts/*
 .claude
 .augment
+.env
+.env.bak
+.log

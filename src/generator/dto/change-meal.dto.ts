@@ -2,14 +2,13 @@ import { ApiProperty } from "@nestjs/swagger";
 import {
   IsNotEmpty,
   IsOptional,
-  IsString,
   IsNumber,
-  IsArray,
   IsEnum,
   ValidateNested,
   Min,
 } from "class-validator";
 import { Type } from "class-transformer";
+import { SafeLLMInput, SafeLLMArray } from "../../utils/safe-input.decorator";
 
 export enum MealCategory {
   BREAKFAST = "breakfast",
@@ -19,29 +18,18 @@ export enum MealCategory {
 }
 
 class CurrentMoodDto {
-  @ApiProperty({
-    example: "stressed",
-    description: "Current mood category",
-  })
-  @IsString()
+  @ApiProperty({ example: "stressed", description: "Current mood category" })
+  @SafeLLMInput(50)
   moodCategory: string;
 
-  @ApiProperty({
-    example: 3,
-    description: "Current mood level (1-5)",
-    minimum: 1,
-    maximum: 5,
-  })
+  @ApiProperty({ example: 3, description: "Current mood level (1-5)", minimum: 1, maximum: 5 })
   @IsNumber()
   @Min(1)
   moodLevel: number;
 }
 
 class MealCriteriaDto {
-  @ApiProperty({
-    example: "lunch",
-    enum: MealCategory,
-  })
+  @ApiProperty({ example: "lunch", enum: MealCategory })
   @IsNotEmpty()
   @IsEnum(MealCategory)
   category: MealCategory;
@@ -52,34 +40,19 @@ class MealCriteriaDto {
   @Min(0)
   targetCalories?: number;
 
-  @ApiProperty({
-    type: [String],
-    example: ["vegetarian"],
-    required: false,
-  })
+  @ApiProperty({ type: [String], example: ["vegetarian"], required: false })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
+  @SafeLLMArray(100)
   dietaryRestrictions?: string[];
 
-  @ApiProperty({
-    type: [String],
-    example: ["high protein"],
-    required: false,
-  })
+  @ApiProperty({ type: [String], example: ["high protein"], required: false })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
+  @SafeLLMArray(100)
   preferences?: string[];
 
-  @ApiProperty({
-    type: [String],
-    example: ["chicken"],
-    required: false,
-  })
+  @ApiProperty({ type: [String], example: ["chicken"], required: false })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
+  @SafeLLMArray(100)
   dislikes?: string[];
 
   @ApiProperty({
@@ -94,24 +67,15 @@ class MealCriteriaDto {
   @Min(1)
   numberOfSuggestions?: number;
 
-  @ApiProperty({
-    type: CurrentMoodDto,
-    required: false,
-    description: "Current user mood for mood-aware suggestions",
-  })
+  @ApiProperty({ type: CurrentMoodDto, required: false })
   @IsOptional()
   @ValidateNested()
   @Type(() => CurrentMoodDto)
   currentMood?: CurrentMoodDto;
 
-  @ApiProperty({
-    type: [String],
-    required: false,
-    description: "Foods recommended based on current mood",
-  })
+  @ApiProperty({ type: [String], required: false, description: "Foods recommended based on current mood" })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
+  @SafeLLMArray(100)
   moodFoodSuggestions?: string[];
 }
 
@@ -122,13 +86,14 @@ export class ChangeMealDto {
   @IsNotEmpty()
   mealCriteria: MealCriteriaDto;
 
-  @ApiProperty({ example: "Explain the meal in detail", required: false })
+  /** Free-text rules the user types — goes directly into the AI prompt */
+  @ApiProperty({ example: "Make it low carb", required: false })
   @IsOptional()
-  @IsString()
+  @SafeLLMInput(500)
   aiRules?: string;
 
   @ApiProperty({ example: "en", required: false })
   @IsOptional()
-  @IsString()
+  @SafeLLMInput(10)
   language?: string;
 }
