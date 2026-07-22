@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
-import { IsNotEmpty, IsOptional, IsObject } from "class-validator";
+import { IsNotEmpty, IsOptional, IsObject, IsString } from "class-validator";
 import { SafeLLMInput } from "../../utils/safe-input.decorator";
 
 export class ChatContextDto {
