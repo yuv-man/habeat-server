@@ -6,26 +6,43 @@
 /temp
 /cache
 
+# Env & secrets
+.env
+.env.bak
+.env.local
+.env.*.local
+
+# Logs
+*.log
+.log
+
+# Editor / IDE
+.vscode
+.idea
+
+# Cursor
 .cursor
 .cursorrules
 .cursorignore
 
-.skills/*
-
-.cursorignore
-.agents/*
-skills-lock.json
-scripts/*
-.cursorignore
-.agents/*
-skills-lock.json
-scripts/*
-.cursorignore
-.agents/*
-skills-lock.json
-scripts/*
+# Claude / AI tooling (never commit)
 .claude
+.claude/
+.claude-personal
+.claude-personal/
+**/.claude/**
+**/.claude-personal/**
+.agents
+.agents/
 .augment
-.env
-.env.bak
-.log
+.augment/
+skills-lock.json
+.mcp.json
+CLAUDE.md
+
+# Accidental home-dir dumps inside the repo (literal "~" folder)
+~
+~/
+**/.claude.json
+**/.last-cleanup
+**/.last-update-result.json
