@@ -1637,18 +1637,19 @@ const generateMeal = async (
   targetCalories: number,
   category: string,
   dietaryRestrictions: string[] = [],
-  preferences: string[] = [],
+  _preferences: string[] = [], // intentionally excluded from prompt — preferences must not override a named meal
   dislikes: string[] = [],
   language: string = "en",
   aiRules?: string,
 ): Promise<any> => {
-  const prompt = `Generate a ${category} meal "${mealName}" in ${language}.
+  const prompt = `Generate a ${category} meal named exactly "${mealName}" in ${language}.
+
+## CRITICAL: The meal name is "${mealName}". You MUST use this exact name. Do NOT rename it or blend other ingredients into the name.
 
 ## Requirements:
 - Target calories: ${targetCalories}
 - Category: ${category}
-${dietaryRestrictions.length ? `- Dietary restrictions: ${dietaryRestrictions.join(", ")}` : ""}
-${preferences.length ? `- Preferences (try to include): ${preferences.join(", ")}` : ""}
+${dietaryRestrictions.length ? `- Dietary restrictions (MUST follow): ${dietaryRestrictions.join(", ")}` : ""}
 ${dislikes.length ? `- Dislikes (MUST avoid): ${dislikes.join(", ")}` : ""}
 ${aiRules ? `- Additional rules: ${aiRules}` : ""}
 
@@ -1757,8 +1758,17 @@ const generateMealSuggestions = async (
     // PRIORITY MODE: User requested specific meal variations
     prompt = `You are a professional nutritionist. Generate exactly ${numberOfSuggestions} UNIQUE VARIATIONS of "${requestedMeal}".
 
+====== NON-NEGOTIABLE CATEGORY CONSTRAINT ======
+This meal is for ${mealCriteria.category.toUpperCase()}. ALL suggestions MUST be appropriate for ${mealCriteria.category}:
+- breakfast: morning foods only (eggs, oatmeal, yogurt, toast, smoothies, granola, pancakes, etc.)
+- lunch: midday meals (salads, sandwiches, soups, wraps, light hot dishes, etc.)
+- dinner: evening meals (proteins with sides, pasta, rice dishes, stews, grilled mains, etc.)
+- snack: small bites (fruit, nuts, hummus, protein bars, etc.)
+IMPORTANT: If "${requestedMeal}" is NOT a typical ${mealCriteria.category} food (e.g., steak for breakfast), create ${mealCriteria.category}-appropriate meals that incorporate similar flavors or protein profile — do NOT force a dinner-type food into a breakfast slot. A "sirloin steak" variation for breakfast should become something like a high-protein breakfast bowl with beef, NOT a steak dish.
+================================================
+
 ====== CRITICAL REQUIREMENT ======
-ALL ${numberOfSuggestions} meals MUST be variations of "${requestedMeal}".
+ALL ${numberOfSuggestions} meals MUST be variations of "${requestedMeal}" adapted for ${mealCriteria.category}.
 Each meal name MUST include "${requestedMeal}" or clearly reference it.
 Examples of valid variations:
 - "Grilled ${requestedMeal}"
@@ -1770,7 +1780,7 @@ Examples of valid variations:
 
 DO NOT generate meals that don't include "${requestedMeal}" in the name.
 DO NOT generate completely different meals.
-ALL meals must be variations of "${requestedMeal}".
+ALL meals must be variations of "${requestedMeal}" AND appropriate for ${mealCriteria.category}.
 
 ${suggestionKnowledge ? `${suggestionKnowledge}\n\n` : ""}## Requirements:
 - Category: ${mealCriteria.category}

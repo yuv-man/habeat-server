@@ -1076,11 +1076,17 @@ export class PlanService {
     // ============================================================================
     let resolvedMeal: IMeal;
 
-    // Check if the newMeal already has complete data (from client)
+    // Check if the newMeal already has complete data (from client).
+    // Manual meals sent by the frontend have ingredients: [] — Array.isArray([]) is true
+    // while [].length is 0 (falsy), which was incorrectly triggering AI generation.
+    const isManualEntry =
+      typeof (newMeal as any)._id === "string" &&
+      String((newMeal as any)._id).startsWith("manual-");
     const hasCompleteData =
-      newMeal.calories &&
-      newMeal.macros?.protein !== undefined &&
-      newMeal.ingredients?.length;
+      isManualEntry ||
+      (newMeal.calories &&
+        newMeal.macros?.protein !== undefined &&
+        Array.isArray(newMeal.ingredients));
 
     if (hasCompleteData) {
       // Client provided complete meal data - check if it exists in DB to get ID
