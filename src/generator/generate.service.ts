@@ -455,7 +455,7 @@ const buildDayPrompt = (
 
   const rawPreferList = userData.foodPreferences?.join(", ") || "none";
   const preferList = rawPreferList !== "none"
-    ? `${rawPreferList} — apply ONLY to lunch/dinner slots. Breakfast must always be morning foods (eggs, oatmeal, yogurt, toast, fruit). Never put dinner-type foods (steak, pasta, beef dishes, etc.) in breakfast.`
+    ? `${rawPreferList} — apply to LUNCH/DINNER by default. For breakfast, use morning-appropriate foods (eggs, oatmeal, yogurt, toast, smoothie, granola, fruit, rice porridge). Do not automatically place a dinner-type preference (steak, beef cut, pasta, curry, etc.) into breakfast — unless the user explicitly requested it. Labeling a dinner protein as a "scramble" does not make it breakfast-appropriate; egg scrambles use eggs as the primary protein.`
     : "none";
 
   const workoutLine = hasWorkout
@@ -515,9 +515,8 @@ const buildMultiDayPrompt = (
     ].join(", ") || "none";
 
   const rawPreferList = userData.foodPreferences?.join(", ") || "none";
-  // Preferences apply to lunch/dinner only where they genuinely fit; breakfast must remain breakfast foods
   const preferList = rawPreferList !== "none"
-    ? `${rawPreferList} — IMPORTANT: apply ONLY to lunch or dinner when appropriate. Breakfast must always use typical morning foods (eggs, oatmeal, yogurt, toast, fruit, granola, smoothies). Never place a dinner-type preference (meat dish, pasta, rice bowl, steak, etc.) in a breakfast slot.`
+    ? `${rawPreferList} — apply to LUNCH/DINNER by default. For breakfast, default to morning-appropriate foods (eggs, oatmeal, yogurt, toast, smoothie, granola, pancakes, fruit, rice porridge). Avoid automatically applying a dinner-type preference (steak, beef cut, pasta, curry, rice bowl, etc.) to breakfast unless the user explicitly asked for it. Calling a dinner protein a "scramble" does not make it a breakfast meal; egg scrambles should use eggs as the primary protein.`
     : "none";
 
   // Build day specifications with variety enforcement
@@ -1317,7 +1316,7 @@ const buildPrompt = (
         : "GOAL: Maintain healthy lifestyle";
 
   const foodPrefs = userData.foodPreferences?.length
-    ? `PREFERENCES (lunch/dinner only — never breakfast): ${userData.foodPreferences.join(", ")}`
+    ? `PREFERENCES (apply to LUNCH/DINNER by default): ${userData.foodPreferences.join(", ")}. For breakfast, default to morning-appropriate foods (eggs, oatmeal, yogurt, toast, smoothie, granola, pancakes, rice porridge, fruit). Avoid applying a dinner-type preference (steak, beef cut, pasta, curry, etc.) to breakfast unless explicitly requested — and note that wrapping a dinner protein in a "scramble" label does not make it breakfast-appropriate.`
     : "No specific preferences";
 
   const dislikes = userData.dislikes?.length
@@ -1381,7 +1380,7 @@ DIETARY RULES (STRICTLY ENFORCE):
 - Restrictions: ${userData.dietaryRestrictions ? userData.dietaryRestrictions.join(", ") : "None"}
 - Dislikes: ${dislikes}
 - Food Preferences (inspiration for ~25% of meals, LUNCH/DINNER ONLY): ${foodPrefs}
-  ${userData.foodPreferences?.length ? `Use preferences as INSPIRATION for roughly 25% of lunch and dinner slots only. The remaining meals must be varied, healthy, and simple.\n  CRITICAL: Breakfast must ALWAYS be a breakfast food (eggs, oatmeal, yogurt, toast, fruit, granola, smoothies, pancakes). NEVER place a preference-driven protein dish (steak, beef filet, pasta, curry, rice bowls, etc.) at breakfast — even if the user prefers it. Breakfast = morning-appropriate foods only.` : ""}
+  ${userData.foodPreferences?.length ? `Use preferences as INSPIRATION for roughly 25% of lunch and dinner slots. For breakfast, default to morning foods (eggs, oatmeal, yogurt, toast, fruit, granola, smoothies, pancakes, rice porridge). Avoid placing dinner-type preferences (steak, beef cut, pasta, curry, rice bowl) at breakfast — this should be an AI-driven default, not a restriction on the user. Egg scrambles should use eggs as the primary protein; a dinner protein wrapped in a "scramble" name is still a poor breakfast choice.` : ""}
 ${buildLearningProfileSection(userData)}
 MEAL FRAMEWORKS (Approximate):
 - Breakfast: ~${breakfastTarget} kcal (P:${breakfastMacros.protein}g, C:${breakfastMacros.carbs}g, F:${breakfastMacros.fat}g)

@@ -11,6 +11,8 @@ Load files by agent need. Each file is self-contained. Load only what is relevan
 
 | file | domain | tokens_est | load_when |
 |---|---|---|---|
+| nutrition/dietary-paths.md | nutrition | 400 | meal generation — determines calorie/macro targets per path |
+| meal-generation/meal-slot-rules.md | meal-generation | 300 | meal generation — enforces breakfast/lunch/dinner slot rules and preference scoping |
 | nutrition/macros-mood.md | nutrition | 480 | meal generation, profile scoring, CBT recommendations |
 | nutrition/meal-timing.md | nutrition | 360 | meal plan generation, risk window analysis, fasting users |
 | nutrition/mood-foods.md | nutrition | 420 | meal swaps, stress-specific suggestions, trigger-matched meals |
@@ -23,6 +25,6 @@ Load files by agent need. Each file is self-contained. Load only what is relevan
 ## load strategy
 
 eating_profile_agent: [nutrition/macros-mood.md, cbt/emotional-eating.md, profile/eating-archetypes.md, profile/psych-profile.md]
-meal_generator: [nutrition/macros-mood.md, nutrition/meal-timing.md, nutrition/mood-foods.md]
+meal_generator: [nutrition/dietary-paths.md, meal-generation/meal-slot-rules.md, nutrition/macros-mood.md, nutrition/meal-timing.md, nutrition/mood-foods.md]
 chloe_voice_agent: [cbt/emotional-eating.md, cbt/interventions.md]
 chat_ai: load on demand based on user question topic
