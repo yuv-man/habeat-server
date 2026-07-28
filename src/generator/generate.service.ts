@@ -1786,7 +1786,6 @@ ${suggestionKnowledge ? `${suggestionKnowledge}\n\n` : ""}## Requirements:
 - Target calories per meal: approximately ${targetCalories} calories (±10%)
 - Language for meal names and ingredients: ${language}
 ${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
-${mealCriteria.preferences?.length ? `- Food Preferences (MUST INCORPORATE): ${mealCriteria.preferences.join(", ")} - *** CRITICAL: Incorporate these preferences into the variations where possible. ***` : ""}
 ${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
 - Cooking level: Home cooking (beginner to intermediate). Use simple, everyday methods (boiling, frying, baking, grilling, sautéing). No advanced culinary techniques unless the user specifically requests them.
 

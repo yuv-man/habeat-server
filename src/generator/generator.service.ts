@@ -912,8 +912,11 @@ export class GeneratorService {
       );
 
       // Generate variations of the requested meal via AI
+      // Drop food preferences: the user's explicit search term is the only signal that matters here.
+      // Injecting likes (e.g. Sirloin Steak, Broccoli) into a "fresh fruits" request produces nonsense.
       const aiCriteria = {
         ...mealCriteria,
+        preferences: [],
         numberOfSuggestions,
         aiRules: `Generate ${numberOfSuggestions} different ${mealCriteria.category} variations of "${mealNameFromRules}". Each variation should be unique (e.g., different cooking methods, seasonings, sides, or preparations) but all based on "${mealNameFromRules}". Examples: "Grilled ${mealNameFromRules}", "Pan-Seared ${mealNameFromRules}", "${mealNameFromRules} with Herbs", etc.`,
       };
@@ -988,6 +991,7 @@ export class GeneratorService {
         const needed = numberOfSuggestions - validatedMeals.length;
         const additionalCriteria = {
           ...mealCriteria,
+          preferences: [],
           numberOfSuggestions: needed,
           aiRules: `Generate ${needed} different ${mealCriteria.category} variations of "${mealNameFromRules}". Each variation MUST include "${mealNameFromRules}" in the name. Examples: "Grilled ${mealNameFromRules}", "Pan-Seared ${mealNameFromRules}", "${mealNameFromRules} with Herbs".`,
         };
