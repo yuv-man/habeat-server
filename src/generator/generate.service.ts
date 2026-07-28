@@ -882,7 +882,137 @@ const generateMealPlanWithGemini = async (
   return await enrichPlanWithFavoriteMeals(transformedPlan, userData);
 };
 
-// MAIN: Try Gemini first, fallback to Llama
+// OpenRouter fallback — used when all Gemini models are rate-limited.
+// Uses the OpenAI-compatible chat completions API with free-tier models that
+// properly respect dietary restrictions (vegan, allergies, etc.).
+const OPEN_ROUTER_MODELS = [
+  "meta-llama/llama-3.1-8b-instruct:free",
+  "mistralai/mistral-7b-instruct:free",
+  "google/gemma-2-9b-it:free",
+];
+
+const generateMealPlanWithOpenRouter = async (
+  userData: IUserData,
+  weekStartDate: Date,
+  planType: "daily" | "weekly",
+  language: string,
+  apiKey: string,
+  goals: IGoal[] = [],
+  planTemplate?: string,
+  datesOverride?: Date[],
+  moodContext?: string,
+): Promise<MealPlanResponse> => {
+  logger.info("[OpenRouter] Starting generation...");
+
+  // Reuse the same date/workout scheduling logic from buildPrompt
+  const { dayToName, nameToDay, dates: fullWeekDates, workoutDays } = buildPrompt(
+    userData, planType, language, weekStartDate, goals, planTemplate,
+  );
+
+  const datesToGenerate = datesOverride?.length ? datesOverride : fullWeekDates;
+
+  const goalAdjustments = planTemplate
+    ? getGoalBasedAdjustments([])
+    : getGoalBasedAdjustments(goals);
+  const bmr = calculateBMR(userData.weight, userData.height, userData.age, userData.gender);
+  const tdee = calculateTDEE(bmr, goalAdjustments.workoutFrequency ?? userData.workoutFrequency);
+  const targetCalories = Math.max(
+    1200,
+    calculateTargetCalories(tdee, userData.path) + goalAdjustments.calorieAdjustment,
+  );
+  const macros = calculateMacros(targetCalories, userData.path);
+  const workoutDayNums = new Set(workoutDays);
+  const goalContextStr = planTemplate
+    ? PLAN_TEMPLATE_STYLES[planTemplate] || ""
+    : goalAdjustments.goalDescription || "";
+
+  const DAYS_PER_BATCH = Math.min(4, datesToGenerate.length);
+
+  const allDaysData = datesToGenerate.map((date, idx) => ({
+    date,
+    dateStr: getLocalDateKey(date),
+    dayName: dayToName[date.getDay()],
+    dayIndex: idx,
+    hasWorkout: workoutDayNums.has(date.getDay()),
+  }));
+
+  const batches: typeof allDaysData[] = [];
+  for (let i = 0; i < allDaysData.length; i += DAYS_PER_BATCH) {
+    batches.push(allDaysData.slice(i, i + DAYS_PER_BATCH));
+  }
+
+  const allDayResults: any[] = [];
+
+  for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+    const batch = batches[batchIdx];
+    const batchDaysData = batch.map(d => ({
+      dateStr: d.dateStr, dayName: d.dayName, dayIndex: d.dayIndex, hasWorkout: d.hasWorkout,
+    }));
+
+    const prompt = buildMultiDayPrompt(
+      userData, batchDaysData, targetCalories, macros, goalContextStr, moodContext,
+    );
+
+    let batchResults: any[] = [];
+
+    for (const model of OPEN_ROUTER_MODELS) {
+      try {
+        logger.info(`[OpenRouter] Trying model ${model} for batch ${batchIdx + 1}/${batches.length}...`);
+        const response = await axios.post(
+          "https://openrouter.ai/api/v1/chat/completions",
+          {
+            model,
+            messages: [{ role: "user", content: `${prompt}\n\nReturn ONLY a JSON array. No markdown, no explanation.` }],
+            temperature: 0.7,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${apiKey}`,
+              "HTTP-Referer": process.env.PROD_CLIENT_SITE || "https://habeat.app",
+              "X-Title": "Habeat",
+              "Content-Type": "application/json",
+            },
+            timeout: 90000,
+          },
+        );
+
+        const text: string = response.data?.choices?.[0]?.message?.content;
+        if (!text) throw new Error("Empty response from OpenRouter");
+
+        batchResults = parseMultiDayResponse(text);
+        if (batchResults.length > 0) {
+          logger.info(`[OpenRouter] Batch ${batchIdx + 1} success with ${model}: ${batchResults.length} days`);
+          break;
+        }
+      } catch (err) {
+        logger.warn(`[OpenRouter] Model ${model} batch ${batchIdx + 1} failed: ${getErrorMessage(err)}`);
+      }
+    }
+
+    if (batchResults.length > 0) {
+      allDayResults.push(...batchResults);
+    } else {
+      logger.error(`[OpenRouter] All models failed for batch ${batchIdx + 1}`);
+    }
+  }
+
+  if (allDayResults.length === 0) {
+    throw new Error("OpenRouter: all models failed to produce any days");
+  }
+
+  logger.info(`[OpenRouter] Generated ${allDayResults.length}/${datesToGenerate.length} days`);
+
+  const parsedResponse = { weeklyPlan: allDayResults };
+  const transformedPlan = await transformWeeklyPlan(
+    parsedResponse, dayToName, nameToDay, datesToGenerate,
+    datesToGenerate.map(d => d.getDay()), workoutDays,
+    planType, language, weekStartDate,
+  );
+  return await enrichPlanWithFavoriteMeals(transformedPlan, userData);
+};
+
+// MAIN: Try Gemini → OpenRouter → fail with clear error (never fall back to a model
+// that might ignore dietary restrictions like vegan/allergies).
 const generateMealPlanWithAI = async (
   userData: IUserData,
   weekStartDate: Date,
@@ -911,49 +1041,49 @@ const generateMealPlanWithAI = async (
       );
     }
 
-    // TRY GEMINI FIRST
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (apiKey) {
+    // ── PRIMARY: Gemini ─────────────────────────────────────────────────────
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (geminiKey) {
       try {
         logger.info("=== ATTEMPTING GEMINI (PRIMARY) ===");
         return await generateMealPlanWithGemini(
-          userData,
-          weekStartDate,
-          planType,
-          language,
-          apiKey,
-          goals,
-          planTemplate,
-          datesOverride,
-          moodContext ?? undefined,
+          userData, weekStartDate, planType, language, geminiKey,
+          goals, planTemplate, datesOverride, moodContext ?? undefined,
         );
       } catch (geminiError: unknown) {
-        logger.warn(
-          `Gemini failed: ${getErrorMessage(geminiError)}. Falling back to Llama...`,
-        );
+        logger.warn(`[AI] Gemini failed: ${getErrorMessage(geminiError)}. Trying OpenRouter...`);
       }
     } else {
-      logger.warn("GEMINI_API_KEY not configured, using Llama");
+      logger.warn("[AI] GEMINI_API_KEY not configured, trying OpenRouter directly");
     }
 
-    // FALLBACK TO LLAMA
-    try {
-      logger.info("=== ATTEMPTING LLAMA (FALLBACK) ===");
-      return await generateMealPlanWithLlama2(
-        userData,
-        weekStartDate,
-        planType,
-        language,
-        false,
-        goals,
-        planTemplate,
-        moodContext ?? undefined,
-      );
-    } catch (llamaError: unknown) {
-      throw new Error(
-        `Both Gemini and Llama failed. Llama: ${getErrorMessage(llamaError)}`,
-      );
+    // ── FALLBACK: OpenRouter ────────────────────────────────────────────────
+    // OpenRouter routes to real LLMs that respect dietary restrictions.
+    // We never fall back to Ollama/Llama because small local models frequently
+    // ignore constraints like vegan, allergies, etc. — which is dangerous.
+    const openRouterKey = process.env.OPEN_ROUTER_KEY;
+    if (openRouterKey) {
+      try {
+        logger.info("=== ATTEMPTING OPENROUTER (FALLBACK) ===");
+        return await generateMealPlanWithOpenRouter(
+          userData, weekStartDate, planType, language, openRouterKey,
+          goals, planTemplate, datesOverride, moodContext ?? undefined,
+        );
+      } catch (openRouterError: unknown) {
+        logger.warn(`[AI] OpenRouter failed: ${getErrorMessage(openRouterError)}`);
+      }
+    } else {
+      logger.warn("[AI] OPEN_ROUTER_KEY not configured, no fallback available");
     }
+
+    // ── ALL PROVIDERS FAILED ────────────────────────────────────────────────
+    // Throw a specific error that the client can detect and display clearly.
+    // Do NOT fall back to a mock/wrong plan — dietary restrictions must be respected.
+    throw new Error(
+      "PLAN_GENERATION_UNAVAILABLE: Our AI services are temporarily busy due to high demand. " +
+      "Your dietary preferences and restrictions will be fully respected when you try again. " +
+      "Please wait a few minutes and try again.",
+    );
   } catch (error: unknown) {
     logger.error("Meal plan generation failed:", error);
     throw error;

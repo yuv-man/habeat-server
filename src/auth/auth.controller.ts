@@ -629,6 +629,7 @@ export class AuthController {
         user: result.user,
         plan: userData.data.plan,
         token: result.token,
+        isNewUser: result.isNewUser,
       },
     };
   }
@@ -790,6 +791,7 @@ export class AuthController {
           user: data.data.user,
           plan: data.data.plan,
           token: data.data.token,
+          isNewUser: !(data.data.user as any).kycCompleted,
         },
       });
       return;
@@ -807,6 +809,7 @@ export class AuthController {
         user: result.user,
         plan: userData.data.plan,
         token: result.token,
+        isNewUser: result.isNewUser,
       },
     });
   }

@@ -463,7 +463,8 @@ export class AuthService {
     const redirectUrl = new URL(frontendRedirectUri);
     redirectUrl.searchParams.set("token", jwtToken);
     redirectUrl.searchParams.set("userId", user._id.toString());
-    if (mode === "signup") {
+    // isNewUser = true for brand-new signups OR existing users who never finished KYC
+    if (mode === "signup" || !(user as any).kycCompleted) {
       redirectUrl.searchParams.set("isNewUser", "true");
     }
 
@@ -497,6 +498,8 @@ export class AuthService {
     return {
       token: generateToken(user._id.toString()),
       user: await this.privilegeUser(user),
+      // Signal to the client that registration is incomplete so it redirects to KYC
+      isNewUser: !(user as any).kycCompleted,
     };
   }
 
