@@ -266,12 +266,13 @@ export class PlanService {
     // Get user dietary restrictions
     const user = await this.userModel
       .findById(userId)
-      .select("dietaryRestrictions foodPreferences dislikes")
+      .select("dietaryRestrictions foodPreferences dislikes allergies")
       .lean()
       .exec();
     const dietaryRestrictions = (user as any)?.dietaryRestrictions || [];
     const preferences = (user as any)?.foodPreferences || [];
     const dislikes = (user as any)?.dislikes || [];
+    const allergies = (user as any)?.allergies || [];
 
     // Generate meal using AI
     const generatedMeal = await aiService.generateMeal(
@@ -282,7 +283,8 @@ export class PlanService {
       preferences,
       dislikes,
       language,
-      aiRules
+      aiRules,
+      allergies
     );
 
     // Convert AI ingredients to meal format
@@ -1627,6 +1629,7 @@ export class PlanService {
     }
 
     const dietaryRestrictions = user.dietaryRestrictions || [];
+    const allergies = user.allergies || [];
     const language = user.language || "en";
 
     const dateKey = this.getDateKey(date, plan);
@@ -1669,7 +1672,8 @@ export class PlanService {
       const snackData = await aiService.generateSnack(
         snackName,
         dietaryRestrictions,
-        language
+        language,
+        allergies
       );
 
       snack = {

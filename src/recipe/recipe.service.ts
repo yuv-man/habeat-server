@@ -84,9 +84,10 @@ export class RecipeService {
         meal.category,
         meal.calories,
         meal.ingredients,
-        user.dietaryRestrictions,
+        user?.dietaryRestrictions,
         1,
-        language
+        language,
+        user?.allergies
       );
       recipe = await this.recipeModel.create({
         mealId: mealId,

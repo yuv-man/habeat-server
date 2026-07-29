@@ -25,6 +25,13 @@ import {
   enrichPlanWithFavoriteMeals,
   MealPlanResponse,
 } from "../../utils/helpers";
+import {
+  resolveDietaryConstraints,
+  buildDietaryConstraintBlock,
+  buildMealExamples,
+  findPlanViolations,
+  describeViolations,
+} from "../../utils/dietary-constraints";
 
 // Re-use helpers from generate.service
 const getLocalDateKey = (date: Date): string => {
@@ -45,10 +52,9 @@ const CUISINE_ROTATION = [
   "Mediterranean", "Mexican", "Asian", "Italian",
   "Middle Eastern", "Indian", "Japanese",
 ];
-const PROTEIN_ROTATION = [
-  "Chicken", "Beef", "Salmon", "Tofu",
-  "Turkey", "Shrimp", "Eggs",
-];
+// Protein rotation is derived per user from their dietary constraints — see
+// resolveDietaryConstraints. A fixed meat rotation here would instruct the model
+// to violate a vegan/vegetarian/halal user's restrictions.
 
 interface StreamCallbacks {
   onSkeleton: (payload: PlanSkeletonPayload) => void;
@@ -185,7 +191,25 @@ export class StreamingGeneratorService {
         return;
       }
 
-      // === PHASE 3: Transform and Enrich ===
+      // === PHASE 3: Verify dietary constraints, then transform and enrich ===
+      // The model is instructed twice (skeleton + details), but instructions are
+      // not guarantees — nothing reaches the user without being checked.
+      const constraints = resolveDietaryConstraints(userData);
+      const violations = findPlanViolations(fullDays, constraints);
+      if (violations.length > 0) {
+        logger.error(
+          `[Streaming] Dietary violations in generated plan — ${describeViolations(violations)}`,
+        );
+        callbacks.onError(
+          `DIETARY_CONSTRAINT_VIOLATION: The generated plan did not respect your dietary ` +
+          `restrictions (${constraints.rawRestrictions.join(", ") || constraints.allergies.join(", ")}) ` +
+          `and was discarded. Please try generating again.`,
+          "validation",
+          true,
+        );
+        return;
+      }
+
       logger.info(`[Streaming] Phase 3: Transforming and enriching...`);
 
       callbacks.onProgress({
@@ -316,25 +340,30 @@ export class StreamingGeneratorService {
     workoutDayNums: Set<number>,
     targetCalories: number,
   ): Promise<SkeletonDay[]> {
+    const constraints = resolveDietaryConstraints(userData);
+    const constraintBlock = buildDietaryConstraintBlock(constraints);
+
     const daysList = dates.map((date, idx) => {
       const dayName = dayToName[date.getDay()];
       const cuisine = CUISINE_ROTATION[idx % CUISINE_ROTATION.length];
-      const protein = PROTEIN_ROTATION[idx % PROTEIN_ROTATION.length];
+      const protein =
+        constraints.proteinRotation[idx % constraints.proteinRotation.length];
       const hasWorkout = workoutDayNums.has(date.getDay());
       return `- ${getLocalDateKey(date)} (${dayName}): ${cuisine}, ${protein}${hasWorkout ? ", WORKOUT" : ""}`;
     }).join("\n");
 
     const prompt = `Generate ONLY meal names for a ${dates.length}-day meal plan. Return minimal JSON.
-
+${constraintBlock ? `\n${constraintBlock}\n` : ""}
 PERSON: ${userData.age}y ${userData.gender}, ${userData.path} path
 CALORIES: ~${targetCalories}/day
-AVOID: ${[...(userData.allergies || []), ...(userData.dislikes || [])].join(", ") || "none"}
+DISLIKES (avoid if possible): ${(userData.dislikes || []).join(", ") || "none"}
 PREFER: ${userData.foodPreferences?.join(", ") || "none"}
 
 DAYS (use the cuisine/protein specified):
 ${daysList}
 
 CRITICAL: Each meal name must be UNIQUE. No repeats across days.
+${constraintBlock ? "Every meal name must comply with the hard dietary constraints above." : `Keep meals simple and everyday, e.g. ${buildMealExamples(constraints)}.`}
 
 Return ONLY this JSON structure (no markdown):
 [
@@ -479,10 +508,16 @@ Day: ${skelDay.date} (${skelDay.day})
 - Workout: ${hasWorkout ? "Include 1 workout" : "Rest day"}`;
     }).join("\n");
 
-    return `Fill in nutritional details for these meals. Keep the EXACT meal names provided.
+    const constraints = resolveDietaryConstraints(userData);
+    const constraintBlock = buildDietaryConstraintBlock(constraints);
+    const proteinExample = constraints.proteinRotation[0]
+      .toLowerCase()
+      .replace(/ /g, "_");
 
+    return `Fill in nutritional details for these meals. Keep the EXACT meal names provided.
+${constraintBlock ? `\n${constraintBlock}\n` : ""}
 PERSON: ${userData.age}y ${userData.gender}, daily targets: ${targetCalories} kcal, P:${macros.protein}g C:${macros.carbs}g F:${macros.fat}g
-AVOID: ${[...(userData.allergies || []), ...(userData.dislikes || [])].join(", ") || "none"}
+DISLIKES (avoid if possible): ${(userData.dislikes || []).join(", ") || "none"}
 
 MEALS TO FILL:
 ${mealsToFill}
@@ -497,7 +532,7 @@ Return JSON array with full details for each day:
         "name": "EXACT NAME FROM ABOVE",
         "calories": 450,
         "macros": {"protein": 25, "carbs": 50, "fat": 15},
-        "ingredients": ["chicken_breast|150|g|Proteins", "rice|100|g|Grains"],
+        "ingredients": ["${proteinExample}|150|g|Proteins", "rice|100|g|Grains"],
         "prepTime": 15
       },
       "lunch": {...same structure},
@@ -509,7 +544,7 @@ Return JSON array with full details for each day:
 ]
 
 RULES:
-- Keep EXACT meal names from input
+- Keep EXACT meal names from input${constraintBlock ? "\n- Every ingredient you add must comply with the HARD DIETARY CONSTRAINTS above. If an input meal name conflicts with them, replace it with a compliant equivalent." : ""}
 - Ingredients format: "name|amount|unit|category" (RAW names only, no "chopped", "diced")
 - Categories: Proteins/Vegetables/Fruits/Grains/Dairy/Pantry/Spices
 - Macros math: protein*4 + carbs*4 + fat*9 ≈ calories`;

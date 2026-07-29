@@ -13,6 +13,10 @@ import {
 import { ingredientCategories } from "./ingredientCategories";
 import mongoose from "mongoose";
 import logger from "./logger";
+import {
+  resolveDietaryConstraints,
+  findMealViolations,
+} from "./dietary-constraints";
 
 // ============================================================================
 // INGREDIENT CONVERSION HELPERS
@@ -2172,6 +2176,27 @@ export const enrichPlanWithFavoriteMeals = async (
       `[enrichPlanWithFavoriteMeals] Found ${favoriteMeals.length} favorite meals for user`
     );
 
+    // A favorite may predate the user's current restrictions (e.g. they favorited
+    // a chicken dish before going vegan). Never inject one back into the plan.
+    const dietaryConstraints = resolveDietaryConstraints(userData);
+    const compliantFavorites = favoriteMeals.filter((meal: any) => {
+      const matched = findMealViolations(meal, dietaryConstraints);
+      if (matched.length > 0) {
+        logger.warn(
+          `[enrichPlanWithFavoriteMeals] Skipping favorite "${meal.name}" — violates dietary restrictions (${matched.join(", ")})`
+        );
+        return false;
+      }
+      return true;
+    });
+
+    if (compliantFavorites.length === 0) {
+      logger.info(
+        "[enrichPlanWithFavoriteMeals] No favorites comply with the user's dietary restrictions, skipping enrichment"
+      );
+      return planResponse;
+    }
+
     // Keywords that mark a meal as unsuitable for breakfast regardless of its stored category
     const DINNER_LUNCH_KEYWORDS = [
       "steak", "filet", "fillet", "roast", "grilled salmon", "grilled beef",
@@ -2202,7 +2227,7 @@ export const enrichPlanWithFavoriteMeals = async (
       snack: [],
     };
 
-    favoriteMeals.forEach((meal: any) => {
+    compliantFavorites.forEach((meal: any) => {
       const category = meal.category;
       if (category && favoritesByCategory[category]) {
         // Only add if the meal is genuinely appropriate for that slot

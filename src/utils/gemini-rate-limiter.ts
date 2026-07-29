@@ -82,6 +82,29 @@ const isRateLimitError = (errorMessage: string): boolean => {
 };
 
 /**
+ * Distinguish a PER-DAY quota exhaustion from a transient per-minute 429.
+ *
+ * Free tier caps each model at a fixed number of requests PER DAY
+ * (quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier). Once hit, the
+ * quota does NOT recover until Pacific midnight — so retrying the same model is
+ * futile: it just burns more requests and blocks ~59s per doomed attempt.
+ * Callers should treat this as a signal to fail over to a different model or
+ * provider immediately rather than retry.
+ */
+const isPerDayQuotaError = (errorMessage: string): boolean => {
+  const lower = errorMessage.toLowerCase();
+  return (
+    lower.includes("perday") || // GenerateRequestsPerDayPerProjectPerModel
+    lower.includes("per day") ||
+    lower.includes("requests_per_day") ||
+    lower.includes("requestsperday")
+  );
+};
+
+/** Sentinel prefix so callers can detect a definitively-exhausted model. */
+export const DAILY_QUOTA_EXHAUSTED = "DAILY_QUOTA_EXHAUSTED";
+
+/**
  * Check if error is retryable (temporary server errors)
  */
 const isRetryableError = (errorMessage: string): boolean => {
@@ -259,6 +282,16 @@ export const callGeminiWithRateLimit = async <T>(
 
       // Check if it's a rate limit error
       if (isRateLimitError(errorMsg)) {
+        // Per-day quota is gone until Pacific midnight — retrying the same model
+        // wastes requests and blocks ~59s each. Bail immediately so the caller
+        // can fail over to another model/provider.
+        if (isPerDayQuotaError(errorMsg)) {
+          logger.warn(
+            `[${context}] Daily free-tier quota exhausted for ${modelName}. Not retrying — failing over.`
+          );
+          throw new Error(`${DAILY_QUOTA_EXHAUSTED} [${context}] ${errorMsg}`);
+        }
+
         if (attempt < maxRetries - 1) {
           await handle429Error(errorMsg);
           return executeWithRetry(attempt + 1);

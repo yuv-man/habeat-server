@@ -3,14 +3,10 @@ import axios from "axios";
 import logger from "../utils/logger";
 import {
   callGeminiWithRateLimit,
-  getErrorMessage as getRateLimitErrorMessage,
-  isRateLimitError,
-  parseRetryDelay,
+  DAILY_QUOTA_EXHAUSTED,
 } from "../utils/gemini-rate-limiter";
-import { enumLanguage } from "../enums/enumLanguage";
 import {
   IUserData,
-  IParsedWeeklyPlanResponse,
   IMeal,
   IRecipe,
   IGoal,
@@ -24,19 +20,25 @@ import {
   calculateMacros,
 } from "../utils/healthCalculations";
 import { PATH_WORKOUTS_GOAL } from "../enums/enumPaths";
-import { pathGuidelines, workoutCategories } from "./helper";
 import { loadKnowledge } from "../knowledge/loader";
 import {
   transformWeeklyPlan,
   enrichPlanWithFavoriteMeals,
   MealPlanResponse,
-  cleanMealData,
-  convertAIIngredientsToMealFormat,
   convertMealIngredientsToRecipeFormat,
   MealIngredient,
   cleanIngredientName,
   assignIngredientCategory,
 } from "../utils/helpers";
+import {
+  resolveDietaryConstraints,
+  buildDietaryConstraintBlock,
+  buildMealExamples,
+  findPlanViolations,
+  describeViolations,
+  filterFoodPreferences,
+  DietaryConstraints,
+} from "../utils/dietary-constraints";
 
 // Helper function to extract error message
 const getErrorMessage = (error: unknown): string => {
@@ -161,56 +163,6 @@ const extractAndCleanJSON = (text: string): string => {
   return cleaned;
 };
 
-// Helper function to call Ollama API
-const callOllama = async (
-  prompt: string,
-  model: string = "phi",
-  isWeeklyPlan: boolean = false,
-): Promise<string> => {
-  const ollamaBaseUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-
-  try {
-    await axios.get(`${ollamaBaseUrl}/api/tags`, { timeout: 5000 });
-  } catch (error) {
-    throw new Error(
-      `Ollama is not running at ${ollamaBaseUrl}. Start Ollama first with: ollama serve`,
-    );
-  }
-
-  try {
-    const timeout = isWeeklyPlan ? 600000 : 300000;
-
-    const response = await axios.post(
-      `${ollamaBaseUrl}/api/generate`,
-      {
-        model: model,
-        prompt: prompt,
-        stream: false,
-        options: {
-          temperature: 0.7,
-          top_p: 0.9,
-          top_k: 40,
-          num_predict: isWeeklyPlan ? 8000 : 4000,
-        },
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-        },
-        timeout: timeout,
-      },
-    );
-
-    if (response.data && response.data.response) {
-      return response.data.response;
-    }
-    throw new Error("Invalid response from Ollama API");
-  } catch (error: unknown) {
-    const errorMsg = getErrorMessage(error);
-    throw new Error(`Ollama API error: ${errorMsg}`);
-  }
-};
-
 // Check which Gemini models are available
 const getAvailableGeminiModels = async (apiKey: string): Promise<string[]> => {
   try {
@@ -282,53 +234,6 @@ const getAvailableGeminiModelsCached = async (
   return models;
 };
 
-// Generic retry logic with exponential backoff
-const retryWithBackoffGeneric = async <T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 3,
-  baseDelay: number = 1000,
-  context: string = "AI",
-): Promise<T> => {
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      logger.info(`[${context}] Attempt ${attempt + 1}/${maxRetries}...`);
-      return await fn();
-    } catch (err: unknown) {
-      const errorMsg = getErrorMessage(err);
-      const isRetryable =
-        errorMsg.includes("503") ||
-        errorMsg.includes("overloaded") ||
-        errorMsg.includes("429") ||
-        errorMsg.includes("500") ||
-        errorMsg.includes("502") ||
-        errorMsg.includes("504") ||
-        errorMsg.includes("timed out");
-
-      if (!isRetryable || attempt === maxRetries - 1) {
-        throw err;
-      }
-
-      const delay = baseDelay * Math.pow(2, attempt);
-      logger.warn(
-        `[${context}] Attempt ${attempt + 1} failed (retryable). Waiting ${delay}ms before retry...`,
-      );
-
-      await new Promise((resolve) => setTimeout(resolve, delay));
-    }
-  }
-
-  throw new Error(`[${context}] Max retries exceeded`);
-};
-
-// Backward compatible wrapper for MealPlanResponse
-const retryWithBackoff = async (
-  fn: () => Promise<MealPlanResponse>,
-  maxRetries: number = 3,
-  baseDelay: number = 1000,
-): Promise<MealPlanResponse> => {
-  return retryWithBackoffGeneric(fn, maxRetries, baseDelay, "Gemini");
-};
-
 // Generic AI generation with rate limiting and automatic retry
 const generateWithFallback = async <T>(
   prompt: string,
@@ -373,9 +278,13 @@ const generateWithFallback = async <T>(
     apiKey,
     modelName,
     async (model: GenerativeModel) => {
-      const result = await model.generateContent([
-        { text: prompt + "\n\nReturn ONLY JSON. No other text." },
-      ]);
+      // JSON mode constrains decoding at the API level, so prompts no longer
+      // need to spend tokens telling the model not to wrap output in markdown —
+      // this also mirrors the multi-day plan path, which already relies on it.
+      const result = await model.generateContent({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" },
+      });
 
       if (!result || !result.response) {
         throw new Error("Empty response from Gemini API");
@@ -414,15 +323,16 @@ const CUISINE_ROTATION = [
   "simple Mexican home cooking",
   "classic homestyle",
 ];
-const PROTEIN_ROTATION = [
-  "Chicken",
-  "Beef",
-  "Eggs",
-  "Turkey",
-  "Salmon",
-  "Tuna",
-  "Ground beef",
-];
+// NOTE: the protein rotation is NOT a constant — it is derived per user from
+// their dietary constraints (see resolveDietaryConstraints). Hardcoding
+// "Chicken/Beef/Salmon…" here previously instructed the model to put meat in a
+// vegan user's plan, which outranked the passive "AVOID:" line.
+
+// Shared "no prep-words, use underscores" ingredient-naming rule, reused verbatim
+// across every single-meal prompt (generateMeal/Suggestions/RescueMeal/Snack) so
+// wording only needs to change in one place.
+const INGREDIENT_NAMING_RULES = `- CRITICAL: ingredient name MUST be the RAW ingredient only — no "chopped", "diced", "minced", "fresh", "dried", "sliced", "grated", "crushed", "whole", "ground", "cubed", "julienned"
+- Use lowercase with underscores (e.g., "chicken_breast", "olive_oil", "ginger" — NOT "diced chicken breast")`;
 
 /**
  * Build a compact single-day prompt (~300 tokens vs ~3000 for the full 7-day prompt).
@@ -438,22 +348,35 @@ const buildDayPrompt = (
   macros: { protein: number; carbs: number; fat: number },
   goalContextStr: string,
   moodContext?: string,
+  repairNote?: string,
 ): string => {
   const bCal = Math.round(targetCalories * 0.25);
   const lCal = Math.round(targetCalories * 0.35);
   const dCal = Math.round(targetCalories * 0.3);
   const sCal = Math.round(targetCalories * 0.1);
   const cuisine = CUISINE_ROTATION[dayIndex % CUISINE_ROTATION.length];
-  const protein = PROTEIN_ROTATION[dayIndex % PROTEIN_ROTATION.length];
 
-  const avoidList =
-    [
-      ...(userData.allergies || []),
-      ...(userData.dietaryRestrictions || []),
-      ...(userData.dislikes || []),
-    ].join(", ") || "none";
+  const constraints = resolveDietaryConstraints(userData);
+  const constraintBlock = buildDietaryConstraintBlock(constraints);
+  const protein =
+    constraints.proteinRotation[dayIndex % constraints.proteinRotation.length];
 
-  const rawPreferList = userData.foodPreferences?.join(", ") || "none";
+  // Dislikes are soft preferences and are kept separate from the hard
+  // constraints above so the model can't treat "vegan" as merely a dislike.
+  const avoidList = (userData.dislikes || []).join(", ") || "none";
+
+  // Drop preferences that conflict with the hard constraints (e.g. "Sirloin
+  // Steak" for a vegan) so the prompt never tells the model to treat a
+  // forbidden ingredient as inspiration.
+  const { allowed: allowedPreferences, removed: removedPreferences } =
+    filterFoodPreferences(userData.foodPreferences || [], constraints);
+  if (removedPreferences.length) {
+    logger.warn(
+      `[MealGen] Dropped food preferences conflicting with dietary restrictions: ${removedPreferences.join(", ")}`,
+    );
+  }
+
+  const rawPreferList = allowedPreferences.join(", ") || "none";
   const preferList = rawPreferList !== "none"
     ? `${rawPreferList} — apply to LUNCH/DINNER by default. For breakfast, use morning-appropriate foods (eggs, oatmeal, yogurt, toast, smoothie, granola, fruit, rice porridge). Do not automatically place a dinner-type preference (steak, beef cut, pasta, curry, etc.) into breakfast — unless the user explicitly requested it. Labeling a dinner protein as a "scramble" does not make it breakfast-appropriate; egg scrambles use eggs as the primary protein.`
     : "none";
@@ -463,15 +386,15 @@ const buildDayPrompt = (
     : `"workouts":[]`;
 
   return `Generate a single-day meal plan as JSON.
-PERSON: ${userData.age}y ${userData.gender} ${userData.height}cm ${userData.weight}kg path=${userData.path}
+${constraintBlock ? `${constraintBlock}\n` : ""}${repairNote ? `${repairNote}\n` : ""}PERSON: ${userData.age}y ${userData.gender} ${userData.height}cm ${userData.weight}kg path=${userData.path}
 DAILY TARGETS: ${targetCalories} kcal | P:${macros.protein}g C:${macros.carbs}g F:${macros.fat}g
-AVOID: ${avoidList}
+DISLIKES (avoid if possible): ${avoidList}
 PREFER: ${preferList}
 ${goalContextStr ? `STYLE: ${goalContextStr.substring(0, 200)}` : ""}
 ${moodContext ? `MOOD & WELLNESS: ${moodContext}` : ""}
 DAY: ${dateStr} (${dayName}) | Style: ${cuisine} | Primary protein: ${protein}
 ${hasWorkout ? "WORKOUT: Include 1 workout today." : "REST DAY: No workout."}
-CRITICAL: Use SIMPLE, everyday home-cooked meals that normal people make. Examples: scrambled eggs with toast, oatmeal with banana, grilled chicken with rice and vegetables, pasta with tomato sauce, chicken soup, beef stir-fry with rice, tuna sandwich, turkey wrap. NO exotic restaurant dishes.
+CRITICAL: Use SIMPLE, everyday home-cooked meals that normal people make. Examples: ${buildMealExamples(constraints)}. NO exotic restaurant dishes.
 MEAL CALORIE TARGETS:
 - breakfast: ~${bCal} kcal
 - lunch: ~${lCal} kcal
@@ -501,20 +424,31 @@ const buildMultiDayPrompt = (
   macros: { protein: number; carbs: number; fat: number },
   goalContextStr: string,
   moodContext?: string,
+  repairNote?: string,
 ): string => {
   const bCal = Math.round(targetCalories * 0.25);
   const lCal = Math.round(targetCalories * 0.35);
   const dCal = Math.round(targetCalories * 0.3);
   const sCal = Math.round(targetCalories * 0.1);
 
-  const avoidList =
-    [
-      ...(userData.allergies || []),
-      ...(userData.dietaryRestrictions || []),
-      ...(userData.dislikes || []),
-    ].join(", ") || "none";
+  const constraints = resolveDietaryConstraints(userData);
+  const constraintBlock = buildDietaryConstraintBlock(constraints);
 
-  const rawPreferList = userData.foodPreferences?.join(", ") || "none";
+  // Dislikes only — hard restrictions/allergies live in the constraint block.
+  const avoidList = (userData.dislikes || []).join(", ") || "none";
+
+  // Drop preferences that conflict with the hard constraints (e.g. "Sirloin
+  // Steak" for a vegan) so the prompt never tells the model to treat a
+  // forbidden ingredient as inspiration.
+  const { allowed: allowedPreferences, removed: removedPreferences } =
+    filterFoodPreferences(userData.foodPreferences || [], constraints);
+  if (removedPreferences.length) {
+    logger.warn(
+      `[MealGen] Dropped food preferences conflicting with dietary restrictions: ${removedPreferences.join(", ")}`,
+    );
+  }
+
+  const rawPreferList = allowedPreferences.join(", ") || "none";
   const preferList = rawPreferList !== "none"
     ? `${rawPreferList} — apply to LUNCH/DINNER by default. For breakfast, default to morning-appropriate foods (eggs, oatmeal, yogurt, toast, smoothie, granola, pancakes, fruit, rice porridge). Avoid automatically applying a dinner-type preference (steak, beef cut, pasta, curry, rice bowl, etc.) to breakfast unless the user explicitly asked for it. Calling a dinner protein a "scramble" does not make it a breakfast meal; egg scrambles should use eggs as the primary protein.`
     : "none";
@@ -523,7 +457,8 @@ const buildMultiDayPrompt = (
   const daySpecs = daysData
     .map((d) => {
       const cuisine = CUISINE_ROTATION[d.dayIndex % CUISINE_ROTATION.length];
-      const protein = PROTEIN_ROTATION[d.dayIndex % PROTEIN_ROTATION.length];
+      const protein =
+        constraints.proteinRotation[d.dayIndex % constraints.proteinRotation.length];
       const workoutStr = d.hasWorkout ? "WORKOUT" : "REST";
       return `- ${d.dateStr} (${d.dayName}): ${cuisine} cuisine, ${protein} protein, ${workoutStr}`;
     })
@@ -540,10 +475,10 @@ const buildMultiDayPrompt = (
     .join(",\n    ");
 
   return `Generate a ${daysData.length}-day meal plan as a JSON array. Each day MUST be unique with different meals.
-
+${constraintBlock ? `\n${constraintBlock}\n` : ""}${repairNote ? `\n${repairNote}\n` : ""}
 PERSON: ${userData.age}y ${userData.gender} ${userData.height}cm ${userData.weight}kg path=${userData.path}
 DAILY TARGETS: ${targetCalories} kcal | P:${macros.protein}g C:${macros.carbs}g F:${macros.fat}g
-AVOID: ${avoidList}
+DISLIKES (avoid if possible): ${avoidList}
 PREFER: ${preferList}
 ${goalContextStr ? `STYLE: ${goalContextStr.substring(0, 200)}` : ""}
 ${moodContext ? `MOOD & WELLNESS: ${moodContext}` : ""}
@@ -558,8 +493,9 @@ MEAL CALORIE TARGETS (per day):
 - snacks[0]: ~${sCal} kcal
 
 CRITICAL RULES:
+0. ${constraintBlock ? "The HARD DIETARY CONSTRAINTS above outrank every rule below. If a rule conflicts with them, follow the constraints." : "Follow the targets above."}
 1. NO REPEATED MEALS across days - every breakfast, lunch, dinner must be unique
-2. SIMPLE, everyday home-cooked meals only. Examples: scrambled eggs, oatmeal, grilled chicken with rice, pasta with tomato sauce, chicken soup, beef tacos, tuna sandwich, turkey wrap, stir-fry, grilled salmon with vegetables. NO exotic restaurant dishes.
+2. SIMPLE, everyday home-cooked meals only. Examples: ${buildMealExamples(constraints)}. NO exotic restaurant dishes.
 3. Use the specified meal style and protein for each day
 4. INGREDIENT FORMAT: "ingredient_name|amount|unit|category"
    - ingredient_name: RAW only (no "chopped", "diced", "minced", "fresh", "dried")
@@ -572,7 +508,7 @@ RETURN ONLY THIS JSON ARRAY (no markdown, no extra text):
 ]
 
 Each meal object structure:
-{"name":"Meal Name","calories":${bCal},"macros":{"protein":20,"carbs":40,"fat":10},"ingredients":["chicken_breast|150|g|Proteins","rice|100|g|Grains"],"prepTime":15}`;
+{"name":"Meal Name","calories":${bCal},"macros":{"protein":20,"carbs":40,"fat":10},"ingredients":["${constraints.proteinRotation[0].toLowerCase().replace(/ /g, "_")}|150|g|Proteins","rice|100|g|Grains"],"prepTime":15}`;
 };
 
 /**
@@ -606,45 +542,148 @@ const parseMultiDayResponse = (text: string): any[] => {
   throw new Error("Unable to parse multi-day response: unexpected format");
 };
 
+/** Error prefix the controller/client can detect for a hard dietary failure. */
+export const DIETARY_VIOLATION_ERROR = "DIETARY_CONSTRAINT_VIOLATION";
+
 /**
- * Generate multiple days in a single API call.
- * Returns array of day objects or empty array on failure.
+ * Last line of defence: verify every generated day against the user's hard
+ * dietary constraints, re-generating the offending days once with an explicit
+ * correction note. If the model still returns a violating meal we throw rather
+ * than persist it — serving meat to a vegan (or an allergen to an allergic
+ * user) is strictly worse than showing a "try again" error.
+ *
+ * `regenerateDays` returns fresh day objects for the given dates, or null when
+ * the provider cannot retry (in which case the violating days are dropped).
+ */
+const enforceDietaryConstraints = async (
+  days: any[],
+  constraints: DietaryConstraints,
+  context: string,
+  regenerateDays: (violatingDates: string[], repairNote: string) => Promise<any[] | null>,
+): Promise<any[]> => {
+  if (!constraints.hasConstraints) return days;
+
+  const violations = findPlanViolations(days, constraints);
+  if (violations.length === 0) return days;
+
+  logger.error(
+    `[${context}] Dietary violations detected — ${describeViolations(violations)}`,
+  );
+
+  const violatingDates = Array.from(
+    new Set(violations.map((v) => v.date).filter(Boolean)),
+  ) as string[];
+
+  const repairNote =
+    `PREVIOUS ATTEMPT WAS REJECTED. It included: ${describeViolations(violations)}. ` +
+    `Those ingredients are strictly forbidden for this user. Regenerate WITHOUT them.`;
+
+  const repaired = await regenerateDays(violatingDates, repairNote);
+
+  if (repaired && repaired.length > 0) {
+    const stillBad = findPlanViolations(repaired, constraints);
+    if (stillBad.length === 0) {
+      const repairedByDate = new Map(repaired.map((d: any) => [d?.date, d]));
+      const merged = days.map((d: any) =>
+        repairedByDate.has(d?.date) ? repairedByDate.get(d?.date) : d,
+      );
+      logger.info(
+        `[${context}] Repaired ${violatingDates.length} day(s) that violated dietary constraints`,
+      );
+      // Any violating day we could not re-generate must still be removed.
+      return merged.filter((d: any) => findPlanViolations([d], constraints).length === 0);
+    }
+    logger.error(
+      `[${context}] Repair attempt still violates constraints — ${describeViolations(stillBad)}`,
+    );
+  }
+
+  // Drop the violating days entirely. If nothing survives, fail loudly.
+  const clean = days.filter((d: any) => findPlanViolations([d], constraints).length === 0);
+
+  if (clean.length === 0) {
+    throw new Error(
+      `${DIETARY_VIOLATION_ERROR}: The generated plan did not respect your dietary restrictions ` +
+      `(${constraints.rawRestrictions.join(", ") || constraints.allergies.join(", ")}) and was discarded. ` +
+      `Please try generating again.`,
+    );
+  }
+
+  logger.warn(
+    `[${context}] Dropped ${days.length - clean.length} day(s) that could not be made compliant`,
+  );
+  return clean;
+};
+
+/**
+ * Generate multiple days in a single API call, rotating across models.
+ *
+ * Each Gemini model has its OWN separate free-tier daily quota, so when one
+ * model's per-day quota is exhausted we fail over to the next model instead of
+ * retrying (which would just burn requests). Returns an array of day objects,
+ * or [] for a recoverable failure (parse/transient). Throws a
+ * DAILY_QUOTA_EXHAUSTED error only when EVERY candidate model is out of quota,
+ * so the caller can fail over to a different provider.
  */
 const generateMultiDayPlan = async (
   apiKey: string,
-  modelName: string,
+  models: string[],
   prompt: string,
   context: string,
   maxRetries: number = 4,
   timeoutMs: number = 60000, // Longer timeout for multi-day requests
 ): Promise<any[]> => {
-  try {
-    return await callGeminiWithRateLimit(
-      apiKey,
-      modelName,
-      async (model: GenerativeModel) => {
-        const result = await model.generateContent({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            temperature: 0.7,
-          },
-        });
+  let allExhausted = true;
+  let lastError = "";
 
-        const text = result.response.text();
-        return parseMultiDayResponse(text);
-      },
-      {
-        maxRetries,
-        timeoutMs,
-        context,
-      },
-    );
-  } catch (err) {
-    const errorMsg = getErrorMessage(err);
-    logger.error(`[${context}] Multi-day generation failed: ${errorMsg}`);
-    return [];
+  for (const modelName of models) {
+    try {
+      return await callGeminiWithRateLimit(
+        apiKey,
+        modelName,
+        async (model: GenerativeModel) => {
+          const result = await model.generateContent({
+            contents: [{ role: "user", parts: [{ text: prompt }] }],
+            generationConfig: {
+              responseMimeType: "application/json",
+              temperature: 0.7,
+            },
+          });
+
+          const text = result.response.text();
+          return parseMultiDayResponse(text);
+        },
+        {
+          maxRetries,
+          timeoutMs,
+          context,
+        },
+      );
+    } catch (err) {
+      const errorMsg = getErrorMessage(err);
+      lastError = errorMsg;
+      if (errorMsg.includes(DAILY_QUOTA_EXHAUSTED)) {
+        logger.warn(
+          `[${context}] ${modelName} daily quota exhausted — trying next model...`,
+        );
+        continue; // model is done for the day, try the next one
+      }
+      // Non-quota failure (parse/transient/timeout): this model still has quota,
+      // so don't mark everything exhausted — fall through to caller's recovery.
+      allExhausted = false;
+      logger.error(
+        `[${context}] Multi-day generation failed on ${modelName}: ${errorMsg}`,
+      );
+    }
   }
+
+  // Every model we tried was out of daily quota — signal the caller to switch
+  // providers rather than pointlessly attempting single-day generation.
+  if (allExhausted) {
+    throw new Error(`${DAILY_QUOTA_EXHAUSTED} [${context}] ${lastError}`);
+  }
+
+  return [];
 };
 
 /**
@@ -702,19 +741,24 @@ const generateMealPlanWithGemini = async (
 ): Promise<MealPlanResponse> => {
   const models = await getAvailableGeminiModelsCached(apiKey);
 
-  // Use gemini-2.5-flash-lite for better free tier rate limits
-  const modelToUse = models.includes("gemini-2.5-flash-lite")
-    ? "gemini-2.5-flash-lite"
-    : models.includes("gemini-2.5-flash")
-      ? "gemini-2.5-flash"
-      : models[0];
+  // Ordered fail-over list. Each model has its OWN free-tier daily quota, so when
+  // one is exhausted we move to the next — multiplying effective free capacity.
+  // Lite models first (best rate limits), fuller models as backups.
+  const MODEL_PRIORITY = [
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-2.0-flash",
+  ];
+  const candidateModels = MODEL_PRIORITY.filter((m) => models.includes(m));
+  if (candidateModels.length === 0) {
+    candidateModels.push(models[0] || "gemini-2.5-flash-lite");
+  }
+  const modelToUse = candidateModels[0];
 
   // buildPrompt gives us the full-week context (workout distribution, day names, etc.)
   const { dayToName, nameToDay, dates: fullWeekDates, activeDays, workoutDays } = buildPrompt(
     userData,
-    planType,
-    language,
-    weekStartDate,
     goals,
     planTemplate,
   );
@@ -746,6 +790,14 @@ const generateMealPlanWithGemini = async (
   );
   const macros = calculateMacros(targetCalories, userData.path);
   const workoutDayNums = new Set(workoutDays);
+  const constraints = resolveDietaryConstraints(userData);
+
+  if (constraints.hasConstraints) {
+    logger.info(
+      `[Gemini] Dietary constraints active: ${constraints.rules.map((r) => r.label).join(", ") || "custom"} | ` +
+      `proteins=${constraints.proteinRotation.join("/")}`,
+    );
+  }
 
   // Get goal context for prompt
   const goalContextStr = planTemplate
@@ -753,9 +805,11 @@ const generateMealPlanWithGemini = async (
     : goalAdjustments.goalDescription || "";
 
   // BATCHED GENERATION STRATEGY:
-  // Batch up to 4 days per request — reduces total API calls, stays well under 15 RPM.
-  const DAYS_PER_BATCH = Math.min(4, datesToGenerate.length);
-  const MULTI_DAY_TIMEOUT_MS = 60000;
+  // Generate ALL requested days in a SINGLE request. The binding free-tier limit
+  // is requests-per-DAY (20/model), not tokens, so minimizing request COUNT is
+  // what matters. Phase 1 (today) = 1 request; Phase 2 (rest of week) = 1 request.
+  const DAYS_PER_BATCH = datesToGenerate.length;
+  const MULTI_DAY_TIMEOUT_MS = 90000; // room for a full 6-day payload in one call
 
   // Prepare day data for batching
   const allDaysData = datesToGenerate.map((date, idx) => ({
@@ -802,9 +856,13 @@ const generateMealPlanWithGemini = async (
       moodContext,
     );
 
+    // generateMultiDayPlan rotates across candidateModels and throws
+    // DAILY_QUOTA_EXHAUSTED only when EVERY model is out of daily quota — in
+    // which case we abort Gemini entirely and let the caller fail over to
+    // OpenRouter instead of burning more (already-exhausted) requests.
     const batchResults = await generateMultiDayPlan(
       apiKey,
-      modelToUse,
+      candidateModels,
       multiDayPrompt,
       `Batch${batchIdx + 1}`,
       4, // maxRetries
@@ -817,7 +875,9 @@ const generateMealPlanWithGemini = async (
       );
       allDayResults.push(...batchResults);
     } else {
-      // Fallback: Try individual day generation for failed batch
+      // Recoverable failure (parse/transient) — the model still has quota, so
+      // retry these days individually. Single-day prompts are smaller and more
+      // likely to return valid JSON.
       logger.warn(
         `[Gemini] Batch ${batchIdx + 1} failed. Falling back to individual day generation...`,
       );
@@ -854,7 +914,7 @@ const generateMealPlanWithGemini = async (
   }
 
   const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
-  const weeklyPlanArray = allDayResults.filter((d) => d !== null);
+  let weeklyPlanArray = allDayResults.filter((d) => d !== null);
 
   if (weeklyPlanArray.length === 0) {
     throw new Error("All day generations failed. Check Gemini API quota/rate limits.");
@@ -862,6 +922,46 @@ const generateMealPlanWithGemini = async (
 
   logger.info(
     `[Gemini] Successfully generated ${weeklyPlanArray.length}/${datesToGenerate.length} days in ${elapsedSec}s`,
+  );
+
+  // Verify the model actually honoured the hard dietary constraints.
+  weeklyPlanArray = await enforceDietaryConstraints(
+    weeklyPlanArray,
+    constraints,
+    "Gemini",
+    async (violatingDates, repairNote) => {
+      const repairDays = allDaysData.filter((d) => violatingDates.includes(d.dateStr));
+      if (repairDays.length === 0) return null;
+
+      const repairPrompt = buildMultiDayPrompt(
+        userData,
+        repairDays.map((d) => ({
+          dateStr: d.dateStr,
+          dayName: d.dayName,
+          dayIndex: d.dayIndex,
+          hasWorkout: d.hasWorkout,
+        })),
+        targetCalories,
+        macros,
+        goalContextStr,
+        moodContext,
+        repairNote,
+      );
+
+      try {
+        return await generateMultiDayPlan(
+          apiKey,
+          candidateModels,
+          repairPrompt,
+          "DietaryRepair",
+          2,
+          MULTI_DAY_TIMEOUT_MS,
+        );
+      } catch (err) {
+        logger.error(`[Gemini] Dietary repair request failed: ${getErrorMessage(err)}`);
+        return null;
+      }
+    },
   );
 
   const parsedResponse = { weeklyPlan: weeklyPlanArray };
@@ -906,7 +1006,7 @@ const generateMealPlanWithOpenRouter = async (
 
   // Reuse the same date/workout scheduling logic from buildPrompt
   const { dayToName, nameToDay, dates: fullWeekDates, workoutDays } = buildPrompt(
-    userData, planType, language, weekStartDate, goals, planTemplate,
+    userData, goals, planTemplate,
   );
 
   const datesToGenerate = datesOverride?.length ? datesOverride : fullWeekDates;
@@ -922,11 +1022,14 @@ const generateMealPlanWithOpenRouter = async (
   );
   const macros = calculateMacros(targetCalories, userData.path);
   const workoutDayNums = new Set(workoutDays);
+  const constraints = resolveDietaryConstraints(userData);
   const goalContextStr = planTemplate
     ? PLAN_TEMPLATE_STYLES[planTemplate] || ""
     : goalAdjustments.goalDescription || "";
 
-  const DAYS_PER_BATCH = Math.min(4, datesToGenerate.length);
+  // Single-request batching (mirrors the Gemini path): all requested days in one
+  // call minimizes request count against the fallback provider's limits too.
+  const DAYS_PER_BATCH = datesToGenerate.length;
 
   const allDaysData = datesToGenerate.map((date, idx) => ({
     date,
@@ -943,21 +1046,11 @@ const generateMealPlanWithOpenRouter = async (
 
   const allDayResults: any[] = [];
 
-  for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
-    const batch = batches[batchIdx];
-    const batchDaysData = batch.map(d => ({
-      dateStr: d.dateStr, dayName: d.dayName, dayIndex: d.dayIndex, hasWorkout: d.hasWorkout,
-    }));
-
-    const prompt = buildMultiDayPrompt(
-      userData, batchDaysData, targetCalories, macros, goalContextStr, moodContext,
-    );
-
-    let batchResults: any[] = [];
-
+  // Single prompt → first model that returns parseable days wins.
+  const runOpenRouterPrompt = async (prompt: string, label: string): Promise<any[]> => {
     for (const model of OPEN_ROUTER_MODELS) {
       try {
-        logger.info(`[OpenRouter] Trying model ${model} for batch ${batchIdx + 1}/${batches.length}...`);
+        logger.info(`[OpenRouter] Trying model ${model} for ${label}...`);
         const response = await axios.post(
           "https://openrouter.ai/api/v1/chat/completions",
           {
@@ -979,15 +1072,32 @@ const generateMealPlanWithOpenRouter = async (
         const text: string = response.data?.choices?.[0]?.message?.content;
         if (!text) throw new Error("Empty response from OpenRouter");
 
-        batchResults = parseMultiDayResponse(text);
-        if (batchResults.length > 0) {
-          logger.info(`[OpenRouter] Batch ${batchIdx + 1} success with ${model}: ${batchResults.length} days`);
-          break;
+        const results = parseMultiDayResponse(text);
+        if (results.length > 0) {
+          logger.info(`[OpenRouter] ${label} success with ${model}: ${results.length} days`);
+          return results;
         }
       } catch (err) {
-        logger.warn(`[OpenRouter] Model ${model} batch ${batchIdx + 1} failed: ${getErrorMessage(err)}`);
+        logger.warn(`[OpenRouter] Model ${model} ${label} failed: ${getErrorMessage(err)}`);
       }
     }
+    return [];
+  };
+
+  for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+    const batch = batches[batchIdx];
+    const batchDaysData = batch.map(d => ({
+      dateStr: d.dateStr, dayName: d.dayName, dayIndex: d.dayIndex, hasWorkout: d.hasWorkout,
+    }));
+
+    const prompt = buildMultiDayPrompt(
+      userData, batchDaysData, targetCalories, macros, goalContextStr, moodContext,
+    );
+
+    const batchResults = await runOpenRouterPrompt(
+      prompt,
+      `batch ${batchIdx + 1}/${batches.length}`,
+    );
 
     if (batchResults.length > 0) {
       allDayResults.push(...batchResults);
@@ -1002,7 +1112,34 @@ const generateMealPlanWithOpenRouter = async (
 
   logger.info(`[OpenRouter] Generated ${allDayResults.length}/${datesToGenerate.length} days`);
 
-  const parsedResponse = { weeklyPlan: allDayResults };
+  // Small free-tier models are the most likely to drift off a restriction, so
+  // the same verification runs here before anything reaches the user.
+  const verifiedDays = await enforceDietaryConstraints(
+    allDayResults,
+    constraints,
+    "OpenRouter",
+    async (violatingDates, repairNote) => {
+      const repairDays = allDaysData.filter((d) => violatingDates.includes(d.dateStr));
+      if (repairDays.length === 0) return null;
+
+      const repairPrompt = buildMultiDayPrompt(
+        userData,
+        repairDays.map((d) => ({
+          dateStr: d.dateStr, dayName: d.dayName, dayIndex: d.dayIndex, hasWorkout: d.hasWorkout,
+        })),
+        targetCalories,
+        macros,
+        goalContextStr,
+        moodContext,
+        repairNote,
+      );
+
+      const repaired = await runOpenRouterPrompt(repairPrompt, "dietary repair");
+      return repaired.length > 0 ? repaired : null;
+    },
+  );
+
+  const parsedResponse = { weeklyPlan: verifiedDays };
   const transformedPlan = await transformWeeklyPlan(
     parsedResponse, dayToName, nameToDay, datesToGenerate,
     datesToGenerate.map(d => d.getDay()), workoutDays,
@@ -1284,33 +1421,25 @@ Rules:
 `;
 };
 
+// Builds the week's date/workout schedule shared by every meal-plan generation
+// path (Gemini and OpenRouter both call this purely for dayToName/nameToDay/
+// dates/activeDays/workoutDays — actual prompts are built separately by
+// buildDayPrompt/buildMultiDayPrompt).
 const buildPrompt = (
   userData: IUserData,
-  planType: "daily" | "weekly",
-  language: string,
-  weekStartDate: Date,
   goals: IGoal[] = [],
   planTemplate?: string,
 ): {
-  prompt: string;
   dayToName: Record<number, string>;
   nameToDay: Record<string, number>;
   dates: Date[];
   activeDays: number[];
   workoutDays: number[];
 } => {
-  // --- 1. CALCULATIONS & SETUP ---
   // For predefined plans, skip goal-based adjustments
   const goalAdjustments = planTemplate
     ? getGoalBasedAdjustments([])
     : getGoalBasedAdjustments(goals);
-
-  const bmr = calculateBMR(
-    userData.weight,
-    userData.height,
-    userData.age,
-    userData.gender,
-  );
 
   // Balance workout frequency
   const userWorkoutFrequency = userData.workoutFrequency;
@@ -1320,34 +1449,7 @@ const buildPrompt = (
       ? Math.max(goalWorkoutFrequency, userWorkoutFrequency)
       : goalWorkoutFrequency || userWorkoutFrequency;
 
-  const tdee = calculateTDEE(bmr, effectiveWorkoutFrequency);
-
-  // Calorie & Macro Math
-  const baseTargetCalories = calculateTargetCalories(tdee, userData.path);
-  const targetCalories = Math.max(
-    1200,
-    baseTargetCalories + goalAdjustments.calorieAdjustment,
-  );
-
-  let macros = calculateMacros(targetCalories, userData.path);
-  if (goalAdjustments.macroAdjustments) {
-    macros = {
-      protein: Math.max(
-        0,
-        macros.protein + (goalAdjustments.macroAdjustments.protein || 0),
-      ),
-      carbs: Math.max(
-        0,
-        macros.carbs + (goalAdjustments.macroAdjustments.carbs || 0),
-      ),
-      fat: Math.max(
-        0,
-        macros.fat + (goalAdjustments.macroAdjustments.fat || 0),
-      ),
-    };
-  }
-
-  // --- 2. DATE & DAY GENERATION ---
+  // --- DATE & DAY GENERATION ---
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const actualStartDate = today;
@@ -1414,238 +1516,7 @@ const buildPrompt = (
   // activeDays represents all days that will have meal plans
   const activeDays = daysToGenerate;
 
-  // Create a Set of Date Strings that MUST have workouts
-  // This explicitly binds the workout to a specific YYYY-MM-DD
-  const workoutDatesSet = new Set(
-    workoutIndices.map((i) => getLocalDateKey(dates[i])),
-  );
-
-  // --- 4. PROMPT CONSTRUCTION ---
-
-  // Generate a rigid schedule map for the prompt to follow
-  const dailyScheduleManifest = dates
-    .map((date) => {
-      const dateKey = getLocalDateKey(date);
-      const dayName = dayToName[date.getDay()];
-      const hasWorkout = workoutDatesSet.has(dateKey);
-      return `- ${dateKey} (${dayName}): ${hasWorkout ? "MUST INCLUDE WORKOUT" : "Rest Day (No Workout)"}`;
-    })
-    .join("\n  ");
-
-  const pathGuideline =
-    pathGuidelines[userData.path as keyof typeof pathGuidelines] ||
-    pathGuidelines.custom;
-
-  // Goal & Preference Sections
-  // For predefined plans, use the plan template style instead of goal context
-  const goalContext =
-    planTemplate && PLAN_TEMPLATE_STYLES[planTemplate]
-      ? PLAN_TEMPLATE_STYLES[planTemplate]
-      : goalAdjustments.goalDescription
-        ? `ACTIVE GOAL: ${goalAdjustments.goalDescription}\n  (Adjust meals/macros/workouts to achieve this)`
-        : "GOAL: Maintain healthy lifestyle";
-
-  const foodPrefs = userData.foodPreferences?.length
-    ? `PREFERENCES (apply to LUNCH/DINNER by default): ${userData.foodPreferences.join(", ")}. For breakfast, default to morning-appropriate foods (eggs, oatmeal, yogurt, toast, smoothie, granola, pancakes, rice porridge, fruit). Avoid applying a dinner-type preference (steak, beef cut, pasta, curry, etc.) to breakfast unless explicitly requested — and note that wrapping a dinner protein in a "scramble" label does not make it breakfast-appropriate.`
-    : "No specific preferences";
-
-  const dislikes = userData.dislikes?.length
-    ? `AVOID: ${userData.dislikes.join(", ")}`
-    : "No specific dislikes";
-
-  const workoutFocus =
-    goalAdjustments.workoutTypes.length > 0
-      ? `FOCUS: ${goalAdjustments.workoutTypes.join(", ")}`
-      : `FOCUS: ${Object.keys(workoutCategories).join(", ")}`;
-
-  // Calculate meal-specific targets for better macro distribution
-  const breakfastTarget = Math.round(targetCalories * 0.25); // ~25% of daily calories
-  const lunchTarget = Math.round(targetCalories * 0.35); // ~35% of daily calories
-  const dinnerTarget = Math.round(targetCalories * 0.3); // ~30% of daily calories
-  const snackTarget = Math.round(targetCalories * 0.1); // ~10% of daily calories per snack
-
-  const breakfastMacros = {
-    protein: Math.round(macros.protein * 0.2),
-    carbs: Math.round(macros.carbs * 0.5),
-    fat: Math.round(macros.fat * 0.3),
-  };
-  const lunchMacros = {
-    protein: Math.round(macros.protein * 0.3),
-    carbs: Math.round(macros.carbs * 0.4),
-    fat: Math.round(macros.fat * 0.3),
-  };
-  const dinnerMacros = {
-    protein: Math.round(macros.protein * 0.35),
-    carbs: Math.round(macros.carbs * 0.35),
-    fat: Math.round(macros.fat * 0.3),
-  };
-  const snackMacros = {
-    protein: Math.round(macros.protein * 0.15),
-    carbs: Math.round(macros.carbs * 0.5),
-    fat: Math.round(macros.fat * 0.25),
-  };
-
-  // Load knowledge base for grounding — reduces AI reasoning time and improves accuracy
-  const knowledgeBlock = loadKnowledge("meal-generator", { maxTokens: 1400 });
-
-  // THE OPTIMIZED PROMPT
-  const prompt = `
-You are a precision nutritionist and structured data generator. Create a highly varied ${planType} plan for a ${userData.age}y ${userData.gender} (${userData.height}cm/${userData.weight}kg).
-
-${knowledgeBlock ? `${knowledgeBlock}\n\n` : ""}====== CRITICAL VARIETY ENFORCEMENT ======
-The user will reject this plan if meals are repeated. 
-1. **NO REPEATS:** You must generate 21 unique distinct meals (7 breakfasts, 7 lunches, 7 dinners).
-2. **PROTEIN ROTATION:** You must use a different primary protein source for every Lunch and Dinner (e.g., Mon=Chicken, Tue=Beef, Wed=Tofu, Thu=Fish, etc.).
-3. **CUISINE ROTATION:** Every day must feature a different flavor profile (e.g., Mon=Italian, Tue=Mexican, Wed=Asian, etc.).
-
-====== USER PROFILE & CONSTRAINTS ======
-TARGETS:
-- Daily Calories: ${targetCalories} kcal (±5%)
-- Macros: P:${macros.protein}g, C:${macros.carbs}g, F:${macros.fat}g (±10%)
-- Goal: ${goalContext}
-- Path: ${userData.path}
-
-DIETARY RULES (STRICTLY ENFORCE):
-- Allergies: ${userData.allergies ? userData.allergies.join(", ") : "None"}
-- Restrictions: ${userData.dietaryRestrictions ? userData.dietaryRestrictions.join(", ") : "None"}
-- Dislikes: ${dislikes}
-- Food Preferences (inspiration for ~25% of meals, LUNCH/DINNER ONLY): ${foodPrefs}
-  ${userData.foodPreferences?.length ? `Use preferences as INSPIRATION for roughly 25% of lunch and dinner slots. For breakfast, default to morning foods (eggs, oatmeal, yogurt, toast, fruit, granola, smoothies, pancakes, rice porridge). Avoid placing dinner-type preferences (steak, beef cut, pasta, curry, rice bowl) at breakfast — this should be an AI-driven default, not a restriction on the user. Egg scrambles should use eggs as the primary protein; a dinner protein wrapped in a "scramble" name is still a poor breakfast choice.` : ""}
-${buildLearningProfileSection(userData)}
-MEAL FRAMEWORKS (Approximate):
-- Breakfast: ~${breakfastTarget} kcal (P:${breakfastMacros.protein}g, C:${breakfastMacros.carbs}g, F:${breakfastMacros.fat}g)
-- Lunch: ~${lunchTarget} kcal (P:${lunchMacros.protein}g, C:${lunchMacros.carbs}g, F:${lunchMacros.fat}g)
-- Dinner: ~${dinnerTarget} kcal (P:${dinnerMacros.protein}g, C:${dinnerMacros.carbs}g, F:${dinnerMacros.fat}g)
-- Snacks: ~${snackTarget} kcal (P:${snackMacros.protein}g, C:${snackMacros.carbs}g, F:${snackMacros.fat}g)
-
-====== DATA STRUCTURE RULES ======
-1. Return ONLY valid JSON. Do not include markdown formatting (like \`\`\`json).
-2. Follow this schedule keys exactly: ${dailyScheduleManifest}
-3. INGREDIENTS: Format as "ingredient|amount|unit|category" using RAW ingredient names and amounts.
-   - CRITICAL: ingredient name MUST be RAW only (no preparation words)
-   - DO NOT include: "chopped", "diced", "minced", "fresh", "dried", "sliced", "grated", "crushed", "whole", "ground", "cubed", "julienned"
-   - Examples: "ginger" (NOT "chopped fresh ginger"), "chicken_breast" (NOT "diced chicken breast"), "onion" (NOT "sliced onion")
-   - Category must be one of: Proteins, Vegetables, Fruits, Grains, Dairy, Pantry, Spices
-4. MATH: Ensure (Protein*4 + Carbs*4 + Fat*9) matches the calorie total for each meal.
-
-====== OUTPUT SCHEMA ======
-{
-  "weeklyPlan": {
-    "YYYY-MM-DD": {
-      "day": "string",
-      "date": "YYYY-MM-DD",
-      "variety_check": "Short string describing the cuisine/protein (e.g., 'Italian Chicken')", 
-      "meals": {
-        "breakfast": { 
-          "name": "string", 
-          "calories": number, 
-          "macros": { "protein": number, "carbs": number, "fat": number }, 
-          "ingredients": ["string"], 
-          "prepTime": number 
-        },
-        "lunch": { ...same structure },
-        "dinner": { ...same structure },
-        "snacks": [{ ...same structure }]
-      },
-      "hydration": { "waterTarget": number, "recommendations": ["string"] },
-      "workouts": [{ "name": "string", "category": "string", "duration": number, "caloriesBurned": number }]
-    }
-  }
-}
-`;
-
-  return { prompt, dayToName, nameToDay, dates, activeDays, workoutDays };
-};
-
-const generateMealPlanWithLlama2 = async (
-  userData: IUserData,
-  weekStartDate: Date,
-  planType: "daily" | "weekly" = "daily",
-  language: string = "en",
-  useMock: boolean = false,
-  goals: IGoal[] = [],
-  planTemplate?: string,
-  moodContext?: string,
-): Promise<MealPlanResponse> => {
-  try {
-    if (useMock) {
-      const mockPlan = generateFullWeek();
-      return {
-        mealPlan: { weeklyPlan: mockPlan },
-        planType,
-        language,
-        generatedAt: new Date().toISOString(),
-        fallbackModel: "mock",
-      };
-    }
-
-    const { prompt, dayToName, nameToDay, dates, activeDays, workoutDays } =
-      buildPrompt(
-        userData,
-        planType,
-        language,
-        weekStartDate,
-        goals,
-        planTemplate,
-      );
-
-    const ollamaModel = process.env.OLLAMA_MODEL || "phi";
-    logger.info(`[Llama] Using model: ${ollamaModel}`);
-
-    const moodSection = moodContext ? `\n\n====== MOOD & WELLNESS CONTEXT ======\n${moodContext}` : "";
-    const fullPrompt =
-      prompt +
-      moodSection +
-      "\n\nReturn ONLY valid JSON. No variable assignments, code, or explanations.";
-
-    const isWeeklyPlan = planType === "weekly";
-    const generatedText = await callOllama(
-      fullPrompt,
-      ollamaModel,
-      isWeeklyPlan,
-    );
-
-    let cleanedJSON = extractAndCleanJSON(generatedText);
-
-    if (!cleanedJSON || cleanedJSON.trim().length === 0) {
-      throw new Error("Failed to extract JSON from Llama response");
-    }
-
-    let mealPlanData: IParsedWeeklyPlanResponse;
-    try {
-      mealPlanData = JSON.parse(cleanedJSON) as IParsedWeeklyPlanResponse;
-    } catch (parseError: unknown) {
-      throw new Error(
-        `Failed to parse Llama JSON: ${getErrorMessage(parseError)}`,
-      );
-    }
-
-    // Use the same transformation as Gemini to ensure consistent format
-    const transformedPlan = await transformWeeklyPlan(
-      mealPlanData,
-      dayToName,
-      nameToDay,
-      dates,
-      activeDays,
-      workoutDays,
-      planType,
-      language,
-      weekStartDate,
-    );
-
-    // Enrich plan with user's favorite meals (20-30% replacement)
-    const enrichedPlan = await enrichPlanWithFavoriteMeals(
-      transformedPlan,
-      userData,
-    );
-
-    logger.info("[Llama] Meal plan generated successfully");
-
-    return enrichedPlan;
-  } catch (error: unknown) {
-    logger.error("[Llama] Generation failed:", error);
-    throw new Error(`Llama failed: ${getErrorMessage(error)}`);
-  }
+  return { dayToName, nameToDay, dates, activeDays, workoutDays };
 };
 
 const generateRecipeDetails = async (
@@ -1656,100 +1527,59 @@ const generateRecipeDetails = async (
   dietaryRestrictions: string[] = [],
   servings: number,
   language: string = "en",
+  allergies: string[] = [],
 ): Promise<IRecipe> => {
-  // Convert meal ingredients directly to recipe format for the prompt
-  // MealIngredient: [name, "200 g", "Proteins"] -> RecipeIngredient: { name, amount: "200", unit: "g" }
+  // Convert meal ingredients directly to recipe format — this is already-known
+  // data (from the meal plan), so the model is never asked to regenerate it.
   const recipeIngredients = convertMealIngredientsToRecipeFormat(ingredients);
 
-  // Create readable list for the prompt
   const ingredientsList = recipeIngredients
     .map((ing) => `${ing.name} (${ing.amount} ${ing.unit})`.trim())
     .join(", ");
 
-  // Format ingredients as JSON for the recipe response
-  const ingredientsJson = JSON.stringify(recipeIngredients, null, 2);
+  const constraints = resolveDietaryConstraints({ dietaryRestrictions, allergies });
+  const constraintBlock = buildDietaryConstraintBlock(constraints);
 
-  const prompt = `Generate a detailed recipe for "${dishName}" in ${language}.
+  const prompt = `Generate cooking instructions for "${dishName}" in ${language}.
 
-## Input Parameters:
-- Dish Name: ${dishName}
-- Category: ${category}
-- Target Calories: approximately ${targetCalories} per serving
-- Servings: ${servings}
-- Available Ingredients: ${ingredientsList}
-${dietaryRestrictions.length ? `- Dietary Restrictions (MUST follow): ${dietaryRestrictions.join(", ")}` : ""}
-
+## Input:
+- Dish: ${dishName} | Category: ${category} | Servings: ${servings} | Target: ~${targetCalories} kcal/serving
+- Ingredients (fixed — do not add, remove, or rename): ${ingredientsList}
+${constraintBlock ? `${constraintBlock}\n` : ""}
 ## Response Format:
-Return ONLY valid JSON matching this EXACT structure:
 {
   "mealName": "${dishName}",
-  "mealId": "unique_meal_id_string",
-  "description": "A brief description of the dish (max 500 chars)",
+  "mealId": "unique_snake_case_id",
+  "description": "brief appetizing description, max 500 chars",
   "category": "${category}",
   "servings": ${servings},
   "prepTime": 15,
   "cookTime": 30,
   "difficulty": "easy|medium|hard",
-  "macros": {
-    "calories": ${targetCalories},
-    "protein": 30,
-    "carbs": 50,
-    "fat": 15
-  },
-  "ingredients": ${ingredientsJson},
+  "macros": {"calories": ${targetCalories}, "protein": 30, "carbs": 50, "fat": 15},
   "instructions": [
-    {
-      "step": 1,
-      "instruction": "Preheat oven to 180°C",
-      "time": 5,
-      "temperature": 180
-    },
-    {
-      "step": 2,
-      "instruction": "Mix ingredients in a bowl",
-      "time": 10,
-      "temperature": null
-    }
+    {"step": 1, "instruction": "Preheat oven to 180°C", "time": 5, "temperature": 180},
+    {"step": 2, "instruction": "Mix ingredients in a bowl", "time": 10, "temperature": null}
   ],
   "equipment": ["pan", "oven"],
   "tags": ["healthy", "quick"],
-  "dietaryInfo": {
-    "isVegetarian": false,
-    "isVegan": false,
-    "isGlutenFree": false,
-    "isDairyFree": false,
-    "isKeto": false,
-    "isLowCarb": false
-  },
-  "language": "${language}",
-  "usageCount": 1,
-  "notes": "Additional notes about the recipe"
+  "dietaryInfo": {"isVegetarian": false, "isVegan": false, "isGlutenFree": false, "isDairyFree": false, "isKeto": false, "isLowCarb": false}
 }
 
 ## Rules:
-1. "mealName" - use the dish name provided: "${dishName}"
-2. "mealId" - generate a unique lowercase snake_case identifier
-3. "description" - brief appetizing description (max 500 characters)
-4. "category" - must be exactly: "${category}"
-5. "servings" - must be: ${servings}
-6. "prepTime" - preparation time in minutes (integer, min 0)
-7. "cookTime" - cooking time in minutes (integer, min 0)
-8. "difficulty" - must be one of: "easy", "medium", "hard"
-9. "macros" - all values in integers, calories should be close to ${targetCalories}
-10. "ingredients" - array of objects with { "name": string, "amount": string, "unit": string }
-11. "instructions" - array of step objects: { "step": number, "instruction": string, "time": number (minutes), "temperature": number (degrees in °C) or null if no cooking required }
-12. "equipment" - array of required kitchen equipment
-13. "tags" - relevant recipe tags
-14. "dietaryInfo" - set boolean flags based on recipe characteristics${dietaryRestrictions.length ? ` and dietary restrictions: ${dietaryRestrictions.join(", ")}` : ""}
-15. "language" - must be: "${language}"
-16. "usageCount" - always 1 for new recipes
-17. "notes" - additional notes about the recipe (max 500 characters)`;
+1. Do NOT include an "ingredients" field — the fixed list above is attached automatically after generation.
+2. "difficulty" must be exactly one of: easy, medium, hard.
+3. "temperature" is in °C, or null for steps with no cooking/heating.
+4. "dietaryInfo" flags must reflect this recipe's actual ingredients${dietaryRestrictions.length ? ` and the stated restrictions` : ""}.`;
 
   const parseResponse = (jsonText: string) => {
     const recipeData = JSON.parse(jsonText);
     return {
       _id: new mongoose.Types.ObjectId(),
       ...recipeData,
+      ingredients: recipeIngredients,
+      language,
+      usageCount: 1,
       generatedAt: new Date().toISOString(),
     };
   };
@@ -1770,16 +1600,19 @@ const generateMeal = async (
   dislikes: string[] = [],
   language: string = "en",
   aiRules?: string,
+  allergies: string[] = [],
 ): Promise<any> => {
-  const prompt = `Generate a ${category} meal named exactly "${mealName}" in ${language}.
+  const constraints = resolveDietaryConstraints({ dietaryRestrictions, allergies });
+  const constraintBlock = buildDietaryConstraintBlock(constraints);
 
+  const prompt = `Generate a ${category} meal named exactly "${mealName}" in ${language}.
+${constraintBlock ? `${constraintBlock}\n` : ""}
 ## CRITICAL: The meal name is "${mealName}". You MUST use this exact name. Do NOT rename it or blend other ingredients into the name.
 
 ## Requirements:
 - Target calories: ${targetCalories}
 - Category: ${category}
-${dietaryRestrictions.length ? `- Dietary restrictions (MUST follow): ${dietaryRestrictions.join(", ")}` : ""}
-${dislikes.length ? `- Dislikes (MUST avoid): ${dislikes.join(", ")}` : ""}
+${dislikes.length ? `- Dislikes (avoid if possible): ${dislikes.join(", ")}` : ""}
 ${aiRules ? `- Additional rules: ${aiRules}` : ""}
 
 ## Response Format:
@@ -1793,14 +1626,7 @@ ${aiRules ? `- Additional rules: ${aiRules}` : ""}
 }
 
 ## Ingredient Rules:
-- CRITICAL: ingredient_name MUST be the RAW ingredient name only (no preparation words)
-- DO NOT include words like: "chopped", "diced", "minced", "fresh", "dried", "sliced", "grated", "crushed", "whole", "ground", "cubed", "julienned"
-- Examples:
-  * CORRECT: "ginger" (NOT "chopped fresh ginger")
-  * CORRECT: "chicken_breast" (NOT "diced chicken breast")
-  * CORRECT: "onion" (NOT "sliced onion")
-  * CORRECT: "garlic" (NOT "minced garlic")
-- Use lowercase with underscores (e.g., "chicken_breast", "olive_oil", "ginger")`;
+${INGREDIENT_NAMING_RULES}`;
 
   const parseResponse = (jsonText: string) => {
     const mealData = JSON.parse(jsonText);
@@ -1847,6 +1673,7 @@ const generateMealSuggestions = async (
     dislikes?: string[];
     numberOfSuggestions?: number;
     aiRules?: string;
+    allergies?: string[];
   },
   language: string = "en",
 ): Promise<IMeal[]> => {
@@ -1880,151 +1707,70 @@ const generateMealSuggestions = async (
     topics: ["dietary-paths", "meal-slot-rules"],
   });
 
-  // Build prompt with priority handling for meal name requests
-  let prompt = "";
+  const constraints = resolveDietaryConstraints({
+    dietaryRestrictions: mealCriteria.dietaryRestrictions,
+    allergies: mealCriteria.allergies,
+  });
+  const constraintBlock = buildDietaryConstraintBlock(constraints);
 
-  if (isVariationRequest && requestedMeal) {
-    // PRIORITY MODE: User requested specific meal variations
-    prompt = `You are a professional nutritionist. Generate exactly ${numberOfSuggestions} UNIQUE VARIATIONS of "${requestedMeal}".
+  // Variation mode ignores preferences entirely (the requested meal name is the
+  // only signal that matters), so there's nothing to conflict-check there.
+  const { allowed: allowedPreferences, removed: removedPreferences } =
+    isVariationRequest
+      ? { allowed: [], removed: [] }
+      : filterFoodPreferences(mealCriteria.preferences || [], constraints);
+  if (removedPreferences.length) {
+    logger.warn(
+      `[MealSuggestions] Dropped preferences conflicting with dietary restrictions: ${removedPreferences.join(", ")}`,
+    );
+  }
 
-====== NON-NEGOTIABLE CATEGORY CONSTRAINT ======
-This meal is for ${mealCriteria.category.toUpperCase()}. ALL suggestions MUST be appropriate for ${mealCriteria.category}:
-- breakfast: morning foods only (eggs, oatmeal, yogurt, toast, smoothies, granola, pancakes, etc.)
-- lunch: midday meals (salads, sandwiches, soups, wraps, light hot dishes, etc.)
-- dinner: evening meals (proteins with sides, pasta, rice dishes, stews, grilled mains, etc.)
-- snack: small bites (fruit, nuts, hummus, protein bars, etc.)
-IMPORTANT: If "${requestedMeal}" is NOT a typical ${mealCriteria.category} food (e.g., steak for breakfast), create ${mealCriteria.category}-appropriate meals that incorporate similar flavors or protein profile — do NOT force a dinner-type food into a breakfast slot. A "sirloin steak" variation for breakfast should become something like a high-protein breakfast bowl with beef, NOT a steak dish.
-================================================
+  const focusBlock =
+    isVariationRequest && requestedMeal
+      ? `Generate exactly ${numberOfSuggestions} UNIQUE VARIATIONS of "${requestedMeal}". Each meal name MUST include "${requestedMeal}" or a clear reference to it (e.g. "Grilled ${requestedMeal}", "${requestedMeal} with Herbs") — never invent an unrelated meal.
+If "${requestedMeal}" is not a typical ${mealCriteria.category} food (e.g. steak for breakfast), keep its flavor/protein profile but reshape it into a ${mealCriteria.category}-appropriate dish (a "sirloin steak" breakfast variation becomes a high-protein breakfast bowl with beef, not a steak dish) — do not force the literal dinner dish into the wrong slot.`
+      : `Generate exactly ${numberOfSuggestions} unique ${mealCriteria.category} meal suggestions.`;
 
-====== CRITICAL REQUIREMENT ======
-ALL ${numberOfSuggestions} meals MUST be variations of "${requestedMeal}" adapted for ${mealCriteria.category}.
-Each meal name MUST include "${requestedMeal}" or clearly reference it.
-Examples of valid variations:
-- "Grilled ${requestedMeal}"
-- "Pan-Seared ${requestedMeal}"
-- "${requestedMeal} with Herbs"
-- "Garlic ${requestedMeal}"
-- "Spicy ${requestedMeal}"
-- "${requestedMeal} and Vegetables"
+  const prompt = `You are a professional nutritionist. ${focusBlock}
 
-DO NOT generate meals that don't include "${requestedMeal}" in the name.
-DO NOT generate completely different meals.
-ALL meals must be variations of "${requestedMeal}" AND appropriate for ${mealCriteria.category}.
-
-${suggestionKnowledge ? `${suggestionKnowledge}\n\n` : ""}## Requirements:
-- Category: ${mealCriteria.category}
-- Target calories per meal: approximately ${targetCalories} calories (±10%)
-- Language for meal names and ingredients: ${language}
-${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
-${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
-- Cooking level: Home cooking (beginner to intermediate). Use simple, everyday methods (boiling, frying, baking, grilling, sautéing). No advanced culinary techniques unless the user specifically requests them.
-
-Return a JSON object with a "meals" array containing exactly ${numberOfSuggestions} meal objects.
-
-Each meal MUST have ALL these fields:
-{
-  "meals": [
-    {
-      "name": "Meal Name",
-      "calories": 500,
-      "macros": {
-        "protein": 30,
-        "carbs": 50,
-        "fat": 15
-      },
-      "category": "${mealCriteria.category}",
-      "ingredients": [
-        ["ingredient_name_with_underscores", "100 g"],
-        ["another_ingredient", "50 ml"]
-      ],
-      "prepTime": 20
-    }
-  ]
-}
-
-## Rules:
-1. "name" - descriptive meal name in ${language}
-   ${isVariationRequest && requestedMeal ? `- CRITICAL: MUST include "${requestedMeal}" in the name (e.g., "Grilled ${requestedMeal}", "Pan-Seared ${requestedMeal}")` : ""}
-   - MUST use spaces between words (e.g., "Stuffed Bell Peppers", "Grilled Chicken Salad")
-   - MUST use proper capitalization (Title Case, e.g., "Stuffed Bell Peppers" NOT "stuffed_bell_peppers")
-   - DO NOT use underscores in meal names
-2. "calories" - integer, close to ${targetCalories}
-3. "macros" - protein, carbs, fat in grams (integers), must add up reasonably to calories
-4. "category" - must be "${mealCriteria.category}"
-5. "ingredients" - array of [name, amount] tuples
-   - name: lowercase with underscores (e.g., "chicken_breast", "olive_oil")
-   - amount: number followed by unit (e.g., "200 g", "50 ml", "2 pieces")
-   - NOTE: Ingredient names use underscores, but meal names use spaces!
-6. "prepTime" - preparation time in minutes (integer)`;
-  } else {
-    // STANDARD MODE: General meal suggestions
-    prompt = `You are a professional nutritionist. Generate exactly ${numberOfSuggestions} unique ${mealCriteria.category} meal suggestions.
-
-${suggestionKnowledge ? `${suggestionKnowledge}\n\n` : ""}====== NON-NEGOTIABLE CONSTRAINT ======
-Meal type: ${mealCriteria.category.toUpperCase()}
-ALL suggestions MUST be suitable for ${mealCriteria.category}. This overrides everything else.
-- breakfast: morning foods (eggs, oatmeal, yogurt, toast, smoothies, granola, pancakes, etc.)
-- lunch: midday meals (salads, sandwiches, soups, wraps, light hot dishes, etc.)
-- dinner: evening meals (proteins with sides, pasta, rice dishes, stews, grilled mains, etc.)
-- snack: small bites between meals (fruit, nuts, hummus, protein bars, etc.)
-Never suggest a dinner-type food (noodles, pasta, rice dishes, heavy proteins, steak, beef filet, curry) for breakfast, or a breakfast food for dinner.
-If the category is breakfast, you MUST suggest morning foods only — regardless of user preferences. If a user preference is a lunch/dinner food, ignore it for breakfast and suggest a breakfast-appropriate alternative instead.
-=======================================
+${suggestionKnowledge ? `${suggestionKnowledge}\n\n` : ""}CATEGORY: ${mealCriteria.category.toUpperCase()} — every suggestion must fit this slot; it overrides food preferences.
+- breakfast: morning foods only (eggs, oatmeal, yogurt, toast, smoothies, granola, pancakes)
+- lunch: midday meals (salads, sandwiches, soups, wraps, light hot dishes)
+- dinner: evening meals (proteins with sides, pasta, rice dishes, stews, grilled mains)
+- snack: small bites (fruit, nuts, hummus, protein bars)
+Never place a dinner-type food (pasta, rice bowls, steak, curry, heavy proteins) at breakfast, or a breakfast food at dinner.
 
 ## Requirements:
-- Target calories per meal: approximately ${targetCalories} calories (±10%)
-- Language for meal names and ingredients: ${language}
-${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
-${mealCriteria.preferences?.length ? `- Food Preferences (use as INSPIRATION, not literal): ${mealCriteria.preferences.join(", ")}\n  CRITICAL: Only apply these preferences if they naturally fit the ${mealCriteria.category} slot. For breakfast, use only morning foods (eggs, yogurt, oatmeal, toast, fruit, smoothies, granola). A preference like "beef filet" or "pasta" must NEVER appear at breakfast — instead, find a breakfast item that reflects the spirit of the preference (e.g., a high-protein breakfast bowl). For lunch/dinner, preferences can be applied more directly.` : ""}
-${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
-- Cooking level: Home cooking (beginner to intermediate). Use simple, everyday methods (boiling, frying, baking, grilling, sautéing). No advanced culinary techniques unless the user specifically requests them.
-${mealCriteria.aiRules ? `- Additional rules: ${mealCriteria.aiRules}` : ""}
+- Target calories per meal: ~${targetCalories} (±10%)
+- Language: ${language}
+${constraintBlock ? `${constraintBlock}\n` : ""}${allowedPreferences.length ? `- Food preferences (inspiration for lunch/dinner; for breakfast adapt the flavor/protein rather than forcing the literal dish): ${allowedPreferences.join(", ")}` : ""}
+${mealCriteria.dislikes?.length ? `- Dislikes (avoid if possible): ${mealCriteria.dislikes.join(", ")}` : ""}
+- Cooking level: home cooking, simple everyday methods only (boiling, frying, baking, grilling, sautéing)
+${mealCriteria.aiRules && !isVariationRequest ? `- Additional rules: ${mealCriteria.aiRules}` : ""}
 
 ## Response Format:
-Return a JSON object with a "meals" array containing exactly ${numberOfSuggestions} meal objects.
-
-Each meal MUST have ALL these fields:
+Return a JSON object with a "meals" array containing exactly ${numberOfSuggestions} meal objects:
 {
   "meals": [
     {
       "name": "Meal Name",
       "calories": 500,
-      "macros": {
-        "protein": 30,
-        "carbs": 50,
-        "fat": 15
-      },
+      "macros": {"protein": 30, "carbs": 50, "fat": 15},
       "category": "${mealCriteria.category}",
-      "ingredients": [
-        ["ingredient_name_with_underscores", "100 g"],
-        ["another_ingredient", "50 ml"]
-      ],
+      "ingredients": [["ingredient_name_with_underscores", "100 g"]],
       "prepTime": 20
     }
   ]
 }
 
 ## Rules:
-1. "name" - descriptive meal name in ${language}
-   - MUST use spaces between words (e.g., "Stuffed Bell Peppers", "Grilled Chicken Salad")
-   - MUST use proper capitalization (Title Case, e.g., "Stuffed Bell Peppers" NOT "stuffed_bell_peppers")
-   - DO NOT use underscores in meal names
+1. "name" - Title Case, spaces not underscores (e.g. "Stuffed Bell Peppers")${isVariationRequest && requestedMeal ? ` — MUST include "${requestedMeal}"` : ""}
 2. "calories" - integer, close to ${targetCalories}
-3. "macros" - protein, carbs, fat in grams (integers), must add up reasonably to calories
+3. "macros" - protein/carbs/fat in grams (integers), must add up reasonably to calories
 4. "category" - must be "${mealCriteria.category}"
-5. "ingredients" - array of [name, amount] tuples
-   - CRITICAL: name MUST be the RAW ingredient name only (no preparation words)
-   - DO NOT include words like: "chopped", "diced", "minced", "fresh", "dried", "sliced", "grated", "crushed", "whole", "ground", "cubed", "julienned"
-   - Examples:
-     * CORRECT: "ginger" (NOT "chopped fresh ginger")
-     * CORRECT: "chicken_breast" (NOT "diced chicken breast")
-     * CORRECT: "onion" (NOT "sliced onion")
-     * CORRECT: "garlic" (NOT "minced garlic")
-   - name: lowercase with underscores (e.g., "chicken_breast", "olive_oil", "ginger")
-   - amount: number followed by unit (e.g., "200 g", "50 ml", "2 pieces")
-   - NOTE: Ingredient names use underscores, but meal names use spaces!
+5. "ingredients" - [name, amount] tuples
+${INGREDIENT_NAMING_RULES}
 6. "prepTime" - preparation time in minutes (integer)`;
-  }
 
   const parseResponse = (jsonText: string): IMeal[] => {
     const parsed = JSON.parse(jsonText);
@@ -2110,6 +1856,7 @@ const generateRescueMeal = async (
     dietaryRestrictions?: string[];
     preferences?: string[];
     dislikes?: string[];
+    allergies?: string[];
   },
   language: string = "en",
 ): Promise<IMeal> => {
@@ -2122,6 +1869,20 @@ const generateRescueMeal = async (
     fat: Math.round((targetCalories * 0.3) / 9), // 30% from fat
   };
 
+  const constraints = resolveDietaryConstraints({
+    dietaryRestrictions: mealCriteria.dietaryRestrictions,
+    allergies: mealCriteria.allergies,
+  });
+  const constraintBlock = buildDietaryConstraintBlock(constraints);
+
+  const { allowed: allowedPreferences, removed: removedPreferences } =
+    filterFoodPreferences(mealCriteria.preferences || [], constraints);
+  if (removedPreferences.length) {
+    logger.warn(
+      `[RescueMeal] Dropped preferences conflicting with dietary restrictions: ${removedPreferences.join(", ")}`,
+    );
+  }
+
   const prompt = `You are a professional nutritionist. Generate ONE quick "rescue meal" for someone who is tired and has no time to cook.
 
 ## CRITICAL REQUIREMENTS:
@@ -2130,16 +1891,13 @@ const generateRescueMeal = async (
 - Target calories: approximately ${targetCalories} calories (±15%)
 - Target macros (±20% tolerance): Protein: ${defaultMacros.protein}g, Carbs: ${defaultMacros.carbs}g, Fat: ${defaultMacros.fat}g
 - Language for meal name and ingredients: ${language}
-${mealCriteria.dietaryRestrictions?.length ? `- Dietary restrictions (MUST follow): ${mealCriteria.dietaryRestrictions.join(", ")}` : ""}
-${mealCriteria.preferences?.length ? `- Preferences (try to include): ${mealCriteria.preferences.join(", ")}` : ""}
-${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.dislikes.join(", ")}` : ""}
+${constraintBlock ? `${constraintBlock}\n` : ""}${allowedPreferences.length ? `- Preferences (try to include if it fits a quick meal): ${allowedPreferences.join(", ")}` : ""}
+${mealCriteria.dislikes?.length ? `- Dislikes (avoid if possible): ${mealCriteria.dislikes.join(", ")}` : ""}
 
 ## MEAL CHARACTERISTICS:
-- Should use simple, commonly available ingredients
-- Minimal cooking required (microwave, toaster, no-cook preferred)
-- Can be assembled quickly (sandwiches, wraps, bowls, smoothies, salads, etc.)
-- Still nutritious and satisfying despite being quick
-- NO restaurant/takeout suggestions - must be home-preparable
+- Simple, commonly available ingredients; minimal cooking (microwave, toaster, no-cook preferred)
+- Quick assembly (sandwiches, wraps, bowls, smoothies, salads)
+- NO restaurant/takeout suggestions — must be home-preparable
 
 ## QUICK MEAL IDEAS BY CATEGORY:
 - Breakfast: overnight oats (pre-made), yogurt parfait, toast with toppings, smoothie, cereal with fruit
@@ -2147,7 +1905,6 @@ ${mealCriteria.dislikes?.length ? `- Dislikes (MUST avoid): ${mealCriteria.disli
 - Dinner: rotisserie chicken + sides, pasta with jarred sauce, stir-fry with pre-cut veggies, quesadilla, eggs + toast
 
 ## Response Format:
-Return ONLY valid JSON:
 {
   "name": "Quick Meal Name",
   "calories": ${targetCalories},
@@ -2158,9 +1915,9 @@ Return ONLY valid JSON:
 }
 
 ## Rules:
-1. "name" - appetizing meal name using spaces (Title Case, e.g., "Greek Yogurt Power Bowl")
+1. "name" - appetizing Title Case meal name using spaces (e.g., "Greek Yogurt Power Bowl")
 2. "prepTime" - MUST be 10 or less (this is critical!)
-3. "ingredients" - use underscores for ingredient names (e.g., "greek_yogurt", "mixed_berries")`;
+${INGREDIENT_NAMING_RULES}`;
 
   const parseResponse = (jsonText: string) => {
     const mealData = JSON.parse(jsonText);
@@ -2220,26 +1977,22 @@ const generateSnack = async (
   snackName: string,
   dietaryRestrictions: string[] = [],
   language: string = "en",
+  allergies: string[] = [],
 ): Promise<IMeal> => {
+  const constraints = resolveDietaryConstraints({ dietaryRestrictions, allergies });
+  const constraintBlock = buildDietaryConstraintBlock(constraints);
+
   const prompt = `Generate a snack "${snackName}" in ${language}.
-
-## Requirements:
-- Dietary restrictions (MUST follow): ${dietaryRestrictions.join(", ")}
-
+${constraintBlock ? `\n${constraintBlock}\n` : ""}
 ## Response Format:
-Return ONLY valid JSON matching this EXACT structure:
 {
   "name": "Snack Name",
   "calories": 100,
-  "macros": {
-    "protein": 10,
-    "carbs": 10,
-    "fat": 10
-  },
+  "macros": {"protein": 10, "carbs": 10, "fat": 10},
   "ingredients": [
     ["ingredient_name_with_underscores", "100 g", "Proteins"],
     ["another_ingredient", "50 ml", "Fruits"]
-  ]
+  ],
   "prepTime": 10
 }
 
@@ -2247,11 +2000,9 @@ Return ONLY valid JSON matching this EXACT structure:
 1. "name" - descriptive snack name in ${language}
 2. "calories" - integer, close to 100
 3. "macros" - protein, carbs, fat in grams (integers), must add up reasonably to calories
-4. "ingredients" - array of [name, amount, category?] tuples
-   - name: lowercase with underscores (e.g., "chicken_breast", "olive_oil")
-   - amount: number followed by unit (e.g., "200 g", "50 ml", "2 pieces")
-   - category: optional shopping bag category (e.g., "Proteins", "Grains", "Fruits")
-5. "prepTime" - (integer, should be 0)`;
+4. "ingredients" - [name, amount, category?] tuples; category is an optional shopping-bag label (e.g. "Proteins", "Grains", "Fruits")
+${INGREDIENT_NAMING_RULES}
+5. "prepTime" - integer, should be 0`;
 
   const parseResponse = (jsonText: string) => {
     const snackData = JSON.parse(jsonText);
@@ -2396,7 +2147,6 @@ const aiService = {
   generateMealPlanWithAI,
   generateRecipeDetails,
   generateMeal,
-  generateMealPlanWithLlama2,
   generateMealSuggestions,
   generateRescueMeal,
   generateSnack,
