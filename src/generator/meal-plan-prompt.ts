@@ -25,8 +25,10 @@
 import {
   DietaryConstraints,
   buildDietaryConstraintBlock,
+  filterFoodPreferences,
   findMealViolations,
 } from "../utils/dietary-constraints";
+import logger from "../utils/logger";
 
 // ─── Slot definitions ───────────────────────────────────────────────────────
 
@@ -375,7 +377,21 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
 
   const constraintBlock = buildDietaryConstraintBlock(constraints);
   const dislikes = (userData.dislikes || []).filter(Boolean);
-  const prefs = (userData.foodPreferences || []).filter(Boolean);
+
+  // Preferences MUST be filtered against the hard constraints before they reach
+  // the prompt. A vegan whose stored preferences still contain "Sirloin Steak"
+  // would otherwise be described to the model as someone who enjoys steak, in
+  // the same prompt that forbids meat — and the model resolves that
+  // contradiction by cooking the steak.
+  const { allowed: prefs, removed: droppedPrefs } = filterFoodPreferences(
+    (userData.foodPreferences || []).filter(Boolean),
+    constraints,
+  );
+  if (droppedPrefs.length) {
+    logger.warn(
+      `[MealGen] Dropped food preferences that conflict with dietary restrictions: ${droppedPrefs.join(", ")}`,
+    );
+  }
 
   const sections: string[] = [];
 
@@ -388,7 +404,12 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
       `DAILY TARGET: ${targetCalories} kcal — protein ${macros.protein}g, carbs ${macros.carbs}g, fat ${macros.fat}g`,
       `MAX PREP TIME: ${maxPrepMinutes} minutes per meal`,
       dislikes.length ? `NEVER INCLUDE (disliked): ${dislikes.join(", ")}` : null,
-      prefs.length ? `ENJOYS (use as flavour inspiration where the outline allows, not as a rule): ${prefs.join(", ")}` : null,
+      // Scoped to lunch and dinner: a preference like "steak" or "curry" is a
+      // dinner taste, and letting it reach breakfast is how it turns up next to
+      // the morning oats.
+      prefs.length
+        ? `ENJOYS (loose inspiration for LUNCH and DINNER only, never a rule, and never applied to breakfast or snacks): ${prefs.join(", ")}`
+        : null,
       styleNote ? `STYLE NOTE: ${styleNote.slice(0, 300)}` : null,
       moodContext ? `WELLNESS CONTEXT: ${moodContext}` : null,
     ]

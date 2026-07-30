@@ -131,6 +131,43 @@ describe("buildWeeklyPlanPrompt", () => {
     expect(prompt.indexOf("HARD DIETARY CONSTRAINTS")).toBeLessThan(prompt.indexOf("MENU OUTLINE"));
   });
 
+  it("never shows a vegan a meat preference", () => {
+    // Reported from a real local run: a vegan whose stored preferences still
+    // contained "Sirloin Steak" got steak for breakfast, because the prompt
+    // described them as enjoying steak in the same breath as forbidding meat.
+    const skeleton = buildMenuSkeleton(DAYS, vegan, 2000, "seed");
+    const prompt = buildWeeklyPlanPrompt({
+      ...base,
+      constraints: vegan,
+      skeleton,
+      userData: { ...base.userData, foodPreferences: ["Italian", "Sirloin Steak"] },
+    });
+
+    expect(prompt).not.toMatch(/ENJOYS[^\n]*Sirloin Steak/i);
+    expect(prompt).toMatch(/ENJOYS[^\n]*Italian/i);
+  });
+
+  it("scopes food preferences away from breakfast", () => {
+    const skeleton = buildMenuSkeleton(DAYS, none, 2000, "seed");
+    const prompt = buildWeeklyPlanPrompt({
+      ...base,
+      skeleton,
+      userData: { ...base.userData, foodPreferences: ["Sirloin Steak"] },
+    });
+    expect(prompt).toMatch(/ENJOYS[^\n]*LUNCH and DINNER only/i);
+  });
+
+  it("omits the preferences line when every preference conflicts", () => {
+    const skeleton = buildMenuSkeleton(DAYS, vegan, 2000, "seed");
+    const prompt = buildWeeklyPlanPrompt({
+      ...base,
+      constraints: vegan,
+      skeleton,
+      userData: { ...base.userData, foodPreferences: ["Sirloin Steak", "Bacon"] },
+    });
+    expect(prompt).not.toContain("ENJOYS");
+  });
+
   it("lists recent meals as an exclusion set", () => {
     const skeleton = buildMenuSkeleton(DAYS, none, 2000, "seed");
     const prompt = buildWeeklyPlanPrompt({
