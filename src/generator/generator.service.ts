@@ -296,6 +296,13 @@ export class GeneratorService {
     // ── PHASE 1: Generate today ──────────────────────────────────────────────
     logger.info(`[Phase1] Generating today (${getLocalDateKey(today)})...`);
 
+    // Read the outgoing plan before it is deleted below, so the new week can be
+    // told what the user has just been eating.
+    const previousMeals = await this.getRecentMealNames(userIdObjectId);
+    if (previousMeals.length) {
+      logger.info(`[Phase1] Excluding ${previousMeals.length} meals from the previous plan`);
+    }
+
     const {
       mealPlan,
       language: generatedLanguage,
@@ -309,7 +316,8 @@ export class GeneratorService {
       activeGoals,
       planTemplate,
       [today], // datesOverride: only today
-      moodContext
+      moodContext,
+      previousMeals
     );
 
     if (!mealPlan?.weeklyPlan || Object.keys(mealPlan.weeklyPlan).length === 0) {
@@ -378,7 +386,10 @@ export class GeneratorService {
           planTemplate,
           targetCalories,
           macros,
-          moodContext
+          moodContext,
+          // Exclude both the old plan and the day we just generated, so
+          // Tuesday's dinner cannot come back as Monday's.
+          [...previousMeals, ...this.mealNamesFrom(todayResult.weeklyPlanObject)]
         ).catch((err) =>
           logger.error(
             `[Phase2] Background generation failed for user ${userId}: ${err?.message || err}`
@@ -421,6 +432,58 @@ export class GeneratorService {
   }
 
   /**
+   * Dish names the user has seen recently, so the next plan can be told not to
+   * repeat them. Read from the plan currently on record — it is deleted partway
+   * through generation, so this must be called before that happens.
+   */
+  private async getRecentMealNames(
+    userIdObjectId: mongoose.Types.ObjectId,
+    limit = 40
+  ): Promise<string[]> {
+    const previous = await this.planModel
+      .findOne({ userId: userIdObjectId })
+      .select("weeklyPlan")
+      .lean()
+      .exec();
+
+    if (!previous?.weeklyPlan) return [];
+
+    const names = new Set<string>();
+    for (const day of Object.values(previous.weeklyPlan as Record<string, any>)) {
+      const meals = day?.meals ?? day ?? {};
+      for (const meal of [
+        meals.breakfast,
+        meals.lunch,
+        meals.dinner,
+        ...(Array.isArray(meals.snacks) ? meals.snacks : []),
+      ]) {
+        const name = typeof meal?.name === "string" ? meal.name.trim() : "";
+        if (name) names.add(name);
+      }
+    }
+
+    return [...names].slice(0, limit);
+  }
+
+  /** Meal names inside an already-generated plan object, for Phase 2 exclusion. */
+  private mealNamesFrom(weeklyPlanObject: Record<string, any>): string[] {
+    const names = new Set<string>();
+    for (const day of Object.values(weeklyPlanObject || {})) {
+      const meals = (day as any)?.meals ?? day ?? {};
+      for (const meal of [
+        meals.breakfast,
+        meals.lunch,
+        meals.dinner,
+        ...(Array.isArray(meals.snacks) ? meals.snacks : []),
+      ]) {
+        const name = typeof meal?.name === "string" ? meal.name.trim() : "";
+        if (name) names.add(name);
+      }
+    }
+    return [...names];
+  }
+
+  /**
    * Background Phase 2: generate the remaining days of the week and merge them
    * into the existing plan document without overwriting today.
    */
@@ -435,7 +498,8 @@ export class GeneratorService {
     planTemplate: string | undefined,
     targetCalories: number,
     macros: { protein: number; carbs: number; fat: number },
-    moodContext?: string | null
+    moodContext?: string | null,
+    recentMeals: string[] = []
   ): Promise<void> {
     logger.info(
       `[Phase2] Generating ${remainingDates.length} remaining days for user ${userId}: ` +
@@ -451,7 +515,8 @@ export class GeneratorService {
       goals,
       planTemplate,
       remainingDates, // datesOverride: only remaining days
-      moodContext
+      moodContext,
+      recentMeals
     );
 
     if (!mealPlan?.weeklyPlan || Object.keys(mealPlan.weeklyPlan).length === 0) {

@@ -222,10 +222,19 @@ const EXEMPT_PREFIXES: Record<string, string[]> = {
   granola: ["gluten-free", "gluten free"],
 };
 
-/** Prefixes that neutralise ANY keyword — imitation / meat-analogue products. */
+/**
+ * Prefixes that neutralise ANY keyword — imitation / meat-analogue products.
+ *
+ * The plant bases matter as much as the explicit "vegan"/"mock" markers: models
+ * name analogue dishes "Tofu Steaks" or "Chickpea Tuna Salad", and flagging
+ * those as violations sent perfectly compliant vegan plans into the repair loop,
+ * burning scarce free-tier quota to regenerate food that was already correct.
+ */
 const UNIVERSAL_EXEMPT_PREFIXES = [
   "vegan", "vegetarian", "plant-based", "plant based", "meatless", "meat-free",
   "imitation", "mock", "faux", "vegan-style",
+  "tofu", "tempeh", "seitan", "jackfruit", "chickpea", "lentil", "cauliflower",
+  "mushroom", "aubergine", "eggplant", "banana blossom", "soy", "pea protein",
 ];
 
 const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -247,7 +256,12 @@ const singularize = (word: string): string => {
  * True when `text` contains `keyword` as a standalone term that is not
  * neutralised by an exempting prefix (e.g. "almond milk" for `milk`).
  */
-const containsForbidden = (text: string, keyword: string): boolean => {
+const containsForbidden = (rawText: string, keyword: string): boolean => {
+  // Analogue dishes are written with scare quotes — Tofu "Chicken" Salad. The
+  // quote sits between the plant base and the keyword and would otherwise hide
+  // the exempting prefix from the match below, so strip quotes first.
+  const text = rawText.replace(/['"`’“”]/g, "");
+
   const pattern = new RegExp(`(^|[^a-z])((?:[a-z-]+[ _-])?)${escapeRegex(keyword)}(s|es)?($|[^a-z])`, "gi");
   const exemptions = [...UNIVERSAL_EXEMPT_PREFIXES, ...(EXEMPT_PREFIXES[keyword] || [])];
 

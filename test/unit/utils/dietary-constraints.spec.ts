@@ -107,6 +107,37 @@ describe("findMealViolations", () => {
     expect(findMealViolations(meal("Vegan bacon sandwich"), vegan)).toEqual([]);
   });
 
+  it("does not false-positive on plant-analogue dish names", () => {
+    // Real generator output that used to be rejected, sending a compliant plan
+    // into the repair loop and burning free-tier quota to regenerate it.
+    expect(findMealViolations(meal("Black Pepper Tofu Steaks"), vegan)).toEqual([]);
+    expect(findMealViolations(meal(`Tofu "Chicken" Salad Sandwich`), vegan)).toEqual([]);
+    expect(findMealViolations(meal("Chickpea 'Tuna' Salad"), vegan)).toEqual([]);
+    expect(findMealViolations(meal("Seitan Sausage with Potatoes"), vegan)).toEqual([]);
+  });
+
+  it("stays conservative when the plant base is not adjacent to the keyword", () => {
+    // "Jackfruit Pulled Pork" is genuinely vegan, but the exemption only fires
+    // when the plant word directly qualifies the keyword. Widening it far enough
+    // to catch this would also exempt "Tofu and Chicken Stir-fry". A false
+    // positive costs one regeneration; a false negative serves a vegan meat —
+    // so this deliberately errs towards flagging.
+    expect(findMealViolations(meal("Jackfruit Pulled Pork Buns"), vegan)).toContain("pork");
+  });
+
+  it("still catches real animal products next to a plant ingredient", () => {
+    // The analogue exemption must only apply when the plant word directly
+    // qualifies the keyword — not merely because it appears in the same dish.
+    expect(findMealViolations(meal("Tofu and Chicken Stir-fry"), vegan)).toContain("chicken");
+    expect(findMealViolations(meal("Lentil Soup with Bacon"), vegan)).toContain("bacon");
+    expect(
+      findMealViolations({ name: "Mushroom Risotto", ingredients: ["beef_broth|200|ml|Pantry"] }, vegan),
+    ).toContain("beef");
+    expect(
+      findMealViolations({ name: "Chickpea Curry", ingredients: ["butter|20|g|Dairy"] }, vegan),
+    ).toContain("butter");
+  });
+
   it("does not false-positive on eggplant for an egg restriction", () => {
     const eggFree = resolveDietaryConstraints({ dietaryRestrictions: ["egg-free"] });
     expect(findMealViolations(meal("Roasted Eggplant with Tahini"), eggFree)).toEqual([]);

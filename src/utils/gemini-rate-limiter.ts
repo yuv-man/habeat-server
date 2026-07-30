@@ -104,6 +104,36 @@ const isPerDayQuotaError = (errorMessage: string): boolean => {
 /** Sentinel prefix so callers can detect a definitively-exhausted model. */
 export const DAILY_QUOTA_EXHAUSTED = "DAILY_QUOTA_EXHAUSTED";
 
+// ─── Daily quota memo ───────────────────────────────────────────────────────
+//
+// Free-tier quota is 20 requests/day/model and resets at midnight US/Pacific.
+// Without a memo, every request after exhaustion re-probes each dead model in
+// priority order before failing over, so the user waits through a string of
+// guaranteed 429s on every single plan. Remembering the exhausted models until
+// the reset boundary makes the fail-over to OpenRouter immediate.
+
+/** Google resets free-tier daily quota at midnight US/Pacific. */
+const pacificDateKey = (): string =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+
+/** model name → the Pacific date on which its daily quota ran out. */
+const exhaustedModels = new Map<string, string>();
+
+export const markModelExhausted = (modelName: string): void => {
+  exhaustedModels.set(modelName, pacificDateKey());
+};
+
+export const isModelExhausted = (modelName: string): boolean =>
+  exhaustedModels.get(modelName) === pacificDateKey();
+
+/** Exposed for tests and for logging what is still available. */
+export const resetExhaustedModels = (): void => exhaustedModels.clear();
+
 /**
  * Check if error is retryable (temporary server errors)
  */
@@ -233,6 +263,12 @@ export interface GeminiCallOptions {
   baseDelayMs?: number;
   timeoutMs?: number;
   context?: string;
+  /**
+   * Role/behaviour text applied to the model rather than repeated in every
+   * prompt. Keeps per-request prompts small and gives the instruction more
+   * weight than the same words buried in the user turn.
+   */
+  systemInstruction?: string;
 }
 
 /**
@@ -249,10 +285,14 @@ export const callGeminiWithRateLimit = async <T>(
     baseDelayMs = 2000,
     timeoutMs = 45000, // Increased timeout for larger batch requests
     context = "Gemini",
+    systemInstruction,
   } = options;
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: modelName });
+  const model = genAI.getGenerativeModel({
+    model: modelName,
+    ...(systemInstruction ? { systemInstruction } : {}),
+  });
 
   const executeWithRetry = async (attempt: number): Promise<T> => {
     try {
@@ -286,8 +326,9 @@ export const callGeminiWithRateLimit = async <T>(
         // wastes requests and blocks ~59s each. Bail immediately so the caller
         // can fail over to another model/provider.
         if (isPerDayQuotaError(errorMsg)) {
+          markModelExhausted(modelName);
           logger.warn(
-            `[${context}] Daily free-tier quota exhausted for ${modelName}. Not retrying — failing over.`
+            `[${context}] Daily free-tier quota exhausted for ${modelName}. Not retrying — failing over, and skipping this model until the Pacific-midnight reset.`
           );
           throw new Error(`${DAILY_QUOTA_EXHAUSTED} [${context}] ${errorMsg}`);
         }

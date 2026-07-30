@@ -25,6 +25,11 @@ import {
 import { IUserData } from "../types/interfaces";
 import { User } from "../user/user.model";
 import logger from "../utils/logger";
+import {
+  computeDominantWindow,
+  computeRiskWindows,
+  formatWindow,
+} from "../utils/risk-windows";
 import { ChallengeService } from "../challenge/challenge.service";
 import { EngagementService } from "../engagement/engagement.service";
 import { EatingProfileService } from "../eating-profile/eating-profile.service";
@@ -1016,17 +1021,30 @@ export class CBTService {
     };
 
     const triggerCounts: Record<string, number> = {};
+    // Timestamps per trigger, so each pattern can report the window it fires in
+    // rather than a generic "observed from your logs".
+    const triggerTimes: Record<string, Date[]> = {};
+
+    const noteTrigger = (trigger: string, at?: Date) => {
+      triggerCounts[trigger] = (triggerCounts[trigger] || 0) + 1;
+      if (at) (triggerTimes[trigger] ??= []).push(at);
+    };
 
     // From emotional eating correlations — derive trigger from moodBefore emotion
     correlations
       .filter((c) => c.wasEmotionalEating && c.moodBefore?.moodCategory)
       .forEach((c) => {
         const trigger = MOOD_TO_EATING_TRIGGER[c.moodBefore!.moodCategory];
-        if (trigger) triggerCounts[trigger] = (triggerCounts[trigger] || 0) + 1;
+        if (trigger) noteTrigger(trigger, c.createdAt ? new Date(c.createdAt) : undefined);
       });
 
-    // From mood entries explicitly linked to meals — use their trigger tags
+    // From mood entries explicitly linked to meals — use their trigger tags.
+    // The entry's own date+time is the moment that matters, not createdAt (which
+    // is when it was saved and can be hours later for a back-dated log).
     mealLinkedMoods.forEach((m) => {
+      const at = m.date && m.time ? new Date(`${m.date}T${m.time}`) : undefined;
+      const validAt = at && !isNaN(at.getTime()) ? at : undefined;
+
       m.triggers?.forEach((t) => {
         // Map situational triggers to eating trigger vocabulary
         const mapped =
@@ -1034,7 +1052,7 @@ export class CBTService {
           : t === "social" ? "social"
           : t === "sleep" ? "tiredness"
           : null;
-        if (mapped) triggerCounts[mapped] = (triggerCounts[mapped] || 0) + 1;
+        if (mapped) noteTrigger(mapped, validAt);
       });
     });
 
@@ -1148,9 +1166,25 @@ export class CBTService {
           strongestMealType,
           dailyBreakdown,
           commonTriggers: Object.entries(triggerCounts)
-            .map(([trigger, count]) => ({ trigger, count }))
+            .map(([trigger, count]) => {
+              const window = computeDominantWindow(triggerTimes[trigger] ?? []);
+              return {
+                trigger,
+                count,
+                // null when there isn't enough signal to name a time of day —
+                // the client then falls back to a generic description.
+                window,
+                windowLabel: window ? formatWindow(window) : null,
+              };
+            })
             .sort((a, b) => b.count - a.count)
             .slice(0, 5),
+          riskWindows: computeRiskWindows(
+            correlations.map((c) => ({
+              at: new Date(c.createdAt),
+              emotional: c.wasEmotionalEating,
+            })),
+          ),
           commonEmotions: Object.entries(emotionCounts)
             .map(([emotion, count]) => ({ emotion, count }))
             .sort((a, b) => b.count - a.count)

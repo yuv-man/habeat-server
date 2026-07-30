@@ -4,6 +4,7 @@ import logger from "../utils/logger";
 import {
   callGeminiWithRateLimit,
   DAILY_QUOTA_EXHAUSTED,
+  isModelExhausted,
 } from "../utils/gemini-rate-limiter";
 import {
   IUserData,
@@ -33,12 +34,17 @@ import {
 import {
   resolveDietaryConstraints,
   buildDietaryConstraintBlock,
-  buildMealExamples,
   findPlanViolations,
   describeViolations,
   filterFoodPreferences,
   DietaryConstraints,
 } from "../utils/dietary-constraints";
+import {
+  buildMenuSkeleton,
+  buildWeeklyPlanPrompt,
+  planSeed,
+  MEAL_PLAN_SYSTEM_INSTRUCTION,
+} from "./meal-plan-prompt";
 
 // Helper function to extract error message
 const getErrorMessage = (error: unknown): string => {
@@ -313,20 +319,10 @@ const generateWithFallback = async <T>(
   );
 };
 
-// Meal style rotation for variety — all simple, everyday home-cooking styles
-const CUISINE_ROTATION = [
-  "American home cooking",
-  "simple Mediterranean",
-  "classic comfort food",
-  "simple Asian home cooking",
-  "everyday Italian",
-  "simple Mexican home cooking",
-  "classic homestyle",
-];
-// NOTE: the protein rotation is NOT a constant — it is derived per user from
-// their dietary constraints (see resolveDietaryConstraints). Hardcoding
-// "Chicken/Beef/Salmon…" here previously instructed the model to put meat in a
-// vegan user's plan, which outranked the passive "AVOID:" line.
+// NOTE: the weekly plan's cuisine/protein/method rotation now lives in
+// meal-plan-prompt.ts, seeded per user and per week. The flat CUISINE_ROTATION
+// that used to sit here was indexed by day number alone, so every user got the
+// same seven styles in the same order every single week.
 
 // Shared "no prep-words, use underscores" ingredient-naming rule, reused verbatim
 // across every single-meal prompt (generateMeal/Suggestions/RescueMeal/Snack) so
@@ -334,182 +330,6 @@ const CUISINE_ROTATION = [
 const INGREDIENT_NAMING_RULES = `- CRITICAL: ingredient name MUST be the RAW ingredient only — no "chopped", "diced", "minced", "fresh", "dried", "sliced", "grated", "crushed", "whole", "ground", "cubed", "julienned"
 - Use lowercase with underscores (e.g., "chicken_breast", "olive_oil", "ginger" — NOT "diced chicken breast")`;
 
-/**
- * Build a compact single-day prompt (~300 tokens vs ~3000 for the full 7-day prompt).
- * Called once per day in parallel, each with a distinct cuisine + protein from the rotation.
- */
-const buildDayPrompt = (
-  userData: IUserData,
-  dateStr: string,
-  dayName: string,
-  dayIndex: number,
-  hasWorkout: boolean,
-  targetCalories: number,
-  macros: { protein: number; carbs: number; fat: number },
-  goalContextStr: string,
-  moodContext?: string,
-  repairNote?: string,
-): string => {
-  const bCal = Math.round(targetCalories * 0.25);
-  const lCal = Math.round(targetCalories * 0.35);
-  const dCal = Math.round(targetCalories * 0.3);
-  const sCal = Math.round(targetCalories * 0.1);
-  const cuisine = CUISINE_ROTATION[dayIndex % CUISINE_ROTATION.length];
-
-  const constraints = resolveDietaryConstraints(userData);
-  const constraintBlock = buildDietaryConstraintBlock(constraints);
-  const protein =
-    constraints.proteinRotation[dayIndex % constraints.proteinRotation.length];
-
-  // Dislikes are soft preferences and are kept separate from the hard
-  // constraints above so the model can't treat "vegan" as merely a dislike.
-  const avoidList = (userData.dislikes || []).join(", ") || "none";
-
-  // Drop preferences that conflict with the hard constraints (e.g. "Sirloin
-  // Steak" for a vegan) so the prompt never tells the model to treat a
-  // forbidden ingredient as inspiration.
-  const { allowed: allowedPreferences, removed: removedPreferences } =
-    filterFoodPreferences(userData.foodPreferences || [], constraints);
-  if (removedPreferences.length) {
-    logger.warn(
-      `[MealGen] Dropped food preferences conflicting with dietary restrictions: ${removedPreferences.join(", ")}`,
-    );
-  }
-
-  const rawPreferList = allowedPreferences.join(", ") || "none";
-  const preferList = rawPreferList !== "none"
-    ? `${rawPreferList} — apply to LUNCH/DINNER by default. For breakfast, use morning-appropriate foods (eggs, oatmeal, yogurt, toast, smoothie, granola, fruit, rice porridge). Do not automatically place a dinner-type preference (steak, beef cut, pasta, curry, etc.) into breakfast — unless the user explicitly requested it. Labeling a dinner protein as a "scramble" does not make it breakfast-appropriate; egg scrambles use eggs as the primary protein.`
-    : "none";
-
-  const workoutLine = hasWorkout
-    ? `"workouts":[{"name":"<name>","category":"<cat>","duration":<min>,"caloriesBurned":<cal>}]`
-    : `"workouts":[]`;
-
-  return `Generate a single-day meal plan as JSON.
-${constraintBlock ? `${constraintBlock}\n` : ""}${repairNote ? `${repairNote}\n` : ""}PERSON: ${userData.age}y ${userData.gender} ${userData.height}cm ${userData.weight}kg path=${userData.path}
-DAILY TARGETS: ${targetCalories} kcal | P:${macros.protein}g C:${macros.carbs}g F:${macros.fat}g
-DISLIKES (avoid if possible): ${avoidList}
-PREFER: ${preferList}
-${goalContextStr ? `STYLE: ${goalContextStr.substring(0, 200)}` : ""}
-${moodContext ? `MOOD & WELLNESS: ${moodContext}` : ""}
-DAY: ${dateStr} (${dayName}) | Style: ${cuisine} | Primary protein: ${protein}
-${hasWorkout ? "WORKOUT: Include 1 workout today." : "REST DAY: No workout."}
-CRITICAL: Use SIMPLE, everyday home-cooked meals that normal people make. Examples: ${buildMealExamples(constraints)}. NO exotic restaurant dishes.
-MEAL CALORIE TARGETS:
-- breakfast: ~${bCal} kcal
-- lunch: ~${lCal} kcal
-- dinner: ~${dCal} kcal
-- snacks[0]: ~${sCal} kcal
-INGREDIENT FORMAT: "ingredient_name|amount|unit|category"
-- ingredient_name: RAW name only — NO "chopped", "diced", "minced", "fresh", "dried" etc.
-- category: one of Proteins/Vegetables/Fruits/Grains/Dairy/Pantry/Spices
-- Math: protein*4 + carbs*4 + fat*9 ≈ meal calories
-RETURN ONLY THIS JSON (no markdown, no extra text):
-{"date":"${dateStr}","day":"${dayName}","meals":{"breakfast":{"name":"...","calories":${bCal},"macros":{"protein":0,"carbs":0,"fat":0},"ingredients":["..."],"prepTime":0},"lunch":{"name":"...","calories":${lCal},"macros":{"protein":0,"carbs":0,"fat":0},"ingredients":["..."],"prepTime":0},"dinner":{"name":"...","calories":${dCal},"macros":{"protein":0,"carbs":0,"fat":0},"ingredients":["..."],"prepTime":0},"snacks":[{"name":"...","calories":${sCal},"macros":{"protein":0,"carbs":0,"fat":0},"ingredients":["..."],"prepTime":0}]},${workoutLine}}`;
-};
-
-/**
- * Build a multi-day prompt for batched generation (reduces API calls).
- * Generates 3-4 days per request to stay under rate limits while minimizing total requests.
- */
-const buildMultiDayPrompt = (
-  userData: IUserData,
-  daysData: Array<{
-    dateStr: string;
-    dayName: string;
-    dayIndex: number;
-    hasWorkout: boolean;
-  }>,
-  targetCalories: number,
-  macros: { protein: number; carbs: number; fat: number },
-  goalContextStr: string,
-  moodContext?: string,
-  repairNote?: string,
-): string => {
-  const bCal = Math.round(targetCalories * 0.25);
-  const lCal = Math.round(targetCalories * 0.35);
-  const dCal = Math.round(targetCalories * 0.3);
-  const sCal = Math.round(targetCalories * 0.1);
-
-  const constraints = resolveDietaryConstraints(userData);
-  const constraintBlock = buildDietaryConstraintBlock(constraints);
-
-  // Dislikes only — hard restrictions/allergies live in the constraint block.
-  const avoidList = (userData.dislikes || []).join(", ") || "none";
-
-  // Drop preferences that conflict with the hard constraints (e.g. "Sirloin
-  // Steak" for a vegan) so the prompt never tells the model to treat a
-  // forbidden ingredient as inspiration.
-  const { allowed: allowedPreferences, removed: removedPreferences } =
-    filterFoodPreferences(userData.foodPreferences || [], constraints);
-  if (removedPreferences.length) {
-    logger.warn(
-      `[MealGen] Dropped food preferences conflicting with dietary restrictions: ${removedPreferences.join(", ")}`,
-    );
-  }
-
-  const rawPreferList = allowedPreferences.join(", ") || "none";
-  const preferList = rawPreferList !== "none"
-    ? `${rawPreferList} — apply to LUNCH/DINNER by default. For breakfast, default to morning-appropriate foods (eggs, oatmeal, yogurt, toast, smoothie, granola, pancakes, fruit, rice porridge). Avoid automatically applying a dinner-type preference (steak, beef cut, pasta, curry, rice bowl, etc.) to breakfast unless the user explicitly asked for it. Calling a dinner protein a "scramble" does not make it a breakfast meal; egg scrambles should use eggs as the primary protein.`
-    : "none";
-
-  // Build day specifications with variety enforcement
-  const daySpecs = daysData
-    .map((d) => {
-      const cuisine = CUISINE_ROTATION[d.dayIndex % CUISINE_ROTATION.length];
-      const protein =
-        constraints.proteinRotation[d.dayIndex % constraints.proteinRotation.length];
-      const workoutStr = d.hasWorkout ? "WORKOUT" : "REST";
-      return `- ${d.dateStr} (${d.dayName}): ${cuisine} cuisine, ${protein} protein, ${workoutStr}`;
-    })
-    .join("\n");
-
-  // Build expected JSON structure for each day
-  const dayStructures = daysData
-    .map((d) => {
-      const workoutJson = d.hasWorkout
-        ? `"workouts":[{"name":"...","category":"...","duration":30,"caloriesBurned":200}]`
-        : `"workouts":[]`;
-      return `{"date":"${d.dateStr}","day":"${d.dayName}","meals":{"breakfast":{...},"lunch":{...},"dinner":{...},"snacks":[{...}]},${workoutJson}}`;
-    })
-    .join(",\n    ");
-
-  return `Generate a ${daysData.length}-day meal plan as a JSON array. Each day MUST be unique with different meals.
-${constraintBlock ? `\n${constraintBlock}\n` : ""}${repairNote ? `\n${repairNote}\n` : ""}
-PERSON: ${userData.age}y ${userData.gender} ${userData.height}cm ${userData.weight}kg path=${userData.path}
-DAILY TARGETS: ${targetCalories} kcal | P:${macros.protein}g C:${macros.carbs}g F:${macros.fat}g
-DISLIKES (avoid if possible): ${avoidList}
-PREFER: ${preferList}
-${goalContextStr ? `STYLE: ${goalContextStr.substring(0, 200)}` : ""}
-${moodContext ? `MOOD & WELLNESS: ${moodContext}` : ""}
-
-DAYS TO GENERATE (each with DIFFERENT meal style and protein):
-${daySpecs}
-
-MEAL CALORIE TARGETS (per day):
-- breakfast: ~${bCal} kcal
-- lunch: ~${lCal} kcal
-- dinner: ~${dCal} kcal
-- snacks[0]: ~${sCal} kcal
-
-CRITICAL RULES:
-0. ${constraintBlock ? "The HARD DIETARY CONSTRAINTS above outrank every rule below. If a rule conflicts with them, follow the constraints." : "Follow the targets above."}
-1. NO REPEATED MEALS across days - every breakfast, lunch, dinner must be unique
-2. SIMPLE, everyday home-cooked meals only. Examples: ${buildMealExamples(constraints)}. NO exotic restaurant dishes.
-3. Use the specified meal style and protein for each day
-4. INGREDIENT FORMAT: "ingredient_name|amount|unit|category"
-   - ingredient_name: RAW only (no "chopped", "diced", "minced", "fresh", "dried")
-   - category: Proteins/Vegetables/Fruits/Grains/Dairy/Pantry/Spices
-5. Macros must add up: protein*4 + carbs*4 + fat*9 ≈ calories
-
-RETURN ONLY THIS JSON ARRAY (no markdown, no extra text):
-[
-    ${dayStructures}
-]
-
-Each meal object structure:
-{"name":"Meal Name","calories":${bCal},"macros":{"protein":20,"carbs":40,"fat":10},"ingredients":["${constraints.proteinRotation[0].toLowerCase().replace(/ /g, "_")}|150|g|Proteins","rice|100|g|Grains"],"prepTime":15}`;
-};
 
 /**
  * Parse multi-day response from Gemini.
@@ -632,11 +452,28 @@ const generateMultiDayPlan = async (
   context: string,
   maxRetries: number = 4,
   timeoutMs: number = 60000, // Longer timeout for multi-day requests
+  systemInstruction?: string,
+  maxOutputTokens: number = 32768,
 ): Promise<any[]> => {
   let allExhausted = true;
   let lastError = "";
 
-  for (const modelName of models) {
+  // Skip models already known to be out of quota today rather than spending a
+  // guaranteed-429 round trip on each of them before every fail-over.
+  const available = models.filter((m) => !isModelExhausted(m));
+  if (available.length === 0) {
+    logger.warn(
+      `[${context}] All ${models.length} Gemini models are out of daily quota — going straight to the fallback provider.`,
+    );
+    throw new Error(`${DAILY_QUOTA_EXHAUSTED} [${context}] all models exhausted today`);
+  }
+  if (available.length < models.length) {
+    logger.info(
+      `[${context}] Skipping ${models.length - available.length} model(s) already exhausted today; ${available.length} left.`,
+    );
+  }
+
+  for (const modelName of available) {
     try {
       return await callGeminiWithRateLimit(
         apiKey,
@@ -646,7 +483,14 @@ const generateMultiDayPlan = async (
             contents: [{ role: "user", parts: [{ text: prompt }] }],
             generationConfig: {
               responseMimeType: "application/json",
-              temperature: 0.7,
+              // The menu outline already fixes each meal's form and protein, so
+              // a higher temperature varies the cooking rather than the
+              // structure — this is what stops every week looking alike.
+              temperature: 0.9,
+              // A full week of meals with ingredient lists runs past the
+              // default output cap; the reply then truncates mid-array and the
+              // whole batch is discarded as unparseable.
+              maxOutputTokens,
             },
           });
 
@@ -657,6 +501,7 @@ const generateMultiDayPlan = async (
           maxRetries,
           timeoutMs,
           context,
+          systemInstruction,
         },
       );
     } catch (err) {
@@ -697,6 +542,7 @@ const generateSingleDayPlan = async (
   context: string,
   maxRetries: number = 3,
   timeoutMs: number = 25000,
+  systemInstruction?: string,
 ): Promise<any> => {
   try {
     return await callGeminiWithRateLimit(
@@ -707,17 +553,22 @@ const generateSingleDayPlan = async (
           contents: [{ role: "user", parts: [{ text: dayPrompt }] }],
           generationConfig: {
             responseMimeType: "application/json",
-            temperature: 0.7,
+            temperature: 0.9,
+            maxOutputTokens: 8192,
           },
         });
 
-        const text = result.response.text();
-        return JSON.parse(text);
+        // The day prompt uses the same schema as the batch one, so the model
+        // replies with a one-element array. Unwrap it — callers push the result
+        // straight into the day list and would otherwise nest an array there.
+        const days = parseMultiDayResponse(result.response.text());
+        return days[0] ?? null;
       },
       {
         maxRetries,
         timeoutMs,
         context,
+        systemInstruction,
       },
     );
   } catch (err) {
@@ -738,16 +589,26 @@ const generateMealPlanWithGemini = async (
   planTemplate?: string,
   datesOverride?: Date[], // Optional: generate only these specific dates (two-phase support)
   moodContext?: string,
+  recentMeals: string[] = [], // Dish names to avoid repeating from earlier plans
 ): Promise<MealPlanResponse> => {
   const models = await getAvailableGeminiModelsCached(apiKey);
 
-  // Ordered fail-over list. Each model has its OWN free-tier daily quota, so when
-  // one is exhausted we move to the next — multiplying effective free capacity.
-  // Lite models first (best rate limits), fuller models as backups.
+  // Ordered fail-over list. Each model has its OWN free-tier daily quota (20
+  // requests/day), so when one is exhausted we move to the next — multiplying
+  // effective free capacity.
+  //
+  // Ordered by plan QUALITY, not by rate limit. Measured over the eval personas
+  // in scripts/meal-plan-eval, gemini-2.5-flash-lite produced dietary violations
+  // for the vegan and gluten-free users and echoed the target calories straight
+  // back (0.0% error against target, i.e. numbers unrelated to the ingredients
+  // it listed). The 3.x models returned zero violations and nutrition actually
+  // derived from the food. A meal plan is the product, so the cheapest model
+  // being fastest is not a reason to serve a worse week.
   const MODEL_PRIORITY = [
-    "gemini-2.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3-flash-preview",
     "gemini-2.5-flash",
-    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash-lite",
     "gemini-2.0-flash",
   ];
   const candidateModels = MODEL_PRIORITY.filter((m) => models.includes(m));
@@ -847,14 +708,25 @@ const generateMealPlanWithGemini = async (
       `[Gemini] Batch ${batchIdx + 1}/${batches.length}: Generating ${batch.length} days (${batch.map((d) => d.dayName).join(", ")})...`,
     );
 
-    const multiDayPrompt = buildMultiDayPrompt(
-      userData,
+    // Code fixes the shape of every meal (form, protein, method, flavour) and
+    // the model only cooks it. See meal-plan-prompt.ts for why.
+    const skeleton = buildMenuSkeleton(
       batchDaysData,
+      constraints,
+      targetCalories,
+      planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate)),
+    );
+
+    const multiDayPrompt = buildWeeklyPlanPrompt({
+      userData,
+      skeleton,
+      constraints,
       targetCalories,
       macros,
-      goalContextStr,
+      recentMeals,
+      styleNote: goalContextStr,
       moodContext,
-    );
+    });
 
     // generateMultiDayPlan rotates across candidateModels and throws
     // DAILY_QUOTA_EXHAUSTED only when EVERY model is out of daily quota — in
@@ -867,6 +739,8 @@ const generateMealPlanWithGemini = async (
       `Batch${batchIdx + 1}`,
       4, // maxRetries
       MULTI_DAY_TIMEOUT_MS,
+      MEAL_PLAN_SYSTEM_INSTRUCTION,
+      outputTokenBudget(batch.length),
     );
 
     if (batchResults.length > 0) {
@@ -883,17 +757,30 @@ const generateMealPlanWithGemini = async (
       );
 
       for (const dayData of batch) {
-        const singleDayPrompt = buildDayPrompt(
+        // Same skeleton, one day wide — a fallback day must not fall back to
+        // weaker prompting, or the retry quietly reintroduces the problems the
+        // rewrite fixed.
+        const daySkeleton = buildMenuSkeleton(
+          [dayData],
+          constraints,
+          targetCalories,
+          planSeed(
+            String((userData as any)._id ?? "anon"),
+            getLocalDateKey(weekStartDate),
+            dayData.dateStr,
+          ),
+        );
+
+        const singleDayPrompt = buildWeeklyPlanPrompt({
           userData,
-          dayData.dateStr,
-          dayData.dayName,
-          dayData.dayIndex,
-          dayData.hasWorkout,
+          skeleton: daySkeleton,
+          constraints,
           targetCalories,
           macros,
-          goalContextStr,
+          recentMeals,
+          styleNote: goalContextStr,
           moodContext,
-        );
+        });
 
         const result = await generateSingleDayPlan(
           apiKey,
@@ -902,6 +789,7 @@ const generateMealPlanWithGemini = async (
           dayData.dayName,
           3,
           30000,
+          MEAL_PLAN_SYSTEM_INSTRUCTION,
         );
 
         if (result !== null) {
@@ -933,20 +821,29 @@ const generateMealPlanWithGemini = async (
       const repairDays = allDaysData.filter((d) => violatingDates.includes(d.dateStr));
       if (repairDays.length === 0) return null;
 
-      const repairPrompt = buildMultiDayPrompt(
+      // Re-seed the repair so it cannot re-roll the same forms that just failed.
+      const repairSkeleton = buildMenuSkeleton(
+        repairDays,
+        constraints,
+        targetCalories,
+        planSeed(
+          String((userData as any)._id ?? "anon"),
+          getLocalDateKey(weekStartDate),
+          "repair",
+        ),
+      );
+
+      const repairPrompt = buildWeeklyPlanPrompt({
         userData,
-        repairDays.map((d) => ({
-          dateStr: d.dateStr,
-          dayName: d.dayName,
-          dayIndex: d.dayIndex,
-          hasWorkout: d.hasWorkout,
-        })),
+        skeleton: repairSkeleton,
+        constraints,
         targetCalories,
         macros,
-        goalContextStr,
+        recentMeals,
+        styleNote: goalContextStr,
         moodContext,
         repairNote,
-      );
+      });
 
       try {
         return await generateMultiDayPlan(
@@ -956,6 +853,8 @@ const generateMealPlanWithGemini = async (
           "DietaryRepair",
           2,
           MULTI_DAY_TIMEOUT_MS,
+          MEAL_PLAN_SYSTEM_INSTRUCTION,
+          outputTokenBudget(repairDays.length),
         );
       } catch (err) {
         logger.error(`[Gemini] Dietary repair request failed: ${getErrorMessage(err)}`);
@@ -985,11 +884,76 @@ const generateMealPlanWithGemini = async (
 // OpenRouter fallback — used when all Gemini models are rate-limited.
 // Uses the OpenAI-compatible chat completions API with free-tier models that
 // properly respect dietary restrictions (vegan, allergies, etc.).
-const OPEN_ROUTER_MODELS = [
-  "meta-llama/llama-3.1-8b-instruct:free",
-  "mistralai/mistral-7b-instruct:free",
-  "google/gemma-2-9b-it:free",
+/**
+ * OpenRouter fail-over, in two tiers.
+ *
+ * The previous list — llama-3.1-8b:free, mistral-7b:free, gemma-2-9b:free — was
+ * entirely dead: all three IDs now return 404 ("no endpoints found" / "not
+ * available for free"). So once Gemini's daily quota ran out there was no
+ * fallback at all and users got PLAN_GENERATION_UNAVAILABLE.
+ *
+ * PAID tier first. A week's plan is ~8k output tokens, i.e. roughly $0.02 on
+ * gemini-3.5-flash — the same model the Gemini path prefers, so failing over
+ * costs cents and does not degrade the plan. Requires credit on the OpenRouter
+ * account; without it these 402 and we fall through to the free tier.
+ *
+ * FREE tier is the safety net when there is no credit. These are real models
+ * rather than the 7-9B class that used to be here, but they are slower and
+ * rate-limited (~50 requests/day on an uncredited account).
+ */
+const OPEN_ROUTER_PAID_MODELS = [
+  "google/gemini-3.5-flash", // measured best on the eval personas
+  "google/gemini-3-flash-preview",
+  "deepseek/deepseek-v3.2", // non-Google, in case Google itself is degraded
 ];
+
+// Ordered by measured latency on a trivial JSON prompt. Deliberately excludes
+// nvidia/nemotron-3-super-120b-a12b:free — it is a reasoning model and spent
+// 37s thinking about a two-item list, which is far too slow to sit in front of
+// a user waiting for today's meals.
+const OPEN_ROUTER_FREE_MODELS = [
+  "inclusionai/ling-3.0-flash:free",
+  "openai/gpt-oss-20b:free",
+  "google/gemma-4-26b-a4b-it:free",
+];
+
+const OPEN_ROUTER_MODELS = [...OPEN_ROUTER_PAID_MODELS, ...OPEN_ROUTER_FREE_MODELS];
+
+/**
+ * True when OpenRouter rejected a request for lack of credit. Checked so the
+ * whole paid tier can be skipped for the rest of the process instead of
+ * spending one doomed round trip per paid model on every generation.
+ */
+export const isOutOfCreditError = (err: unknown): boolean => {
+  const status = (err as any)?.response?.status;
+  const msg = String(
+    (err as any)?.response?.data?.error?.message ?? getErrorMessage(err),
+  ).toLowerCase();
+  return (
+    status === 402 ||
+    msg.includes("402") ||
+    msg.includes("insufficient credit") ||
+    msg.includes("requires more credits") ||
+    msg.includes("can only afford")
+  );
+};
+
+/** Set once the account is known to have no credit; resets on process restart. */
+let paidTierUnavailable = false;
+
+/**
+ * Output-token budget for a plan of `dayCount` days.
+ *
+ * Sized rather than fixed-large for two reasons: too small truncates the reply
+ * mid-array and the whole batch is discarded, while too large is actively
+ * harmful on OpenRouter, which reserves credit against `max_tokens` up front and
+ * rejects the request outright ("you requested up to 32768 tokens, but can only
+ * afford 4444") even when the real reply would have cost a fraction of that.
+ *
+ * A day of four meals with ingredient lists measures at roughly 1.5k tokens.
+ */
+export const outputTokenBudget = (dayCount: number): number =>
+  Math.min(32768, Math.max(4096, 2500 + Math.max(1, dayCount) * 2000));
 
 const generateMealPlanWithOpenRouter = async (
   userData: IUserData,
@@ -1001,6 +965,7 @@ const generateMealPlanWithOpenRouter = async (
   planTemplate?: string,
   datesOverride?: Date[],
   moodContext?: string,
+  recentMeals: string[] = [],
 ): Promise<MealPlanResponse> => {
   logger.info("[OpenRouter] Starting generation...");
 
@@ -1046,17 +1011,39 @@ const generateMealPlanWithOpenRouter = async (
 
   const allDayResults: any[] = [];
 
-  // Single prompt → first model that returns parseable days wins.
-  const runOpenRouterPrompt = async (prompt: string, label: string): Promise<any[]> => {
-    for (const model of OPEN_ROUTER_MODELS) {
+  // Single prompt → first model that returns parseable days wins. Paid models
+  // are tried first and skipped wholesale once the account is known to be out
+  // of credit, so an uncredited deployment still reaches the free tier fast.
+  const runOpenRouterPrompt = async (
+    prompt: string,
+    label: string,
+    dayCount: number,
+  ): Promise<any[]> => {
+    const models = paidTierUnavailable ? OPEN_ROUTER_FREE_MODELS : OPEN_ROUTER_MODELS;
+    if (paidTierUnavailable) {
+      logger.info(`[OpenRouter] No credit on this account — using free models only.`);
+    }
+
+    for (const model of models) {
+      // The flag can flip partway through the paid tier; skip whatever is left
+      // of it rather than collecting an identical 402 from each one.
+      if (paidTierUnavailable && OPEN_ROUTER_PAID_MODELS.includes(model)) continue;
+
       try {
         logger.info(`[OpenRouter] Trying model ${model} for ${label}...`);
         const response = await axios.post(
           "https://openrouter.ai/api/v1/chat/completions",
           {
             model,
-            messages: [{ role: "user", content: `${prompt}\n\nReturn ONLY a JSON array. No markdown, no explanation.` }],
-            temperature: 0.7,
+            messages: [
+              { role: "system", content: MEAL_PLAN_SYSTEM_INSTRUCTION },
+              { role: "user", content: `${prompt}\n\nReturn ONLY a JSON array. No markdown, no explanation.` },
+            ],
+            temperature: 0.9,
+            // Same truncation risk as the Gemini path, but sized: OpenRouter
+            // reserves credit against max_tokens, so asking for far more than
+            // the reply needs gets the request rejected on a small balance.
+            max_tokens: outputTokenBudget(dayCount),
           },
           {
             headers: {
@@ -1069,7 +1056,18 @@ const generateMealPlanWithOpenRouter = async (
           },
         );
 
-        const text: string = response.data?.choices?.[0]?.message?.content;
+        // OpenRouter pads long-running requests with keep-alive lines
+        // (": OPENROUTER PROCESSING") ahead of the body. Axios then fails to
+        // auto-parse and hands back a raw string, which would look to us like
+        // an empty response and silently burn the model — so recover it.
+        let payload: any = response.data;
+        if (typeof payload === "string") {
+          const start = payload.search(/[[{]/);
+          if (start === -1) throw new Error("No JSON in OpenRouter response");
+          payload = JSON.parse(payload.slice(start));
+        }
+
+        const text: string = payload?.choices?.[0]?.message?.content;
         if (!text) throw new Error("Empty response from OpenRouter");
 
         const results = parseMultiDayResponse(text);
@@ -1078,6 +1076,17 @@ const generateMealPlanWithOpenRouter = async (
           return results;
         }
       } catch (err) {
+        // No credit is an account-level fact, not a per-model one: remember it
+        // and drop to the free tier immediately rather than 402-ing once per
+        // paid model on this and every later generation.
+        if (isOutOfCreditError(err) && !paidTierUnavailable) {
+          paidTierUnavailable = true;
+          logger.warn(
+            `[OpenRouter] Account has no credit — disabling the paid tier for this process and continuing on free models. ` +
+              `Add credit at https://openrouter.ai/credits to restore full-quality fail-over.`,
+          );
+          continue;
+        }
         logger.warn(`[OpenRouter] Model ${model} ${label} failed: ${getErrorMessage(err)}`);
       }
     }
@@ -1090,13 +1099,22 @@ const generateMealPlanWithOpenRouter = async (
       dateStr: d.dateStr, dayName: d.dayName, dayIndex: d.dayIndex, hasWorkout: d.hasWorkout,
     }));
 
-    const prompt = buildMultiDayPrompt(
-      userData, batchDaysData, targetCalories, macros, goalContextStr, moodContext,
+    const skeleton = buildMenuSkeleton(
+      batchDaysData,
+      constraints,
+      targetCalories,
+      planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate)),
     );
+
+    const prompt = buildWeeklyPlanPrompt({
+      userData, skeleton, constraints, targetCalories, macros,
+      recentMeals, styleNote: goalContextStr, moodContext,
+    });
 
     const batchResults = await runOpenRouterPrompt(
       prompt,
       `batch ${batchIdx + 1}/${batches.length}`,
+      batch.length,
     );
 
     if (batchResults.length > 0) {
@@ -1122,19 +1140,23 @@ const generateMealPlanWithOpenRouter = async (
       const repairDays = allDaysData.filter((d) => violatingDates.includes(d.dateStr));
       if (repairDays.length === 0) return null;
 
-      const repairPrompt = buildMultiDayPrompt(
-        userData,
-        repairDays.map((d) => ({
-          dateStr: d.dateStr, dayName: d.dayName, dayIndex: d.dayIndex, hasWorkout: d.hasWorkout,
-        })),
+      const repairSkeleton = buildMenuSkeleton(
+        repairDays,
+        constraints,
         targetCalories,
-        macros,
-        goalContextStr,
-        moodContext,
-        repairNote,
+        planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate), "repair"),
       );
 
-      const repaired = await runOpenRouterPrompt(repairPrompt, "dietary repair");
+      const repairPrompt = buildWeeklyPlanPrompt({
+        userData, skeleton: repairSkeleton, constraints, targetCalories, macros,
+        recentMeals, styleNote: goalContextStr, moodContext, repairNote,
+      });
+
+      const repaired = await runOpenRouterPrompt(
+        repairPrompt,
+        "dietary repair",
+        repairDays.length,
+      );
       return repaired.length > 0 ? repaired : null;
     },
   );
@@ -1160,6 +1182,7 @@ const generateMealPlanWithAI = async (
   planTemplate?: string,
   datesOverride?: Date[], // Optional: generate only these specific dates
   moodContext?: string | null,
+  recentMeals: string[] = [], // Dish names from earlier plans, to avoid repeats
 ): Promise<MealPlanResponse> => {
   try {
     if (useMock) {
@@ -1185,7 +1208,7 @@ const generateMealPlanWithAI = async (
         logger.info("=== ATTEMPTING GEMINI (PRIMARY) ===");
         return await generateMealPlanWithGemini(
           userData, weekStartDate, planType, language, geminiKey,
-          goals, planTemplate, datesOverride, moodContext ?? undefined,
+          goals, planTemplate, datesOverride, moodContext ?? undefined, recentMeals,
         );
       } catch (geminiError: unknown) {
         logger.warn(`[AI] Gemini failed: ${getErrorMessage(geminiError)}. Trying OpenRouter...`);
@@ -1204,7 +1227,7 @@ const generateMealPlanWithAI = async (
         logger.info("=== ATTEMPTING OPENROUTER (FALLBACK) ===");
         return await generateMealPlanWithOpenRouter(
           userData, weekStartDate, planType, language, openRouterKey,
-          goals, planTemplate, datesOverride, moodContext ?? undefined,
+          goals, planTemplate, datesOverride, moodContext ?? undefined, recentMeals,
         );
       } catch (openRouterError: unknown) {
         logger.warn(`[AI] OpenRouter failed: ${getErrorMessage(openRouterError)}`);

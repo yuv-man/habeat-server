@@ -8,6 +8,7 @@ import { IUserData } from "../types/interfaces";
 import { User } from "../user/user.model";
 import { callGeminiWithRateLimit } from "../utils/gemini-rate-limiter";
 import { loadKnowledge } from "../knowledge/loader";
+import { computeRiskWindows } from "../utils/risk-windows";
 import logger from "../utils/logger";
 
 // ─── Gemini system prompt (send once per context cache TTL) ─────────────────
@@ -131,30 +132,12 @@ export class EatingProfileAgent {
     });
 
     // Compute risk windows: bucket emotional correlations by hour + day
-    const windowCounts: Record<string, { count: number; total: number }> = {};
-    correlations.forEach((c) => {
-      const hour = new Date(c.createdAt).getHours();
-      const dow = new Date(c.createdAt).getDay();
-      const hourBucket = Math.floor(hour / 3) * 3;
-      const key = `${dow}-${hourBucket}`;
-      if (!windowCounts[key]) windowCounts[key] = { count: 0, total: 0 };
-      windowCounts[key].total++;
-      if (c.wasEmotionalEating) windowCounts[key].count++;
-    });
-
-    const riskWindows = Object.entries(windowCounts)
-      .filter(([, v]) => v.total >= 2 && v.count / v.total >= 0.5)
-      .map(([key, v]) => {
-        const [dow, hourStart] = key.split("-").map(Number);
-        const rate = v.count / v.total;
-        return {
-          dayOfWeek: dow,
-          hourStart,
-          hourEnd: hourStart + 3,
-          risk: (rate >= 0.75 ? "high" : "medium") as "high" | "medium",
-        };
-      })
-      .slice(0, 5);
+    const riskWindows = computeRiskWindows(
+      correlations.map((c) => ({
+        at: new Date(c.createdAt),
+        emotional: c.wasEmotionalEating,
+      })),
+    );
 
     await this.profileModel.findOneAndUpdate(
       { userId: new mongoose.Types.ObjectId(userId) },
