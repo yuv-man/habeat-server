@@ -138,6 +138,22 @@ describe("findMealViolations", () => {
     ).toContain("butter");
   });
 
+  it("catches the library meals that were substituted into a vegan plan", () => {
+    // These are real rows from the `meals` collection that were served to a
+    // vegan user, because library matching only ever filtered on allergies.
+    const served = [
+      "Sirloin Steak And Broccoli Scramble Quick To Prepare, Under 15 Minutes",
+      "Lemon Herb Roasted Chicken Salad with Quinoa",
+      "Baked Chicken Leg With Rosemary Potatoes And Steamed Broccoli",
+      "Salmon Puttanesca Pasta Salad",
+      "Miso-glazed Noodles With Shrimp And Broccoli",
+      "Garlic Herb Broccoli With Sirloin And Sunny Side Up Eggs",
+    ];
+    for (const name of served) {
+      expect(findMealViolations(meal(name), vegan).length).toBeGreaterThan(0);
+    }
+  });
+
   it("does not false-positive on eggplant for an egg restriction", () => {
     const eggFree = resolveDietaryConstraints({ dietaryRestrictions: ["egg-free"] });
     expect(findMealViolations(meal("Roasted Eggplant with Tahini"), eggFree)).toEqual([]);

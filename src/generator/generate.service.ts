@@ -340,17 +340,70 @@ const INGREDIENT_NAMING_RULES = `- CRITICAL: ingredient name MUST be the RAW ing
  * We try a direct JSON.parse first (works when responseMimeType:"application/json"),
  * and only fall back to extraction for malformed/markdown-wrapped responses.
  */
-const parseMultiDayResponse = (text: string): any[] => {
+/**
+ * Pull the first complete JSON array or object out of `text`, ignoring anything
+ * before or after it.
+ *
+ * Models intermittently append a stray token after a perfectly good array
+ * ("Unexpected non-whitespace character after JSON at position 10234"), which
+ * discarded an entire valid week. Scanning brackets rather than regex-matching
+ * avoids being fooled by braces inside string values.
+ */
+const extractFirstJSONValue = (text: string): string | null => {
+  const start = text.search(/[[{]/);
+  if (start === -1) return null;
+
+  const open = text[start];
+  const close = open === "[" ? "]" : "}";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+
+    if (ch === '"') inString = true;
+    else if (ch === open) depth++;
+    else if (ch === close) {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+
+  return null; // unbalanced — genuinely truncated
+};
+
+export const parseMultiDayResponse = (text: string): any[] => {
   let parsed: any;
 
   // 1. Try direct parse first — Gemini JSON-mode returns clean JSON
   try {
     parsed = JSON.parse(text.trim());
   } catch (_) {
-    // 2. Fallback: manual extraction for markdown-wrapped or malformed responses
-    let cleanedJSON = extractAndCleanJSON(text);
-    cleanedJSON = repairJSON(cleanedJSON);
-    parsed = JSON.parse(cleanedJSON);
+    // 2. Trailing/leading junk around an otherwise-valid value is the common
+    //    case and is cheap to recover from.
+    const extracted = extractFirstJSONValue(text);
+    if (extracted) {
+      try {
+        parsed = JSON.parse(extracted);
+      } catch {
+        /* fall through to the repair path below */
+      }
+    }
+
+    // 3. Last resort: markdown-wrapped or structurally malformed responses.
+    if (parsed === undefined) {
+      let cleanedJSON = extractAndCleanJSON(text);
+      cleanedJSON = repairJSON(cleanedJSON);
+      parsed = JSON.parse(cleanedJSON);
+    }
   }
 
   // Handle different response formats
@@ -597,19 +650,32 @@ const generateMealPlanWithGemini = async (
   // requests/day), so when one is exhausted we move to the next — multiplying
   // effective free capacity.
   //
-  // Ordered by plan QUALITY, not by rate limit. Measured over the eval personas
-  // in scripts/meal-plan-eval, gemini-2.5-flash-lite produced dietary violations
-  // for the vegan and gluten-free users and echoed the target calories straight
-  // back (0.0% error against target, i.e. numbers unrelated to the ingredients
-  // it listed). The 3.x models returned zero violations and nutrition actually
-  // derived from the food. A meal plan is the product, so the cheapest model
-  // being fastest is not a reason to serve a worse week.
+  // Ordered by measured quality-per-second on the eval personas, not by size.
+  //
+  // "Lite" is generation-specific, and conflating the two cost a lot of time
+  // here: gemini-2.5-flash-lite genuinely was the problem (dietary violations
+  // for the vegan and gluten-free personas, and calorie figures echoed from the
+  // prompt rather than derived from its own ingredients), but the 3.x lites are
+  // a different class. Measured:
+  //
+  //   gemini-3.1-flash-lite   1 day 2.2s | 6 days  9.3s | 0 violations
+  //   gemini-3.5-flash-lite   1 day 2.4s | 6 days 10.5s | 1 violation
+  //   gemini-3.5-flash                     7 days 60-90s | 0 violations
+  //
+  // The 3.x lites are ~7x faster at the same quality, which matters because
+  // Phase 1 blocks the client. The heavier models stay as fail-over.
+  //
+  // gemini-2.0-flash and gemini-2.0-flash-lite are deliberately absent: they
+  // now report "limit: 0" on the free tier, so every request to them is a
+  // guaranteed 429 that only adds latency before the next candidate.
   const MODEL_PRIORITY = [
-    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
     "gemini-3-flash-preview",
     "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
+    "gemini-3.5-flash",
+    "gemini-2.5-flash-lite", // last resort: weakest, but better than no plan
   ];
   const candidateModels = MODEL_PRIORITY.filter((m) => models.includes(m));
   if (candidateModels.length === 0) {
@@ -715,6 +781,7 @@ const generateMealPlanWithGemini = async (
       constraints,
       targetCalories,
       planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate)),
+      userData.dislikes,
     );
 
     const multiDayPrompt = buildWeeklyPlanPrompt({
@@ -769,6 +836,7 @@ const generateMealPlanWithGemini = async (
             getLocalDateKey(weekStartDate),
             dayData.dateStr,
           ),
+          userData.dislikes,
         );
 
         const singleDayPrompt = buildWeeklyPlanPrompt({
@@ -831,6 +899,7 @@ const generateMealPlanWithGemini = async (
           getLocalDateKey(weekStartDate),
           "repair",
         ),
+        userData.dislikes,
       );
 
       const repairPrompt = buildWeeklyPlanPrompt({
@@ -951,9 +1020,14 @@ let paidTierUnavailable = false;
  * afford 4444") even when the real reply would have cost a fraction of that.
  *
  * A day of four meals with ingredient lists measures at roughly 1.5k tokens.
+ *
+ * The floor is deliberately well above one day's worth: Gemini 3.x models spend
+ * output budget on internal reasoning before emitting anything, so a tight cap
+ * gets consumed by thinking and the reply truncates mid-JSON. A 4.5k budget made
+ * gemini-3-flash-preview and gemini-2.5-flash fail on a single day.
  */
 export const outputTokenBudget = (dayCount: number): number =>
-  Math.min(32768, Math.max(4096, 2500 + Math.max(1, dayCount) * 2000));
+  Math.min(32768, Math.max(8192, 4000 + Math.max(1, dayCount) * 2200));
 
 const generateMealPlanWithOpenRouter = async (
   userData: IUserData,
@@ -1104,6 +1178,7 @@ const generateMealPlanWithOpenRouter = async (
       constraints,
       targetCalories,
       planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate)),
+      userData.dislikes,
     );
 
     const prompt = buildWeeklyPlanPrompt({
@@ -1145,6 +1220,7 @@ const generateMealPlanWithOpenRouter = async (
         constraints,
         targetCalories,
         planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate), "repair"),
+        userData.dislikes,
       );
 
       const repairPrompt = buildWeeklyPlanPrompt({

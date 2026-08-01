@@ -44,16 +44,28 @@ const DAYS = [
     process.exit(1);
   }
 
-  await mongoose.connect(uri);
-  const users = mongoose.connection.collection("users");
+  // Must match app.module.ts exactly: the URI carries no database path, so the
+  // name comes from options. Without it mongoose lands in "test" and every
+  // lookup silently returns nothing.
+  await mongoose.connect(uri, { dbName: "habeat", authSource: "admin" });
+  const conn = mongoose.connection;
+  console.log(`connected to db: ${conn.name} @ ${conn.host}`);
+
+  const users = conn.collection("users");
 
   const query = mongoose.Types.ObjectId.isValid(who)
     ? { _id: new mongoose.Types.ObjectId(who) }
-    : { email: who };
+    : { email: new RegExp(`^${who.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") };
   const user: any = await users.findOne(query);
 
   if (!user) {
-    console.error(`No user matched ${who}`);
+    console.error(`\nNo user matched ${who} in db "${conn.name}".`);
+    const total = await users.countDocuments();
+    console.error(`The users collection holds ${total} document(s).`);
+    if (total > 0) {
+      const sample = await users.find({}, { projection: { email: 1 } }).limit(5).toArray();
+      console.error("Sample emails:", sample.map((u: any) => u.email).join(", "));
+    }
     await mongoose.disconnect();
     process.exit(1);
   }
@@ -81,7 +93,13 @@ const DAYS = [
     );
   }
 
-  const skeleton = buildMenuSkeleton(DAYS, c, 2000, planSeed(String(user._id), "2026-08-03"));
+  const skeleton = buildMenuSkeleton(
+    DAYS,
+    c,
+    2000,
+    planSeed(String(user._id), "2026-08-03"),
+    user.dislikes,
+  );
 
   console.log("\n─── PLANNED SLOTS (first 2 days) ─────────────────────────");
   for (const day of skeleton) {

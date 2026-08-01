@@ -98,6 +98,31 @@ describe("buildMenuSkeleton", () => {
     expect(assigned.filter((p) => animal.includes(p))).toEqual([]);
   });
 
+  it("never assigns a disliked food as a meal's main protein", () => {
+    // Real record: a vegan who dislikes tofu was getting Tofu as their most
+    // frequent protein, because the rotation was only filtered against hard
+    // restrictions and dislikes were left as a soft hint to the model.
+    const week = buildMenuSkeleton(DAYS, vegan, 2000, "seed", ["Tofu", "Onion"]);
+    const proteins = week.flatMap((d) => d.meals.map((m) => m.protein.toLowerCase()));
+    expect(proteins).not.toContain("tofu");
+  });
+
+  it("still produces a plan when dislikes would empty the rotation", () => {
+    // Some plan beats no plan; the constraint block still keeps it safe to eat.
+    const all = ["Tofu", "Lentils", "Chickpeas", "Black beans", "Tempeh", "Edamame", "Seitan"];
+    const week = buildMenuSkeleton(DAYS, vegan, 2000, "seed", all);
+    for (const day of week) {
+      for (const meal of day.meals) expect(meal.protein).toBeTruthy();
+    }
+  });
+
+  it("matches dislikes case-insensitively and as substrings", () => {
+    const week = buildMenuSkeleton(DAYS, none, 2000, "seed", ["chicken", "BEEF"]);
+    const proteins = week.flatMap((d) => d.meals.map((m) => m.protein.toLowerCase()));
+    expect(proteins.filter((p) => p.includes("chicken"))).toEqual([]);
+    expect(proteins.filter((p) => p.includes("beef"))).toEqual([]);
+  });
+
   it("drops archetypes the user's restrictions forbid", () => {
     const week = buildMenuSkeleton(DAYS, glutenFree, 2000, "seed");
     const forms = week.flatMap((d) => d.meals.map((m) => m.archetype)).join(" ");
@@ -166,6 +191,24 @@ describe("buildWeeklyPlanPrompt", () => {
       userData: { ...base.userData, foodPreferences: ["Sirloin Steak", "Bacon"] },
     });
     expect(prompt).not.toContain("ENJOYS");
+  });
+
+  it("does not permit a protein it also tells the model to never include", () => {
+    // The block said "ONLY use these proteins: Tofu, …" two lines above
+    // "NEVER INCLUDE (disliked): Tofu". Contradictions like this are what the
+    // model resolves the wrong way.
+    const skeleton = buildMenuSkeleton(DAYS, vegan, 2000, "seed", ["Tofu"]);
+    const prompt = buildWeeklyPlanPrompt({
+      ...base,
+      constraints: vegan,
+      skeleton,
+      userData: { ...base.userData, dislikes: ["Tofu"] },
+    });
+
+    const onlyLine = prompt.split("\n").find((l) => l.startsWith("ONLY use these proteins:"))!;
+    expect(onlyLine).toBeDefined();
+    expect(onlyLine.toLowerCase()).not.toContain("tofu");
+    expect(prompt).toMatch(/NEVER INCLUDE \(disliked\): Tofu/);
   });
 
   it("lists recent meals as an exclusion set", () => {

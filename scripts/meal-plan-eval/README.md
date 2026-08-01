@@ -54,6 +54,54 @@ Measured on `gemini-2.5-flash-lite`, the model production used to select:
   cuisine and protein were assigned per day and applied to all three slots.
 - **Fabricated nutrition.** `calMAPE` 0.0% across the board.
 
+## Latency: measure the phase users actually wait on
+
+`run-latency.ts [days] [models,...]`
+
+Plan generation is two-phase: **Phase 1 is today only and blocks the client**;
+Phase 2 fills the rest of the week in the background. The first round of this
+work benchmarked 7-day batches throughout — i.e. the part nobody waits for — and
+picked a model that was 7x slower than necessary. Measure 1 day for the
+user-facing number.
+
+| model | 1 day | 6 days | violations |
+| --- | --- | --- | --- |
+| `gemini-3.1-flash-lite` | **2.2s** | **9.3s** | 0 |
+| `gemini-3.5-flash-lite` | 2.4s | 10.5s | 1 |
+| `gemini-3.5-flash` | — | 60–90s | 0 |
+
+"Lite" is generation-specific. `gemini-2.5-flash-lite` genuinely was the source
+of the original dietary violations, but the 3.x lites match the big models on
+quality at a fraction of the latency. Do not generalise across generations.
+
+**Gemini 3.x models spend output budget on internal reasoning before emitting
+anything.** A tight `maxOutputTokens` gets eaten by thinking and the reply
+truncates mid-JSON — a 4.5k budget made `gemini-3-flash-preview` and
+`gemini-2.5-flash` fail on a *single day*. Hence the 8k floor in
+`outputTokenBudget()`.
+
+## Free-tier quota
+
+20 requests/day **per model**, resetting at midnight US/Pacific. Probe live
+state before concluding anything is broken:
+
+```bash
+for m in gemini-3.1-flash-lite gemini-3.5-flash-lite gemini-2.5-flash; do
+  printf "%-26s " "$m"
+  curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent" \
+    -H "Content-Type: application/json" -H "x-goog-api-key: $GEMINI_API_KEY" \
+    -d '{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":5}}' \
+    | grep -o '"status": *"[^"]*"' || echo OK
+done
+```
+
+`gemini-2.0-flash` and `gemini-2.0-flash-lite` report **`limit: 0`** — no free
+quota at all. They were in the fail-over list and could never have served a
+request. Removed.
+
+A full eval sweep is 4 requests per model per run and will exhaust a model in a
+few passes. Spread sweeps across models and check quota first.
+
 ## What changed
 
 See `src/generator/meal-plan-prompt.ts`. Code now fixes each meal's form,

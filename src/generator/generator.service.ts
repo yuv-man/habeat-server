@@ -43,6 +43,10 @@ import {
 } from "../utils/helpers";
 import mongoose from "mongoose";
 import { Meal } from "../meal/meal.model";
+import {
+  resolveDietaryConstraints,
+  findMealViolations,
+} from "../utils/dietary-constraints";
 import {} from "./helper"; // helper imports kept for future use
 
 @Injectable()
@@ -155,8 +159,26 @@ export class GeneratorService {
       return { meal, score };
     });
 
+    // Hard dietary constraints, applied after scoring.
+    //
+    // The query above only excluded allergens, so a vegan's candidate list was
+    // full of meat — and the preference boost above actively promoted it, since
+    // a stored "Sirloin steak" preference scores +10 against a steak dish. Any
+    // meal reaching a plan has to survive the same check as generated output.
+    const constraints = resolveDietaryConstraints(userData);
+    const compliant = scoredMeals.filter(({ meal }) => {
+      const matched = findMealViolations(meal, constraints);
+      if (matched.length > 0) {
+        logger.warn(
+          `[findMatchingMeals] Excluding library meal "${meal.name}" — violates ${matched.join(", ")}`
+        );
+        return false;
+      }
+      return true;
+    });
+
     // Sort by score and return top matches
-    return scoredMeals
+    return compliant
       .filter((item) => item.score >= 0) // Only return meals without heavy penalties
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
@@ -637,12 +659,25 @@ export class GeneratorService {
       };
     };
 
-    const processMealWithReuse = (
+    /**
+     * Turn one generated meal into its stored form.
+     *
+     * This used to prefer a meal from the shared `meals` collection whenever one
+     * matched the slot and calorie band, and only fell back to the generated
+     * meal if the collection had nothing. That silently discarded the entire
+     * generation: a vegan user was served "Sirloin Steak And Broccoli Scramble"
+     * — a row created weeks earlier, ranked to the top because `findMatchingMeals`
+     * scores +10 for a `foodPreferences` hit and never filtered on
+     * `dietaryRestrictions`. It also made every plan identical, because the
+     * candidate list is sorted deterministically from a fixed pool.
+     *
+     * The generated meal is the product, so it now always wins. The library is
+     * consulted only when generation produced nothing for the slot.
+     */
+    const processMeal = (
       meal: IMeal | undefined,
       category: "breakfast" | "lunch" | "dinner" | "snack"
     ): IMeal | null => {
-      if (!meal) return null;
-
       let targetCal: number;
       let targetMacros: { protein: number; carbs: number; fat: number };
       let availableMatches: IMeal[];
@@ -654,22 +689,31 @@ export class GeneratorService {
         case "snack":     targetCal = snackTarget;    targetMacros = snackMacros;    availableMatches = snackMatches;    break;
       }
 
-      if (availableMatches.length > 0) {
-        let attempts = 0;
-        while (attempts < availableMatches.length && mealIndices[category] < availableMatches.length) {
-          const candidate = availableMatches[mealIndices[category]++];
-          if (!usedMealIds.has(candidate._id)) {
-            usedMealIds.add(candidate._id);
-            return { ...candidate, _id: candidate._id };
-          }
-          attempts++;
+      if (meal?.name) {
+        const validated = validateAndCorrectMealMacros(meal as any, targetCal, targetMacros);
+        const converted = convertMeal(validated as IMeal);
+        if (converted) {
+          usedMealIds.add(converted._id);
+          return converted;
         }
       }
 
-      const validated = validateAndCorrectMealMacros(meal as any, targetCal, targetMacros);
-      const converted = convertMeal(validated as IMeal);
-      if (converted) usedMealIds.add(converted._id);
-      return converted;
+      // Nothing generated for this slot — fall back to the library rather than
+      // leaving a hole in the day.
+      let attempts = 0;
+      while (attempts < availableMatches.length && mealIndices[category] < availableMatches.length) {
+        const candidate = availableMatches[mealIndices[category]++];
+        if (!usedMealIds.has(candidate._id)) {
+          usedMealIds.add(candidate._id);
+          logger.warn(
+            `[processAIPlanDays] No generated ${category}; falling back to library meal "${candidate.name}".`
+          );
+          return { ...candidate, _id: candidate._id };
+        }
+        attempts++;
+      }
+
+      return null;
     };
 
     // ── process each day ─────────────────────────────────────────────────────
@@ -688,10 +732,10 @@ export class GeneratorService {
         time: w.time,
       }));
 
-      const breakfast      = processMealWithReuse(day.meals?.breakfast, "breakfast");
-      const lunch          = processMealWithReuse(day.meals?.lunch,     "lunch");
-      const dinner         = processMealWithReuse(day.meals?.dinner,    "dinner");
-      const processedSnacks = (day.meals?.snacks || []).map((s) => processMealWithReuse(s, "snack"));
+      const breakfast      = processMeal(day.meals?.breakfast, "breakfast");
+      const lunch          = processMeal(day.meals?.lunch,     "lunch");
+      const dinner         = processMeal(day.meals?.dinner,    "dinner");
+      const processedSnacks = (day.meals?.snacks || []).map((s) => processMeal(s, "snack"));
 
       const dayPlan = {
         day:   day.day,

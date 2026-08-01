@@ -186,7 +186,7 @@ export const scorePlan = (
 export const callGemini = async (
   modelName: string,
   prompt: string,
-  opts: { temperature?: number; systemInstruction?: string; thinkingBudget?: number } = {},
+  opts: { temperature?: number; systemInstruction?: string; maxOutputTokens?: number } = {},
 ): Promise<{ text: string; ms: number }> => {
   const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
   const model = genAI.getGenerativeModel({
@@ -200,28 +200,16 @@ export const callGemini = async (
       responseMimeType: "application/json",
       // Mirrors generate.service.ts — a full week overruns the default cap and
       // truncates mid-array.
-      maxOutputTokens: 32768,
+      maxOutputTokens: opts.maxOutputTokens ?? 32768,
       ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
     } as any,
   });
   return { text: result.response.text(), ms: Date.now() - t0 };
 };
 
-export const parseDays = (text: string): any[] => {
-  let parsed: any;
-  try {
-    parsed = JSON.parse(text.trim());
-  } catch {
-    const m = text.match(/\[[\s\S]*\]|\{[\s\S]*\}/);
-    if (!m) throw new Error("no JSON found");
-    parsed = JSON.parse(m[0]);
-  }
-  if (Array.isArray(parsed)) return parsed;
-  if (Array.isArray(parsed.weeklyPlan)) return parsed.weeklyPlan;
-  if (Array.isArray(parsed.days)) return parsed.days;
-  if (parsed.date && parsed.meals) return [parsed];
-  throw new Error("unexpected shape: " + Object.keys(parsed).join(","));
-};
+// Use the production parser so the eval exercises the same recovery paths the
+// server does, rather than a more forgiving copy that hides real failures.
+export { parseMultiDayResponse as parseDays } from "../../src/generator/generate.service";
 
 export const fmtScore = (s: Score): string =>
   [

@@ -138,17 +138,52 @@ const PLANT_SNACK_FALLBACK = ["Hummus", "Edamame", "Pumpkin seeds", "Chickpeas",
  * Slot-appropriate protein rotation. Lunch and dinner use the user's normal
  * rotation; breakfast and snacks use their own pool so the slot stays plausible.
  */
-const proteinsForSlot = (slot: MealSlot, c: DietaryConstraints): string[] => {
-  if (slot === "lunch" || slot === "dinner") return c.proteinRotation;
+const proteinsForSlot = (
+  slot: MealSlot,
+  c: DietaryConstraints,
+  dislikes: string[] = [],
+): string[] => {
+  const base =
+    slot === "lunch" || slot === "dinner"
+      ? c.proteinRotation
+      : (() => {
+          const pool = slot === "breakfast" ? BREAKFAST_PROTEIN_POOL : SNACK_PROTEIN_POOL;
+          const fallback = slot === "breakfast" ? PLANT_BREAKFAST_FALLBACK : PLANT_SNACK_FALLBACK;
 
-  const pool = slot === "breakfast" ? BREAKFAST_PROTEIN_POOL : SNACK_PROTEIN_POOL;
-  const fallback = slot === "breakfast" ? PLANT_BREAKFAST_FALLBACK : PLANT_SNACK_FALLBACK;
+          const safe = pool.filter((p) => findMealViolations({ name: p }, c).length === 0);
+          if (safe.length >= 3) return safe;
 
-  const safe = pool.filter((p) => findMealViolations({ name: p }, c).length === 0);
-  if (safe.length >= 3) return safe;
+          const safeFallback = fallback.filter(
+            (p) => findMealViolations({ name: p }, c).length === 0,
+          );
+          return safeFallback.length ? safeFallback : c.proteinRotation;
+        })();
 
-  const safeFallback = fallback.filter((p) => findMealViolations({ name: p }, c).length === 0);
-  return safeFallback.length ? safeFallback : c.proteinRotation;
+  return withoutDislikedProteins(base, dislikes);
+};
+
+/**
+ * Remove disliked foods from a protein rotation.
+ *
+ * Dislikes are soft — a trace of onion in a sauce is not worth rejecting a meal
+ * over — so they deliberately stay out of `forbiddenKeywords`. But making a
+ * disliked food the *main protein* of a meal is a different matter: a vegan who
+ * dislikes tofu was getting tofu as their most frequent protein, because the
+ * rotation was only ever filtered against hard restrictions.
+ *
+ * Falls back to the unfiltered list if dislikes would empty it — some plan beats
+ * no plan, and the constraint block still guarantees it is safe to eat.
+ */
+const withoutDislikedProteins = (proteins: string[], dislikes: string[]): string[] => {
+  const disliked = dislikes.map((d) => d.trim().toLowerCase()).filter(Boolean);
+  if (disliked.length === 0) return proteins;
+
+  const kept = proteins.filter((p) => {
+    const name = p.toLowerCase();
+    return !disliked.some((d) => name === d || name.includes(d) || d.includes(name));
+  });
+
+  return kept.length >= 2 ? kept : proteins;
 };
 
 /**
@@ -262,6 +297,8 @@ export const buildMenuSkeleton = (
   constraints: DietaryConstraints,
   targetCalories: number,
   seed: string,
+  /** Soft preferences: kept out of the protein assignment, not banned outright. */
+  dislikes: string[] = [],
 ): PlannedDay[] => {
   const random = rng(hashSeed(seed));
 
@@ -273,10 +310,10 @@ export const buildMenuSkeleton = (
     snack: makeCycler(usableArchetypes("snack", constraints), random),
   };
   const proteinCyclers: Record<MealSlot, () => string> = {
-    breakfast: makeCycler(proteinsForSlot("breakfast", constraints), random),
-    lunch: makeCycler(proteinsForSlot("lunch", constraints), random),
-    dinner: makeCycler(proteinsForSlot("dinner", constraints), random),
-    snack: makeCycler(proteinsForSlot("snack", constraints), random),
+    breakfast: makeCycler(proteinsForSlot("breakfast", constraints, dislikes), random),
+    lunch: makeCycler(proteinsForSlot("lunch", constraints, dislikes), random),
+    dinner: makeCycler(proteinsForSlot("dinner", constraints, dislikes), random),
+    snack: makeCycler(proteinsForSlot("snack", constraints, dislikes), random),
   };
   const flavourCycler = makeCycler(FLAVOUR_PROFILES, random);
 
@@ -375,8 +412,8 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
     recentMeals = [], styleNote, moodContext, repairNote, maxPrepMinutes = 45,
   } = input;
 
-  const constraintBlock = buildDietaryConstraintBlock(constraints);
   const dislikes = (userData.dislikes || []).filter(Boolean);
+  const constraintBlock = buildDietaryConstraintBlock(constraints, dislikes);
 
   // Preferences MUST be filtered against the hard constraints before they reach
   // the prompt. A vegan whose stored preferences still contain "Sirloin Steak"

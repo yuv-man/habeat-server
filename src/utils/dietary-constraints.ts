@@ -374,7 +374,16 @@ export const resolveDietaryConstraints = (user: {
  * The hard-constraint block for a prompt. Deliberately placed FIRST and phrased
  * as non-negotiable — restrictions must never read as one preference among many.
  */
-export const buildDietaryConstraintBlock = (c: DietaryConstraints): string => {
+export const buildDietaryConstraintBlock = (
+  c: DietaryConstraints,
+  /**
+   * Proteins to leave out of the "ONLY use these" line — normally the user's
+   * dislikes. Without this the block can permit a protein in the same prompt
+   * that tells the model never to include it, and a contradiction is exactly
+   * what sends the model down the wrong path.
+   */
+  excludeProteins: string[] = [],
+): string => {
   if (!c.hasConstraints) return "";
 
   const lines: string[] = [
@@ -401,7 +410,19 @@ export const buildDietaryConstraintBlock = (c: DietaryConstraints): string => {
   lines.push(
     `FORBIDDEN INGREDIENTS (must not appear in any meal name or ingredient list): ${c.forbiddenKeywords.join(", ")}`,
   );
-  lines.push(`ONLY use these proteins: ${c.proteinRotation.join(", ")}`);
+  const excluded = excludeProteins.map((p) => p.trim().toLowerCase()).filter(Boolean);
+  const listedProteins = excluded.length
+    ? c.proteinRotation.filter((p) => {
+        const name = p.toLowerCase();
+        return !excluded.some((e) => name === e || name.includes(e) || e.includes(name));
+      })
+    : c.proteinRotation;
+
+  // Keep the full rotation if dislikes would empty the line — an empty "ONLY
+  // use these proteins:" is worse than one listing something they dislike.
+  lines.push(
+    `ONLY use these proteins: ${(listedProteins.length ? listedProteins : c.proteinRotation).join(", ")}`,
+  );
   lines.push("Before returning, re-read every meal and confirm it breaks none of the above.");
   lines.push("═══════════════════════════════════════════════════════════");
 
