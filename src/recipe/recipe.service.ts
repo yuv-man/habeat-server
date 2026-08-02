@@ -1,18 +1,52 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
-import { Model } from "mongoose";
+import mongoose, { Model } from "mongoose";
 import { Recipe } from "./recipe.model";
 import { IMeal, IRecipe, IUserData } from "../types/interfaces";
 import logger from "../utils/logger";
 import aiService from "src/generator/generate.service";
 import { Meal } from "src/meal/meal.model";
 import { User } from "src/user/user.model";
+import { Plan } from "src/plan/plan.model";
+import { IPlan } from "../types/interfaces";
 
 @Injectable()
 export class RecipeService {
   constructor(@InjectModel(Recipe.name) private recipeModel: Model<IRecipe>) {}
   @InjectModel(Meal.name) private mealModel: Model<IMeal>;
   @InjectModel(User.name) private userModel: Model<IUserData>;
+  @InjectModel(Plan.name) private planModel: Model<IPlan>;
+
+  /**
+   * Find a meal by id inside the user's current plan.
+   *
+   * Plan meals are generated per user and only some of them correspond to a row
+   * in the shared `meals` collection — a freshly generated meal is embedded in
+   * the plan document with an id of its own. Looking only in `meals` therefore
+   * 404s for exactly the meals the user is most likely to open.
+   */
+  private async findMealInPlan(mealId: string, userId: string): Promise<IMeal | null> {
+    const plan = await this.planModel
+      .findOne({ userId })
+      .select("weeklyPlan")
+      .lean()
+      .exec();
+
+    const weekly = (plan?.weeklyPlan ?? {}) as Record<string, any>;
+    for (const day of Object.values(weekly)) {
+      const meals = day?.meals ?? day ?? {};
+      const candidates = [
+        meals.breakfast,
+        meals.lunch,
+        meals.dinner,
+        ...(Array.isArray(meals.snacks) ? meals.snacks : []),
+      ];
+      for (const meal of candidates) {
+        if (meal && String(meal._id) === String(mealId)) return meal as IMeal;
+      }
+    }
+    return null;
+  }
   async findAll(filters?: {
     category?: string;
     language?: string;
@@ -74,7 +108,12 @@ export class RecipeService {
         }
       );
     } else {
-      const meal = await this.mealModel.findById(mealId).lean().exec();
+      // Library meals resolve here; generated ones only exist inside the plan.
+      const libraryMeal = mongoose.Types.ObjectId.isValid(mealId)
+        ? await this.mealModel.findById(mealId).lean().exec()
+        : null;
+      const meal = libraryMeal ?? (await this.findMealInPlan(mealId, userId));
+
       if (!meal) {
         throw new NotFoundException("Meal not found");
       }

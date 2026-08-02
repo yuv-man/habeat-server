@@ -47,6 +47,7 @@ import {
   resolveDietaryConstraints,
   findMealViolations,
 } from "../utils/dietary-constraints";
+import { ensureMealPersisted } from "../utils/meal-persistence";
 import {} from "./helper"; // helper imports kept for future use
 
 @Injectable()
@@ -732,10 +733,21 @@ export class GeneratorService {
         time: w.time,
       }));
 
-      const breakfast      = processMeal(day.meals?.breakfast, "breakfast");
-      const lunch          = processMeal(day.meals?.lunch,     "lunch");
-      const dinner         = processMeal(day.meals?.dinner,    "dinner");
-      const processedSnacks = (day.meals?.snacks || []).map((s) => processMeal(s, "snack"));
+      // Give every meal a row in `meals` so its id resolves elsewhere —
+      // favourites and recipe lookup both dereference meal ids against that
+      // collection, and a plan-only meal is invisible to them. Deduplicated on
+      // content, and done in parallel per day to keep the write cost off the
+      // critical path.
+      const [breakfast, lunch, dinner, ...processedSnacks] = await Promise.all(
+        [
+          processMeal(day.meals?.breakfast, "breakfast"),
+          processMeal(day.meals?.lunch, "lunch"),
+          processMeal(day.meals?.dinner, "dinner"),
+          ...(day.meals?.snacks || []).map((s) => processMeal(s, "snack")),
+        ].map(async (meal) =>
+          meal ? await ensureMealPersisted(this.mealModel, meal) : null,
+        ),
+      );
 
       const dayPlan = {
         day:   day.day,

@@ -5,6 +5,7 @@ import { RecipeService } from "./recipe.service";
 import { Recipe, RecipeSchema } from "./recipe.model";
 import { User, UserSchema } from "../user/user.model";
 import { Meal, MealSchema } from "../meal/meal.model";
+import { Plan, PlanSchema } from "../plan/plan.model";
 import { UserModule } from "src/user/user.module";
 
 @Module({
@@ -13,7 +14,9 @@ import { UserModule } from "src/user/user.module";
       { name: Recipe.name, schema: RecipeSchema },
       { name: User.name, schema: UserSchema },
       { name: Meal.name, schema: MealSchema },
-      { name: User.name, schema: UserSchema },
+      // Generated meals live inside the plan document and have no row in the
+      // `meals` collection, so recipe lookup needs the plan too.
+      { name: Plan.name, schema: PlanSchema },
     ]),
   ],
   controllers: [RecipeController],
