@@ -193,6 +193,8 @@ export interface ISensoryProfile {
 export interface IMeal {
   _id: string;
   name: string;
+  /** Plain English reference name for the same dish, used by the client to match meal images when `name` is localized (e.g. Hebrew). Falls back to `name` when the plan was generated in English. */
+  nameEn?: string;
   ingredients: [string, string, string?][]; // Array of tuples: [name, amount, category?] - category is optional for backward compatibility
   calories: number;
   macros: {
@@ -243,6 +245,8 @@ export interface IDayPlanWithMetadata extends IDayPlan {
 // AI response interfaces
 export interface IAIMealData {
   name: string;
+  /** Plain English reference name for the same dish (see IMeal.nameEn). */
+  nameEn?: string;
   category: "breakfast" | "lunch" | "dinner" | "snack";
   tags?: string[];
   calories: number;
@@ -378,6 +382,8 @@ export interface IPlan extends Document {
 export interface IRecipe extends Document {
   mealId: string; // Reference to the meal this recipe is for
   mealName: string; // Reference to the meal this recipe is for
+  /** Plain English reference name for the same dish, used by the client to match meal images when `mealName` is localized (e.g. Hebrew). Falls back to `mealName` when generated in English. */
+  mealNameEn?: string;
   description?: string;
   category: "breakfast" | "lunch" | "dinner" | "snack";
   servings: number;

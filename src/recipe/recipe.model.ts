@@ -11,6 +11,11 @@ const recipeSchema = new Schema<IRecipe>(
       required: true,
       index: true,
     },
+    // Plain English reference name for the same dish (client-side image matching
+    // when `mealName` is localized, e.g. Hebrew). Optional — omitted for English recipes.
+    mealNameEn: {
+      type: String,
+    },
     mealId: {
       type: String,
       required: true,

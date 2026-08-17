@@ -131,6 +131,7 @@ export class RecipeService {
       recipe = await this.recipeModel.create({
         mealId: mealId,
         mealName: meal.name,
+        mealNameEn: meal.nameEn || meal.name,
         category: meal.category,
         servings: 1,
         prepTime: recipeDetails.prepTime,

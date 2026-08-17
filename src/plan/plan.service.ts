@@ -529,6 +529,7 @@ export class PlanService {
       return {
         _id: existingMeal._id,
         name: existingMeal.name,
+        nameEn: existingMeal.nameEn || mealData.nameEn || existingMeal.name,
         calories: existingMeal.calories,
         macros: existingMeal.macros,
         category: existingMeal.category,
@@ -543,6 +544,7 @@ export class PlanService {
     // Create new meal
     const newMeal = await this.mealModel.create({
       name: mealData.name,
+      nameEn: mealData.nameEn || mealData.name,
       calories: mealData.calories || 0,
       macros: mealData.macros || { protein: 0, carbs: 0, fat: 0 },
       category: mealData.category || "dinner",
@@ -558,6 +560,7 @@ export class PlanService {
     return {
       _id: newMeal._id,
       name: newMeal.name,
+      nameEn: newMeal.nameEn || newMeal.name,
       calories: newMeal.calories,
       macros: newMeal.macros,
       category: newMeal.category,

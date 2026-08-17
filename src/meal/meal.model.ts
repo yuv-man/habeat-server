@@ -8,6 +8,9 @@ const mealSchema = new Schema(
   {
     // Core meal data
     name: String,
+    // Plain English reference name for the same dish (client-side image matching
+    // when `name` is localized, e.g. Hebrew). Optional — omitted for English plans.
+    nameEn: String,
     category: {
       type: String,
       enum: ["breakfast", "lunch", "dinner", "snack"],

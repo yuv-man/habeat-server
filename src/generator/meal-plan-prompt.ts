@@ -387,6 +387,8 @@ export interface WeeklyPromptInput {
   repairNote?: string;
   /** Cooking-time ceiling in minutes. */
   maxPrepMinutes?: number;
+  /** BCP-47/ISO language code for the response text. Defaults to English. */
+  language?: string;
 }
 
 const renderDay = (day: PlannedDay): string => {
@@ -410,7 +412,9 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   const {
     userData, skeleton, constraints, targetCalories, macros,
     recentMeals = [], styleNote, moodContext, repairNote, maxPrepMinutes = 45,
+    language = "en",
   } = input;
+  const needsEnglishName = language.toLowerCase() !== "en";
 
   const dislikes = (userData.dislikes || []).filter(Boolean);
   const constraintBlock = buildDietaryConstraintBlock(constraints, dislikes);
@@ -438,6 +442,7 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   sections.push(
     [
       `PERSON: ${userData.age ?? "?"}y ${userData.gender ?? "?"}, ${userData.height ?? "?"}cm, ${userData.weight ?? "?"}kg, goal: ${userData.path ?? "maintain"}`,
+      `LANGUAGE: Respond in ${language} — dish names and ingredient names must be written in ${language}.`,
       `DAILY TARGET: ${targetCalories} kcal — protein ${macros.protein}g, carbs ${macros.carbs}g, fat ${macros.fat}g`,
       `MAX PREP TIME: ${maxPrepMinutes} minutes per meal`,
       dislikes.length ? `NEVER INCLUDE (disliked): ${dislikes.join(", ")}` : null,
@@ -478,8 +483,8 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
     `RETURN a JSON array with one object per day, in the order listed above:
 [{"date":"YYYY-MM-DD","day":"monday","meals":{"breakfast":MEAL,"lunch":MEAL,"dinner":MEAL,"snacks":[MEAL]},"workouts":[]}]
 
-MEAL = {"name":string,"calories":number,"macros":{"protein":number,"carbs":number,"fat":number},"ingredients":[string],"prepTime":number}
-
+MEAL = {"name":string,"calories":number,"macros":{"protein":number,"carbs":number,"fat":number},"ingredients":[string],"prepTime":number${needsEnglishName ? `,"nameEn":string` : ""}}
+${needsEnglishName ? `\nEvery MEAL must also include "nameEn": the plain English name of the same dish (e.g. "name":"עוף בגריל עם ברוקולי" → "nameEn":"Grilled Chicken with Broccoli"). It is used only to look up a photo — it is never shown to the user.\n` : ""}
 On training days include exactly one workout: {"name":string,"category":string,"duration":number,"caloriesBurned":number}. On rest days "workouts" is [].`,
   );
 

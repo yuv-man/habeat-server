@@ -79,6 +79,7 @@ export const ensureMealPersisted = async (
 
     const created = await mealModel.create({
       name: meal.name,
+      nameEn: meal.nameEn || meal.name,
       category: meal.category,
       calories: meal.calories || 0,
       macros: meal.macros || { protein: 0, carbs: 0, fat: 0 },

@@ -72,6 +72,7 @@ export class MealService {
       const newRecipe = await this.recipeModel.create({
         mealId: mealId,
         mealName: meal.name,
+        mealNameEn: meal.nameEn || meal.name,
         category: generatedRecipe.category || "dinner",
         servings: 1,
         prepTime: generatedRecipe.prepTime || 30,

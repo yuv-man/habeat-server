@@ -647,6 +647,7 @@ export class GeneratorService {
       }
       return {
         name: meal.name || "Meal",
+        nameEn: meal.nameEn || meal.name,
         category: (meal.category || "breakfast") as "breakfast" | "lunch" | "dinner" | "snack",
         calories: typeof meal.calories === "number" ? meal.calories : 0,
         macros: {

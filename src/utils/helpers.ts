@@ -1178,6 +1178,7 @@ export const cleanMealData = (meal: IAIMealData | undefined): IMeal => {
   return {
     _id: meal._id?.toString() || new mongoose.Types.ObjectId().toString(),
     name: meal.name || "Meal",
+    nameEn: meal.nameEn || meal.name,
     category: (meal.category || "breakfast") as any,
     calories: typeof meal.calories === "number" ? meal.calories : 0,
     macros: {

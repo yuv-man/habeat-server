@@ -793,6 +793,7 @@ const generateMealPlanWithGemini = async (
       recentMeals,
       styleNote: goalContextStr,
       moodContext,
+      language,
     });
 
     // generateMultiDayPlan rotates across candidateModels and throws
@@ -848,6 +849,7 @@ const generateMealPlanWithGemini = async (
           recentMeals,
           styleNote: goalContextStr,
           moodContext,
+          language,
         });
 
         const result = await generateSingleDayPlan(
@@ -912,6 +914,7 @@ const generateMealPlanWithGemini = async (
         styleNote: goalContextStr,
         moodContext,
         repairNote,
+        language,
       });
 
       try {
@@ -1183,7 +1186,7 @@ const generateMealPlanWithOpenRouter = async (
 
     const prompt = buildWeeklyPlanPrompt({
       userData, skeleton, constraints, targetCalories, macros,
-      recentMeals, styleNote: goalContextStr, moodContext,
+      recentMeals, styleNote: goalContextStr, moodContext, language,
     });
 
     const batchResults = await runOpenRouterPrompt(
@@ -1225,7 +1228,7 @@ const generateMealPlanWithOpenRouter = async (
 
       const repairPrompt = buildWeeklyPlanPrompt({
         userData, skeleton: repairSkeleton, constraints, targetCalories, macros,
-        recentMeals, styleNote: goalContextStr, moodContext, repairNote,
+        recentMeals, styleNote: goalContextStr, moodContext, repairNote, language,
       });
 
       const repaired = await runOpenRouterPrompt(
@@ -1830,6 +1833,8 @@ const generateMealSuggestions = async (
 If "${requestedMeal}" is not a typical ${mealCriteria.category} food (e.g. steak for breakfast), keep its flavor/protein profile but reshape it into a ${mealCriteria.category}-appropriate dish (a "sirloin steak" breakfast variation becomes a high-protein breakfast bowl with beef, not a steak dish) — do not force the literal dinner dish into the wrong slot.`
       : `Generate exactly ${numberOfSuggestions} unique ${mealCriteria.category} meal suggestions.`;
 
+  const needsEnglishName = language.toLowerCase() !== "en";
+
   const prompt = `You are a professional nutritionist. ${focusBlock}
 
 ${suggestionKnowledge ? `${suggestionKnowledge}\n\n` : ""}CATEGORY: ${mealCriteria.category.toUpperCase()} — every suggestion must fit this slot; it overrides food preferences.
@@ -1857,7 +1862,7 @@ Return a JSON object with a "meals" array containing exactly ${numberOfSuggestio
       "macros": {"protein": 30, "carbs": 50, "fat": 15},
       "category": "${mealCriteria.category}",
       "ingredients": [["ingredient_name_with_underscores", "100 g"]],
-      "prepTime": 20
+      "prepTime": 20${needsEnglishName ? `,\n      "nameEn": "Plain English name of the same dish"` : ""}
     }
   ]
 }
@@ -1869,7 +1874,7 @@ Return a JSON object with a "meals" array containing exactly ${numberOfSuggestio
 4. "category" - must be "${mealCriteria.category}"
 5. "ingredients" - [name, amount] tuples
 ${INGREDIENT_NAMING_RULES}
-6. "prepTime" - preparation time in minutes (integer)`;
+6. "prepTime" - preparation time in minutes (integer)${needsEnglishName ? `\n7. "nameEn" - REQUIRED: the plain English name of the same dish (e.g. "name":"סלט יווני" → "nameEn":"Greek Salad"). Used only to look up a photo, never shown to the user.` : ""}`;
 
   const parseResponse = (jsonText: string): IMeal[] => {
     const parsed = JSON.parse(jsonText);
@@ -1880,6 +1885,7 @@ ${INGREDIENT_NAMING_RULES}
       .map((meal: any) => ({
         _id: new mongoose.Types.ObjectId().toString(),
         name: normalizeMealName(meal.name),
+        nameEn: normalizeMealName(meal.nameEn || meal.name),
         calories: Math.round(meal.calories || targetCalories),
         macros: {
           protein: Math.round(meal.macros?.protein || 0),
@@ -1982,6 +1988,8 @@ const generateRescueMeal = async (
     );
   }
 
+  const needsEnglishName = language.toLowerCase() !== "en";
+
   const prompt = `You are a professional nutritionist. Generate ONE quick "rescue meal" for someone who is tired and has no time to cook.
 
 ## CRITICAL REQUIREMENTS:
@@ -2010,13 +2018,13 @@ ${mealCriteria.dislikes?.length ? `- Dislikes (avoid if possible): ${mealCriteri
   "macros": {"protein": ${defaultMacros.protein}, "carbs": ${defaultMacros.carbs}, "fat": ${defaultMacros.fat}},
   "category": "${category}",
   "ingredients": [["ingredient_name", "100 g"]],
-  "prepTime": 10
+  "prepTime": 10${needsEnglishName ? `,\n  "nameEn": "Plain English name of the same dish"` : ""}
 }
 
 ## Rules:
 1. "name" - appetizing Title Case meal name using spaces (e.g., "Greek Yogurt Power Bowl")
 2. "prepTime" - MUST be 10 or less (this is critical!)
-${INGREDIENT_NAMING_RULES}`;
+${INGREDIENT_NAMING_RULES}${needsEnglishName ? `\n3. "nameEn" - REQUIRED: the plain English name of the same dish. Used only to look up a photo, never shown to the user.` : ""}`;
 
   const parseResponse = (jsonText: string) => {
     const mealData = JSON.parse(jsonText);
@@ -2027,6 +2035,7 @@ ${INGREDIENT_NAMING_RULES}`;
     return {
       _id: new mongoose.Types.ObjectId().toString(),
       name: normalizeMealName(mealData.name),
+      nameEn: normalizeMealName(mealData.nameEn || mealData.name),
       calories: Math.round(mealData.calories || targetCalories),
       macros: {
         protein: Math.round(mealData.macros?.protein || defaultMacros.protein),
