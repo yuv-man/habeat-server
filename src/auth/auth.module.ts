@@ -18,12 +18,24 @@ import { PlanModule } from "../plan/plan.module";
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        secret:
-          configService.get<string>("JWT_SECRET") ||
-          "default-secret-key-change-in-production",
-        signOptions: { expiresIn: "30d" },
-      }),
+      useFactory: async (configService: ConfigService) => {
+        const secret = configService.get<string>("JWT_SECRET");
+        // Same fail-closed rule as jwt.strategy.ts: no secret, no boot. This
+        // JwtService both signs new tokens and backs AuthGuard's verify, so a
+        // fallback here is a forge-any-user hole on both sides.
+        if (!secret) {
+          throw new Error(
+            "JWT_SECRET is not configured. Refusing to start without a signing secret."
+          );
+        }
+        return {
+          secret,
+          // Kept at the current 30d default so this change doesn't log anyone
+          // out — but now tunable, so shortening it (M3, ideally with a refresh
+          // flow) is a one-env change rather than a redeploy.
+          signOptions: { expiresIn: process.env.JWT_EXPIRES_IN || "30d" },
+        };
+      },
       inject: [ConfigService],
     }),
     MongooseModule.forFeature([

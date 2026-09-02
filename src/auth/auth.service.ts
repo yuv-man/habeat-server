@@ -23,6 +23,7 @@ import { JwtService } from "@nestjs/jwt";
 import { PlanService } from "../plan/plan.service";
 import { isMongoObjectIdString } from "../utils/mongoObjectId";
 import { applyAdminPrivileges } from "./admin-privileges";
+import { AnalyticsService } from "../analytics/analytics.service";
 
 @Injectable()
 export class AuthService {
@@ -31,7 +32,8 @@ export class AuthService {
     @InjectModel(Plan.name) private planModel: Model<IPlan>,
     private jwtService: JwtService,
     private planService: PlanService,
-    private configService: ConfigService
+    private configService: ConfigService,
+    private analyticsService: AnalyticsService
   ) {}
 
   private async withAdminPrivileges<T extends { user: IUserData }>(
@@ -92,7 +94,18 @@ export class AuthService {
     const authPayload = await this.withAdminPrivileges({
       user: user as IUserData,
       plan: initialPlan,
-      token: generateToken((user as any)._id.toString()),
+      token: generateToken((user as any)._id.toString(), (user as any).tokenVersion ?? 0),
+    });
+
+    this.analyticsService.identify((user as any)._id.toString(), {
+      email: data.email,
+      name: data.userData.name,
+      path: data.userData.path,
+      signupMethod: "email",
+    });
+    this.analyticsService.capture((user as any)._id.toString(), "user_signed_up", {
+      signupMethod: "email",
+      path: data.userData.path,
     });
 
     return {
@@ -111,7 +124,7 @@ export class AuthService {
     ) {
       const authPayload = await this.withAdminPrivileges({
         user: user as IUserData,
-        token: generateToken((user as any)._id.toString()),
+        token: generateToken((user as any)._id.toString(), (user as any).tokenVersion ?? 0),
       });
 
       return {
@@ -123,7 +136,16 @@ export class AuthService {
     }
   }
 
-  async logout() {
+  async logout(userId: string) {
+    // A logout that leaves the token valid isn't a logout. Bumping the version
+    // invalidates every token this user holds — the app discards its copy, and
+    // any other device (or a thief who lifted the token) is locked out on its
+    // next request. For the typical single-device mobile user this is
+    // invisible; for multi-device it is "log out everywhere", the safe default.
+    await this.userModel.updateOne(
+      { _id: userId },
+      { $inc: { tokenVersion: 1 } }
+    );
     return {
       status: "success",
       message: "Logged out successfully",
@@ -191,7 +213,7 @@ export class AuthService {
         const data = await this.withAdminPrivileges({
           user: existingUser as IUserData,
           plan: null,
-          token: generateToken(existingUser._id.toString()),
+          token: generateToken(existingUser._id.toString(), (existingUser as any).tokenVersion ?? 0),
           isNewUser: true,
         });
         return {
@@ -262,7 +284,7 @@ export class AuthService {
     const data = await this.withAdminPrivileges({
       user: user as IUserData,
       plan: initialPlan,
-      token: generateToken(user._id.toString()),
+      token: generateToken(user._id.toString(), (user as any).tokenVersion ?? 0),
       isNewUser: true,
     });
 
@@ -386,7 +408,7 @@ export class AuthService {
       if (user) {
         if (!(user as any).kycCompleted) {
           // User exists but never finished KYC — let them continue
-          const jwtToken = generateToken(user._id.toString());
+          const jwtToken = generateToken(user._id.toString(), (user as any).tokenVersion ?? 0);
           const redirectUrl = new URL(frontendRedirectUri);
           redirectUrl.searchParams.set("token", jwtToken);
           redirectUrl.searchParams.set("userId", user._id.toString());
@@ -457,7 +479,7 @@ export class AuthService {
     }
 
     // Generate JWT token
-    const jwtToken = generateToken(user._id.toString());
+    const jwtToken = generateToken(user._id.toString(), (user as any).tokenVersion ?? 0);
 
     // Redirect to frontend with token
     const redirectUrl = new URL(frontendRedirectUri);
@@ -496,7 +518,7 @@ export class AuthService {
     await user.save();
 
     return {
-      token: generateToken(user._id.toString()),
+      token: generateToken(user._id.toString(), (user as any).tokenVersion ?? 0),
       user: await this.privilegeUser(user),
       // Signal to the client that registration is incomplete so it redirects to KYC
       isNewUser: !(user as any).kycCompleted,
@@ -588,7 +610,7 @@ export class AuthService {
     const data = await this.withAdminPrivileges({
       user: user as IUserData,
       plan: initialPlan,
-      token: generateToken(user._id.toString()),
+      token: generateToken(user._id.toString(), (user as any).tokenVersion ?? 0),
     });
 
     return {
@@ -622,7 +644,7 @@ export class AuthService {
     await user.save();
 
     return {
-      token: generateToken(user._id.toString()),
+      token: generateToken(user._id.toString(), (user as any).tokenVersion ?? 0),
       user: await this.privilegeUser(user),
     };
   }
@@ -647,7 +669,7 @@ export class AuthService {
       data: {
         user: privilegedUser,
         plan: plan || null,
-        token: generateToken(userId),
+        token: generateToken(userId, (user as any).tokenVersion ?? 0),
       },
     };
   }

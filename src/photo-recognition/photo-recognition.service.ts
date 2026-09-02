@@ -198,7 +198,10 @@ Rules:
       const food = foods[0];
       logger.info(`[PhotoRecognition] USDA match: ${food.description} (fdcId: ${food.fdcId})`);
 
-      // Extract nutrients
+      // Extract nutrients. For Foundation / SR Legacy / FNDDS foods these
+      // values are PER 100 g — not per serving. Returning them as-is is what
+      // made a beef quesadilla read as ~350 kcal (its per-100g energy) instead
+      // of a realistic ~700-900 kcal serving.
       const nutrients = food.foodNutrients || [];
 
       const findNutrient = (name: string): number => {
@@ -207,30 +210,58 @@ Rules:
             n.nutrientName?.toLowerCase().includes(name.toLowerCase()) ||
             n.nutrientNumber === name
         );
-        return Math.round(nutrient?.value || 0);
+        return nutrient?.value || 0;
       };
 
       // Nutrient IDs: Energy (1008), Protein (1003), Carbs (1005), Fat (1004)
-      const calories =
+      const caloriesPer100g =
         findNutrient("energy") || findNutrient("calories") || findNutrient("1008");
-      const protein = findNutrient("protein") || findNutrient("1003");
-      const carbs =
+      const proteinPer100g = findNutrient("protein") || findNutrient("1003");
+      const carbsPer100g =
         findNutrient("carbohydrate") || findNutrient("carbs") || findNutrient("1005");
-      const fat = findNutrient("fat") || findNutrient("total lipid") || findNutrient("1004");
+      const fatPer100g = findNutrient("fat") || findNutrient("total lipid") || findNutrient("1004");
 
-      // Get serving size info
-      const servingSize = food.servingSize
-        ? `${food.servingSize} ${food.servingSizeUnit || "g"}`
-        : food.householdServingFullText || "100g";
+      // How many grams is one serving? Only trust an explicit weight:
+      //   - servingSize in g/ml, or
+      //   - the largest food portion's gramWeight.
+      // A composite prepared dish (e.g. a quesadilla) usually has neither in
+      // the search payload — in which case a per-100g number is meaningless as
+      // a "meal", so we bail to the AI estimate (which is per serving) rather
+      // than report a wrong figure.
+      const unit = (food.servingSizeUnit || "").toLowerCase();
+      const portionGrams: number | null =
+        typeof food.servingSize === "number" && (unit === "g" || unit === "ml")
+          ? food.servingSize
+          : Array.isArray(food.foodPortions) && food.foodPortions.length
+            ? food.foodPortions
+                .map((fp: any) => fp?.gramWeight)
+                .filter((g: any) => typeof g === "number" && g > 0)
+                .sort((a: number, b: number) => b - a)[0] ?? null
+            : null;
+
+      if (!portionGrams) {
+        logger.info(
+          `[PhotoRecognition] USDA match "${food.description}" has no serving weight; per-100g values aren't a serving — deferring to AI estimate.`
+        );
+        return null;
+      }
+
+      const scale = portionGrams / 100;
+      const calories = Math.round(caloriesPer100g * scale);
+
+      // Guard against a degenerate match (zero energy) — also defer to AI.
+      if (calories <= 0) {
+        return null;
+      }
 
       return {
         calories,
         macros: {
-          protein,
-          carbs,
-          fat,
+          protein: Math.round(proteinPer100g * scale),
+          carbs: Math.round(carbsPer100g * scale),
+          fat: Math.round(fatPer100g * scale),
         },
-        servingSize,
+        servingSize: `${Math.round(portionGrams)} g`,
         source: "USDA FoodData Central",
         fdcId: food.fdcId?.toString(),
       };

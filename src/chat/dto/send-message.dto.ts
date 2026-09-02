@@ -25,8 +25,8 @@ export class SendMessageDto {
     description: "The message to send to the nutrition chatbot",
     example: "What should I eat for lunch today?",
   })
-  @IsString()
   @IsNotEmpty()
+  @SafeLLMInput(1000)
   message: string;
 
   @ApiPropertyOptional({

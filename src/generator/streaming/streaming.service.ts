@@ -32,6 +32,7 @@ import {
   findPlanViolations,
   describeViolations,
 } from "../../utils/dietary-constraints";
+import { computeActiveSlots } from "../meal-plan-prompt";
 
 // Re-use helpers from generate.service
 const getLocalDateKey = (date: Date): string => {
@@ -343,6 +344,33 @@ export class StreamingGeneratorService {
     const constraints = resolveDietaryConstraints(userData);
     const constraintBlock = buildDietaryConstraintBlock(constraints);
 
+    const activeSlots = computeActiveSlots({
+      fastingHours: userData.fastingHours,
+      fastingStartTime: userData.fastingStartTime,
+      mealsPerDay: (userData as any).mealsPerDay,
+    });
+    const activeSlotSet = new Set(activeSlots);
+
+    // Redistribute calorie shares for active slots
+    const SLOT_CALORIE_SHARE: Record<string, number> = {
+      breakfast: 0.25, lunch: 0.35, dinner: 0.3, snack: 0.1,
+    };
+    const totalWeight = activeSlots.reduce((s, slot) => s + (SLOT_CALORIE_SHARE[slot] ?? 0), 0);
+    const calorieShares: Record<string, number> = {};
+    for (const slot of activeSlots) {
+      calorieShares[slot] = (SLOT_CALORIE_SHARE[slot] ?? 0) / totalWeight;
+    }
+
+    let fastingContextBlock = "";
+    if (userData.fastingHours && userData.fastingStartTime) {
+      const eatingHours = 24 - userData.fastingHours;
+      fastingContextBlock = `FASTING SCHEDULE: ${userData.fastingHours}:${eatingHours} intermittent fasting. ` +
+        `Only generate meals for: ${activeSlots.join(", ")}. ` +
+        (activeSlotSet.has("breakfast") ? "Breakfast IS within the eating window." : "Do NOT include breakfast.");
+    } else if ((userData as any).mealsPerDay && (userData as any).mealsPerDay < 4) {
+      fastingContextBlock = `MEAL FREQUENCY: User eats ${(userData as any).mealsPerDay} meals per day. Only generate: ${activeSlots.join(", ")}.`;
+    }
+
     const daysList = dates.map((date, idx) => {
       const dayName = dayToName[date.getDay()];
       const cuisine = CUISINE_ROTATION[idx % CUISINE_ROTATION.length];
@@ -352,8 +380,16 @@ export class StreamingGeneratorService {
       return `- ${getLocalDateKey(date)} (${dayName}): ${cuisine}, ${protein}${hasWorkout ? ", WORKOUT" : ""}`;
     }).join("\n");
 
+    // Build dynamic meals JSON schema based on active slots
+    const mealsSchemaLines = [
+      activeSlotSet.has("breakfast") ? `      "breakfast": {"name": "Meal Name", "calories": ${Math.round(targetCalories * (calorieShares["breakfast"] ?? 0.25))}}` : null,
+      activeSlotSet.has("lunch") ? `      "lunch": {"name": "Meal Name", "calories": ${Math.round(targetCalories * (calorieShares["lunch"] ?? 0.35))}}` : null,
+      activeSlotSet.has("dinner") ? `      "dinner": {"name": "Meal Name", "calories": ${Math.round(targetCalories * (calorieShares["dinner"] ?? 0.3))}}` : null,
+      activeSlotSet.has("snack") ? `      "snacks": [{"name": "Snack Name", "calories": ${Math.round(targetCalories * (calorieShares["snack"] ?? 0.1))}}]` : null,
+    ].filter(Boolean).join(",\n");
+
     const prompt = `Generate ONLY meal names for a ${dates.length}-day meal plan. Return minimal JSON.
-${constraintBlock ? `\n${constraintBlock}\n` : ""}
+${constraintBlock ? `\n${constraintBlock}\n` : ""}${fastingContextBlock ? `\n${fastingContextBlock}\n` : ""}
 PERSON: ${userData.age}y ${userData.gender}, ${userData.path} path
 CALORIES: ~${targetCalories}/day
 DISLIKES (avoid if possible): ${(userData.dislikes || []).join(", ") || "none"}
@@ -371,10 +407,7 @@ Return ONLY this JSON structure (no markdown):
     "date": "YYYY-MM-DD",
     "day": "dayname",
     "meals": {
-      "breakfast": {"name": "Meal Name", "calories": ${Math.round(targetCalories * 0.25)}},
-      "lunch": {"name": "Meal Name", "calories": ${Math.round(targetCalories * 0.35)}},
-      "dinner": {"name": "Meal Name", "calories": ${Math.round(targetCalories * 0.3)}},
-      "snacks": [{"name": "Snack Name", "calories": ${Math.round(targetCalories * 0.1)}}]
+${mealsSchemaLines}
     },
     "hasWorkout": true/false
   }
@@ -497,15 +530,33 @@ Return ONLY this JSON structure (no markdown):
     targetCalories: number,
     macros: { protein: number; carbs: number; fat: number },
   ): string {
+    const activeSlots = computeActiveSlots({
+      fastingHours: userData.fastingHours,
+      fastingStartTime: userData.fastingStartTime,
+      mealsPerDay: (userData as any).mealsPerDay,
+    });
+    const activeSlotSet = new Set(activeSlots);
+
+    let fastingContextBlock = "";
+    if (userData.fastingHours && userData.fastingStartTime) {
+      const eatingHours = 24 - userData.fastingHours;
+      fastingContextBlock = `\nFASTING SCHEDULE: ${userData.fastingHours}:${eatingHours} intermittent fasting. ` +
+        `Only generate meals for: ${activeSlots.join(", ")}. ` +
+        (activeSlotSet.has("breakfast") ? "Breakfast IS within the eating window." : "Do NOT include breakfast.") + "\n";
+    } else if ((userData as any).mealsPerDay && (userData as any).mealsPerDay < 4) {
+      fastingContextBlock = `\nMEAL FREQUENCY: User eats ${(userData as any).mealsPerDay} meals per day. Only generate: ${activeSlots.join(", ")}.\n`;
+    }
+
     const mealsToFill = batch.map((skelDay, idx) => {
       const hasWorkout = workoutDayNums.has(dates[idx]?.getDay() || 0);
-      return `
-Day: ${skelDay.date} (${skelDay.day})
-- Breakfast: "${skelDay.meals.breakfast.name}" (~${skelDay.meals.breakfast.calories} kcal)
-- Lunch: "${skelDay.meals.lunch.name}" (~${skelDay.meals.lunch.calories} kcal)
-- Dinner: "${skelDay.meals.dinner.name}" (~${skelDay.meals.dinner.calories} kcal)
-- Snack: "${skelDay.meals.snacks[0]?.name || "Healthy Snack"}" (~${skelDay.meals.snacks[0]?.calories || 150} kcal)
-- Workout: ${hasWorkout ? "Include 1 workout" : "Rest day"}`;
+      const mealLines = [
+        activeSlotSet.has("breakfast") && skelDay.meals.breakfast ? `- Breakfast: "${skelDay.meals.breakfast.name}" (~${skelDay.meals.breakfast.calories} kcal)` : null,
+        activeSlotSet.has("lunch") && skelDay.meals.lunch ? `- Lunch: "${skelDay.meals.lunch.name}" (~${skelDay.meals.lunch.calories} kcal)` : null,
+        activeSlotSet.has("dinner") && skelDay.meals.dinner ? `- Dinner: "${skelDay.meals.dinner.name}" (~${skelDay.meals.dinner.calories} kcal)` : null,
+        activeSlotSet.has("snack") && skelDay.meals.snacks?.[0] ? `- Snack: "${skelDay.meals.snacks[0].name}" (~${skelDay.meals.snacks[0].calories} kcal)` : null,
+        `- Workout: ${hasWorkout ? "Include 1 workout" : "Rest day"}`,
+      ].filter(Boolean).join("\n");
+      return `\nDay: ${skelDay.date} (${skelDay.day})\n${mealLines}`;
     }).join("\n");
 
     const constraints = resolveDietaryConstraints(userData);
@@ -514,8 +565,16 @@ Day: ${skelDay.date} (${skelDay.day})
       .toLowerCase()
       .replace(/ /g, "_");
 
+    // Build dynamic meals schema for the response format
+    const mealsSchemaEntries = [
+      activeSlotSet.has("breakfast") ? `      "breakfast": {\n        "name": "EXACT NAME FROM ABOVE",\n        "calories": 450,\n        "macros": {"protein": 25, "carbs": 50, "fat": 15},\n        "ingredients": ["${proteinExample}|150|g|Proteins", "rice|100|g|Grains"],\n        "prepTime": 15\n      }` : null,
+      activeSlotSet.has("lunch") ? `      "lunch": {...same structure}` : null,
+      activeSlotSet.has("dinner") ? `      "dinner": {...same structure}` : null,
+      activeSlotSet.has("snack") ? `      "snacks": [{...same structure}]` : null,
+    ].filter(Boolean).join(",\n");
+
     return `Fill in nutritional details for these meals. Keep the EXACT meal names provided.
-${constraintBlock ? `\n${constraintBlock}\n` : ""}
+${constraintBlock ? `\n${constraintBlock}\n` : ""}${fastingContextBlock}
 PERSON: ${userData.age}y ${userData.gender}, daily targets: ${targetCalories} kcal, P:${macros.protein}g C:${macros.carbs}g F:${macros.fat}g
 DISLIKES (avoid if possible): ${(userData.dislikes || []).join(", ") || "none"}
 
@@ -528,16 +587,7 @@ Return JSON array with full details for each day:
     "date": "YYYY-MM-DD",
     "day": "dayname",
     "meals": {
-      "breakfast": {
-        "name": "EXACT NAME FROM ABOVE",
-        "calories": 450,
-        "macros": {"protein": 25, "carbs": 50, "fat": 15},
-        "ingredients": ["${proteinExample}|150|g|Proteins", "rice|100|g|Grains"],
-        "prepTime": 15
-      },
-      "lunch": {...same structure},
-      "dinner": {...same structure},
-      "snacks": [{...same structure}]
+${mealsSchemaEntries}
     },
     "workouts": [{"name": "...", "category": "...", "duration": 30, "caloriesBurned": 200}] // empty array if rest day
   }

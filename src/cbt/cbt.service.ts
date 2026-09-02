@@ -1056,12 +1056,53 @@ export class CBTService {
       });
     });
 
-    // Seed from KYC emotionalTriggers when no observed data yet
-    if (Object.keys(triggerCounts).length === 0 && user?.emotionalTriggers?.length) {
+    // From the daily reflection on the tracker's mood check-in. These ids are
+    // already in the eating vocabulary, so they need no mapping — but they're
+    // day-level self-report, not a logged eating episode, so they're tracked
+    // separately and never claim to describe a specific meal.
+    const reflectionCounts: Record<string, number> = {};
+    moodEntries.forEach((m) => {
+      const hinderedBy = m.reflection?.hinderedBy;
+      if (!hinderedBy?.length) return;
+
+      const at = m.date && m.time ? new Date(`${m.date}T${m.time}`) : undefined;
+      const validAt = at && !isNaN(at.getTime()) ? at : undefined;
+
+      hinderedBy.forEach((t) => {
+        reflectionCounts[t] = (reflectionCounts[t] || 0) + 1;
+        noteTrigger(t, validAt);
+      });
+    });
+
+    // What the user says helped. Kept apart from triggers so it can be read
+    // back as a win rather than counted as a problem.
+    const facilitatorCounts: Record<string, number> = {};
+    moodEntries.forEach((m) => {
+      m.reflection?.easedBy?.forEach((f) => {
+        facilitatorCounts[f] = (facilitatorCounts[f] || 0) + 1;
+      });
+    });
+
+    // Distinct days answered — the honest denominator for the summary, since
+    // one day can contribute several chips and summing counts would overstate it.
+    const reflectionDays = new Set(
+      moodEntries
+        .filter(
+          (m) => m.reflection?.easedBy?.length || m.reflection?.hinderedBy?.length
+        )
+        .map((m) => m.date)
+    ).size;
+
+    // Nothing observed yet — fall back to what they told us at signup. This is
+    // surfaced as `source: "onboarding"` so the client can say where it came
+    // from; presenting it as observed behaviour would be a claim we can't make.
+    const observedTriggerCount = Object.keys(triggerCounts).length;
+    if (observedTriggerCount === 0 && user?.emotionalTriggers?.length) {
       user.emotionalTriggers.forEach((t) => {
-        triggerCounts[t] = 0; // Weight 0 = seeded from KYC, not yet observed
+        triggerCounts[t] = 0;
       });
     }
+    const triggersAreFromOnboarding = observedTriggerCount === 0;
 
     // ── Emotions: from meal-linked mood entries + correlation moodBefore ──
     const emotionCounts: Record<string, number> = {};
@@ -1171,6 +1212,11 @@ export class CBTService {
               return {
                 trigger,
                 count,
+                // Where this came from, so the UI never dresses up a signup
+                // answer as something we watched the user do.
+                source: triggersAreFromOnboarding
+                  ? ("onboarding" as const)
+                  : ("observed" as const),
                 // null when there isn't enough signal to name a time of day —
                 // the client then falls back to a generic description.
                 window,
@@ -1179,6 +1225,15 @@ export class CBTService {
             })
             .sort((a, b) => b.count - a.count)
             .slice(0, 5),
+          // Day-level self-report from the tracker reflection, kept distinct
+          // from meal-linked evidence.
+          reflectionDays,
+          reflectionTriggers: Object.entries(reflectionCounts)
+            .map(([trigger, count]) => ({ trigger, count }))
+            .sort((a, b) => b.count - a.count),
+          reflectionFacilitators: Object.entries(facilitatorCounts)
+            .map(([facilitator, count]) => ({ facilitator, count }))
+            .sort((a, b) => b.count - a.count),
           riskWindows: computeRiskWindows(
             correlations.map((c) => ({
               at: new Date(c.createdAt),

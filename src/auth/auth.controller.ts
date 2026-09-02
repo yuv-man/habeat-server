@@ -25,6 +25,7 @@ import { Throttle } from "@nestjs/throttler";
 import { AuthService } from "./auth.service";
 import { AuthGuard } from "./auth.guard";
 import { SignupDto } from "./dto/signup.dto";
+import { LoginDto } from "./dto/login.dto";
 import { IUserData } from "../types/interfaces";
 import logger from "../utils/logger";
 import { isMongoObjectIdString } from "../utils/mongoObjectId";
@@ -81,7 +82,7 @@ export class AuthController {
       },
     },
   })
-  async loginUser(@Body() body: { email: string; password: string }) {
+  async loginUser(@Body() body: LoginDto) {
     return this.authService.login(body.email, body.password);
   }
 
@@ -91,8 +92,8 @@ export class AuthController {
   @ApiBearerAuth("JWT-auth")
   @ApiOperation({ summary: "Logout user" })
   @ApiResponse({ status: 200, description: "User successfully logged out" })
-  async logoutUser() {
-    return this.authService.logout();
+  async logoutUser(@Request() req) {
+    return this.authService.logout(req.user._id.toString());
   }
 
   @Get("users/me")

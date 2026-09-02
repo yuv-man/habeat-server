@@ -59,6 +59,7 @@
     "mongoose": "^8.14.2",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "posthog-node": "^5.51.4",
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.1",
     "sharp": "^0.34.5",

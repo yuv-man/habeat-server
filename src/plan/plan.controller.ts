@@ -17,6 +17,7 @@ import {
 } from "@nestjs/swagger";
 import { PlanService } from "./plan.service";
 import { AuthGuard } from "../auth/auth.guard";
+import { resolveOwnUserId } from "../utils/ownership";
 import {
   UpdateMealDto,
   ReplaceMealDto,
@@ -94,10 +95,11 @@ export class PlanController {
   async replaceMeal(
     @Param("userId") userId: string,
     @Param("planId") planId: string,
-    @Body() body: ReplaceMealDto
+    @Body() body: ReplaceMealDto,
+    @Request() req
   ) {
     return this.planService.replaceMeal(
-      userId,
+      resolveOwnUserId(req, userId),
       planId,
       body.date,
       body.mealType,
@@ -120,7 +122,7 @@ export class PlanController {
     @Body() body: UpdateWorkoutDto,
     @Request() req
   ) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.planService.updateWorkoutInPlan(
       resolvedUserId.toString(),
       body.date,
@@ -168,8 +170,17 @@ export class PlanController {
   })
   @ApiResponse({ status: 404, description: "Plan or day not found" })
   @ApiResponse({ status: 400, description: "Invalid snack data" })
-  async addSnack(@Param("planId") planId: string, @Body() body: AddSnackDto) {
-    return this.planService.addSnack(planId, body.date, body.name);
+  async addSnack(
+    @Param("planId") planId: string,
+    @Body() body: AddSnackDto,
+    @Request() req
+  ) {
+    return this.planService.addSnack(
+      resolveOwnUserId(req),
+      planId,
+      body.date,
+      body.name
+    );
   }
 
   @Post(":userId/workout")
@@ -186,7 +197,7 @@ export class PlanController {
     @Body() body: AddWorkoutDto,
     @Request() req
   ) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.planService.addWorkout(
       resolvedUserId.toString(),
       body.date,
@@ -210,9 +221,15 @@ export class PlanController {
   async deleteSnack(
     @Param("planId") planId: string,
     @Param("date") date: string,
-    @Param("snackId") snackId: string
+    @Param("snackId") snackId: string,
+    @Request() req
   ) {
-    return this.planService.deleteSnack(planId, date, snackId);
+    return this.planService.deleteSnack(
+      resolveOwnUserId(req),
+      planId,
+      date,
+      snackId
+    );
   }
 
   @Delete(":userId/workout/:date/:workoutName")
@@ -230,7 +247,7 @@ export class PlanController {
     @Param("workoutName") workoutName: string,
     @Request() req
   ) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.planService.deleteWorkout(
       resolvedUserId.toString(),
       date,

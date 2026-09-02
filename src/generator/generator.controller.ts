@@ -17,7 +17,10 @@ import {
 } from "@nestjs/swagger";
 import { ConfigService } from "@nestjs/config";
 import { GeneratorService } from "./generator.service";
+import { AnalyticsService } from "../analytics/analytics.service";
 import { AuthGuard } from "../auth/auth.guard";
+import { resolveOwnUserId } from "../utils/ownership";
+import { Throttle } from "@nestjs/throttler";
 import {
   SubscriptionGuard,
   RequiresFeature,
@@ -42,10 +45,12 @@ import {
 export class GeneratorController {
   constructor(
     private generatorService: GeneratorService,
-    private configService: ConfigService
+    private configService: ConfigService,
+    private analyticsService: AnalyticsService
   ) {}
 
   @Post("weekly-meal-plan/:userId")
+  @Throttle({ default: { limit: 5, ttl: 3_600_000 } })
   @ApiOperation({
     summary: "Generate a weekly meal plan using AI",
     description: `Generates a personalized weekly meal plan based on user data. 
@@ -108,24 +113,33 @@ Optional parameters that can be passed as query strings or in the request body. 
   async generateWeeklyMealPlan(
     @Param("userId") userId: string,
     @Body() body: GenerateWeeklyMealPlanDto,
+    @Request() req,
     @Query("language") language?: string,
     @Query("title") title?: string,
     @Query("useMock", new ParseBoolPipe({ optional: true })) useMock?: boolean
   ) {
-    // User information is automatically extracted from JWT token via AuthGuard
-    // req.user contains: _id, email, name, age, gender, height, weight, etc.
+    // Act only on the caller's own account. This endpoint deletes and rebuilds
+    // the target user's plan, shopping list, and today's progress, so trusting
+    // the URL param let any token wipe any user's data.
+    const ownUserId = resolveOwnUserId(req, userId);
 
-    return this.generatorService.generateWeeklyMealPlan(
-      userId,
+    const result = await this.generatorService.generateWeeklyMealPlan(
+      ownUserId,
       body.startDate,
       language || body.language,
       title || body.title,
       useMock !== undefined ? useMock : body.useMock || false,
       body.planTemplate
     );
+    this.analyticsService.capture(ownUserId, "meal_plan_generated", {
+      language: language || body.language,
+      useMock: useMock ?? body.useMock ?? false,
+    });
+    return result;
   }
 
   @Post("recipe")
+  @Throttle({ default: { limit: 20, ttl: 3_600_000 } })
   @ApiOperation({ summary: "Generate detailed recipe for a meal" })
   @ApiResponse({
     status: 200,
@@ -146,6 +160,7 @@ Optional parameters that can be passed as query strings or in the request body. 
   }
 
   @Post("goal")
+  @Throttle({ default: { limit: 20, ttl: 3_600_000 } })
   @ApiOperation({ summary: "Generate a goal based on user criteria" })
   @ApiResponse({
     status: 200,
@@ -167,6 +182,7 @@ Optional parameters that can be passed as query strings or in the request body. 
   }
 
   @Post("meal-suggestions/:userId")
+  @Throttle({ default: { limit: 20, ttl: 3_600_000 } })
   @UseGuards(SubscriptionGuard)
   @RequiresFeature("aiMealSuggestions")
   @ApiOperation({
@@ -181,10 +197,12 @@ Optional parameters that can be passed as query strings or in the request body. 
   @ApiResponse({ status: 404, description: "User not found" })
   async changeMeal(
     @Param("userId") userId: string,
-    @Body() body: ChangeMealDto
+    @Body() body: ChangeMealDto,
+    @Request() req
   ) {
-    return this.generatorService.generateMealSuggestions(
-      userId,
+    const ownUserId = resolveOwnUserId(req, userId);
+    const result = await this.generatorService.generateMealSuggestions(
+      ownUserId,
       {
         ...body.mealCriteria,
         aiRules: body.aiRules,
@@ -195,9 +213,16 @@ Optional parameters that can be passed as query strings or in the request body. 
       },
       body.language || "en"
     );
+    this.analyticsService.capture(ownUserId, "meal_suggestions_generated", {
+      mealCategory: body.mealCriteria?.category,
+      targetCalories: body.mealCriteria?.targetCalories,
+      count: body.mealCriteria?.numberOfSuggestions ?? 3,
+    });
+    return result;
   }
 
   @Post("rescue-meal/:userId/:planId")
+  @Throttle({ default: { limit: 30, ttl: 3_600_000 } })
   @ApiOperation({
     summary: 'Generate and swap a quick rescue meal (I\'m Tired button)',
     description: `Instantly generates a quick "rescue meal" (<=10 min prep time) and swaps it with the current meal.
@@ -240,6 +265,7 @@ This endpoint powers the "I'm Tired / No Time" button feature, providing instant
   async generateRescueMeal(
     @Param("userId") userId: string,
     @Param("planId") planId: string,
+    @Request() req,
     @Body()
     body: {
       date: string;
@@ -249,6 +275,8 @@ This endpoint powers the "I'm Tired / No Time" button feature, providing instant
       language?: string;
     }
   ) {
+    const ownUserId = resolveOwnUserId(req, userId);
+
     // Validate mealType is not snack (rescue meals only for main meals)
     if (!["breakfast", "lunch", "dinner"].includes(body.mealType)) {
       throw new Error(
@@ -256,8 +284,8 @@ This endpoint powers the "I'm Tired / No Time" button feature, providing instant
       );
     }
 
-    return this.generatorService.generateAndSwapRescueMeal(
-      userId,
+    const result = await this.generatorService.generateAndSwapRescueMeal(
+      ownUserId,
       planId,
       body.date,
       body.mealType,
@@ -267,5 +295,10 @@ This endpoint powers the "I'm Tired / No Time" button feature, providing instant
       },
       body.language || "en"
     );
+    this.analyticsService.capture(ownUserId, "rescue_meal_generated", {
+      mealType: body.mealType,
+      targetCalories: body.targetCalories,
+    });
+    return result;
   }
 }

@@ -1,8 +1,10 @@
-import { Controller, Post, Body, UseGuards } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
+import { Controller, Post, Body, UseGuards, Request } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from "@nestjs/swagger";
 import { AuthGuard } from "../auth/auth.guard";
 import { SubscriptionGuard, RequiresFeature } from "../auth/guards/subscription.guard";
 import { PhotoRecognitionService } from "./photo-recognition.service";
+import { AnalyticsService } from "../analytics/analytics.service";
 import {
   RecognizeMealDto,
   GetNutritionDto,
@@ -16,9 +18,13 @@ import logger from "../utils/logger";
 @UseGuards(AuthGuard, SubscriptionGuard)
 @ApiBearerAuth("JWT-auth")
 export class PhotoRecognitionController {
-  constructor(private readonly photoRecognitionService: PhotoRecognitionService) {}
+  constructor(
+    private readonly photoRecognitionService: PhotoRecognitionService,
+    private readonly analyticsService: AnalyticsService
+  ) {}
 
   @Post("recognize")
+  @Throttle({ default: { limit: 40, ttl: 3_600_000 } })
   @RequiresFeature("photoRecognition")
   @ApiOperation({
     summary: "Recognize meal from photo",
@@ -53,7 +59,8 @@ export class PhotoRecognitionController {
     },
   })
   async recognizeMeal(
-    @Body() body: RecognizeMealDto
+    @Body() body: RecognizeMealDto,
+    @Request() req
   ): Promise<{ success: boolean; data: RecognizedMealResponse }> {
     logger.info("[PhotoRecognition] Recognizing meal from photo");
 
@@ -64,6 +71,11 @@ export class PhotoRecognitionController {
     logger.info(
       `[PhotoRecognition] Recognition result: ${result.mealName} (${result.confidence})`
     );
+
+    this.analyticsService.capture(req.user?._id?.toString() ?? "anonymous", "photo_recognized", {
+      confidence: result.confidence,
+      mealName: result.mealName,
+    });
 
     return {
       success: true,

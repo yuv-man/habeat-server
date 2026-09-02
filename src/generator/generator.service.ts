@@ -268,6 +268,17 @@ export class GeneratorService {
       throw new BadRequestException("Please provide user data");
     }
 
+    // Local-dev: USE_MOCK_MEAL_PLAN=true returns a canned plan without any AI
+    // provider. Hard-gated to non-production. Folding it into useMock here means
+    // both Phase 1 (today) and the Phase 2 background fill honour it — no AI
+    // call is made, so nothing fails on a missing key.
+    if (
+      process.env.USE_MOCK_MEAL_PLAN === "true" &&
+      process.env.NODE_ENV !== "production"
+    ) {
+      useMock = true;
+    }
+
     const userData = await this.userModel.findById(userId).lean().exec();
     if (!userData) {
       throw new NotFoundException("User not found");
@@ -413,11 +424,24 @@ export class GeneratorService {
           // Exclude both the old plan and the day we just generated, so
           // Tuesday's dinner cannot come back as Monday's.
           [...previousMeals, ...this.mealNamesFrom(todayResult.weeklyPlanObject)]
-        ).catch((err) =>
+        ).catch(async (err) => {
           logger.error(
             `[Phase2] Background generation failed for user ${userId}: ${err?.message || err}`
-          )
-        );
+          );
+          // Today's plan (Phase 1) is already saved and usable, but the rest of
+          // the week won't arrive. Flip the status off "generating" so the
+          // client stops polling forever and can surface the failure.
+          try {
+            await this.planModel.updateOne(
+              { userId: userIdObjectId },
+              { $set: { generationStatus: "failed" } }
+            );
+          } catch (statusErr: any) {
+            logger.error(
+              `[Phase2] Could not mark plan failed for user ${userId}: ${statusErr?.message || statusErr}`
+            );
+          }
+        });
       });
     } else {
       logger.info(`[Phase2] No remaining days to generate (today is Sunday or useMock=true).`);

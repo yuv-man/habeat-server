@@ -26,6 +26,44 @@ export type MoodTrigger =
   | "social"
   | "other";
 
+/** Shares the id space with the client's EMOTIONAL_TRIGGERS (KYC onboarding),
+ *  so a daily reflection and a signup answer are countable against each other
+ *  without a mapping table. The last two aren't offered at onboarding. */
+export const EATING_TRIGGERS = [
+  "stress",
+  "boredom",
+  "sadness",
+  "celebration",
+  "habit",
+  "social",
+  "tiredness",
+  "procrastination",
+  "anxiety",
+  "late-night",
+  "cravings",
+  "time-pressure",
+] as const;
+
+export type EatingTrigger = (typeof EATING_TRIGGERS)[number];
+
+/** Kept on its own axis rather than folded into EatingTrigger — counting
+ *  "had time" as a trigger would surface it to the user as a problem. */
+export const EATING_FACILITATORS = [
+  "had-time",
+  "felt-good",
+  "planned-ahead",
+  "food-ready",
+] as const;
+
+export type EatingFacilitator = (typeof EATING_FACILITATORS)[number];
+
+/** The daily reflection captured beside the mood check-in. A day can carry
+ *  both sides — "I had time but also had cravings" is a real answer. */
+export interface IDailyReflection {
+  easedBy?: EatingFacilitator[];
+  hinderedBy?: EatingTrigger[];
+}
+
 export type CognitiveDistortionType =
   | "all_or_nothing"
   | "overgeneralization"
@@ -71,6 +109,7 @@ export interface IMoodEntry extends Document {
   stressLevel?: MoodLevel;
   notes?: string;
   triggers?: MoodTrigger[];
+  reflection?: IDailyReflection;
   linkedMealId?: mongoose.Types.ObjectId;
   linkedMealType?: MealType;
   createdAt: Date;
@@ -216,6 +255,16 @@ const moodEntrySchema = new Schema(
         ],
       },
     ],
+    reflection: {
+      type: {
+        easedBy: [{ type: String, enum: EATING_FACILITATORS }],
+        hinderedBy: [{ type: String, enum: EATING_TRIGGERS }],
+      },
+      // Without this the subdocument is created on every mood entry, and
+      // "has a reflection" stops being a meaningful thing to query for.
+      default: undefined,
+      _id: false,
+    },
     linkedMealId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Meal",

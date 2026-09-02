@@ -43,6 +43,71 @@ export const SLOT_CALORIE_SHARE: Record<MealSlot, number> = {
 };
 
 /**
+ * Determine which meal slots fall within a fasting eating window.
+ * fastingStartTime is "HH:MM" when fasting BEGINS (e.g. "20:00").
+ * Returns slots whose typical time falls inside the eating window.
+ */
+export function computeActiveSlots(opts: {
+  fastingHours?: number;
+  fastingStartTime?: string;
+  mealsPerDay?: number;
+}): MealSlot[] {
+  const { fastingHours, fastingStartTime, mealsPerDay } = opts;
+
+  // Fasting takes priority over mealsPerDay
+  if (fastingHours && fastingHours >= 12 && fastingStartTime) {
+    const [h, m] = fastingStartTime.split(":").map(Number);
+    const fastStartMin = (h ?? 0) * 60 + (m ?? 0);
+    // Fasting begins at fastStartMin and lasts fastingHours hours.
+    // The eating window opens when the fast ends and closes when the next fast begins.
+    // eatStartMin = time when eating is allowed again (fast end = fastStart + fastingHours)
+    // eatEndMin   = time when eating stops again (= fastStartMin, when next fast begins)
+    const eatStartMin = (fastStartMin + fastingHours * 60) % 1440;
+    const eatEndMin = fastStartMin;
+
+    // Typical time (minutes from midnight) for each slot
+    const SLOT_TIMES: Record<MealSlot, number> = {
+      breakfast: 8 * 60,    // 8:00
+      lunch: 12 * 60 + 30,  // 12:30
+      snack: 15 * 60,       // 15:00
+      dinner: 18 * 60 + 30, // 18:30
+    };
+
+    const inWindow = (t: number): boolean => {
+      if (eatStartMin < eatEndMin) return t >= eatStartMin && t < eatEndMin;
+      // window wraps midnight
+      return t >= eatStartMin || t < eatEndMin;
+    };
+
+    const active = (Object.entries(SLOT_TIMES) as [MealSlot, number][])
+      .filter(([, t]) => inWindow(t))
+      .map(([slot]) => slot);
+
+    // Guarantee at least 2 slots so the plan is functional
+    if (active.length < 2) {
+      // eating window too narrow — keep lunch+dinner as minimum
+      return ["lunch", "dinner"];
+    }
+    return active;
+  }
+
+  // Non-fasting: honour mealsPerDay preference
+  if (mealsPerDay === 2) return ["lunch", "dinner"];
+  if (mealsPerDay === 3) return ["breakfast", "lunch", "dinner"];
+  return ["breakfast", "lunch", "dinner", "snack"]; // default 4
+}
+
+/** Redistribute calorie shares so active slots sum to 1.0, preserving relative proportions. */
+export function slotCalorieShares(activeSlots: MealSlot[]): Record<MealSlot, number> {
+  const totalWeight = activeSlots.reduce((s, slot) => s + SLOT_CALORIE_SHARE[slot], 0);
+  const result: Partial<Record<MealSlot, number>> = {};
+  for (const slot of activeSlots) {
+    result[slot] = SLOT_CALORIE_SHARE[slot] / totalWeight;
+  }
+  return result as Record<MealSlot, number>;
+}
+
+/**
  * A meal *form* rather than a specific dish. `requires` lists ingredient
  * families the form depends on, so an archetype is dropped automatically when
  * the user's constraints forbid that family (no egg dishes for a vegan, no
@@ -299,10 +364,14 @@ export const buildMenuSkeleton = (
   seed: string,
   /** Soft preferences: kept out of the protein assignment, not banned outright. */
   dislikes: string[] = [],
+  /** Which meal slots to include. Defaults to all four. */
+  activeSlots: MealSlot[] = ["breakfast", "lunch", "dinner", "snack"],
 ): PlannedDay[] => {
   const random = rng(hashSeed(seed));
 
   // Independent cyclers per slot, so breakfast never inherits dinner's protein.
+  // Build cyclers for all four slots regardless of activeSlots — the RNG
+  // must consume the same number of values so the seed stays stable.
   const archetypeCyclers: Record<MealSlot, () => string> = {
     breakfast: makeCycler(usableArchetypes("breakfast", constraints), random),
     lunch: makeCycler(usableArchetypes("lunch", constraints), random),
@@ -317,16 +386,16 @@ export const buildMenuSkeleton = (
   };
   const flavourCycler = makeCycler(FLAVOUR_PROFILES, random);
 
-  const slots: MealSlot[] = ["breakfast", "lunch", "dinner", "snack"];
+  const calorieShares = slotCalorieShares(activeSlots);
 
   return days.map((day) => ({
     ...day,
-    meals: slots.map((slot) => ({
+    meals: activeSlots.map((slot) => ({
       slot,
       archetype: archetypeCyclers[slot](),
       protein: proteinCyclers[slot](),
       flavour: slot === "lunch" || slot === "dinner" ? flavourCycler() : "",
-      calories: Math.round(targetCalories * SLOT_CALORIE_SHARE[slot]),
+      calories: Math.round(targetCalories * calorieShares[slot]),
     })),
   }));
 };
@@ -389,6 +458,8 @@ export interface WeeklyPromptInput {
   maxPrepMinutes?: number;
   /** BCP-47/ISO language code for the response text. Defaults to English. */
   language?: string;
+  /** Fasting/meal-frequency context to inject into the prompt. */
+  fastingContext?: string;
 }
 
 const renderDay = (day: PlannedDay): string => {
@@ -412,7 +483,7 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   const {
     userData, skeleton, constraints, targetCalories, macros,
     recentMeals = [], styleNote, moodContext, repairNote, maxPrepMinutes = 45,
-    language = "en",
+    language = "en", fastingContext,
   } = input;
   const needsEnglishName = language.toLowerCase() !== "en";
 
@@ -437,6 +508,7 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   const sections: string[] = [];
 
   if (constraintBlock) sections.push(constraintBlock);
+  if (fastingContext) sections.push(`FASTING SCHEDULE\n${fastingContext}`);
   if (repairNote) sections.push(`CORRECTION REQUIRED\n${repairNote}`);
 
   sections.push(
@@ -475,13 +547,22 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   sections.push(ingredientRules);
   sections.push(nutritionRules);
 
+  // Derive active slot set from the skeleton to build a dynamic output schema
+  const activeSlotSet = new Set(skeleton[0]?.meals.map((m) => m.slot) ?? ["breakfast", "lunch", "dinner", "snack"]);
+  const mealSchema = [
+    activeSlotSet.has("breakfast") ? `"breakfast":MEAL` : null,
+    activeSlotSet.has("lunch") ? `"lunch":MEAL` : null,
+    activeSlotSet.has("dinner") ? `"dinner":MEAL` : null,
+    activeSlotSet.has("snack") ? `"snacks":[MEAL]` : null,
+  ].filter(Boolean).join(",");
+
   sections.push(
-    `VARIETY — every one of the ${skeleton.length * 4} dishes must be different. Do not reuse a dish name, and do not serve the same protein-and-starch combination twice in the week.`,
+    `VARIETY — every one of the ${skeleton.length * activeSlotSet.size} dishes must be different. Do not reuse a dish name, and do not serve the same protein-and-starch combination twice in the week.`,
   );
 
   sections.push(
     `RETURN a JSON array with one object per day, in the order listed above:
-[{"date":"YYYY-MM-DD","day":"monday","meals":{"breakfast":MEAL,"lunch":MEAL,"dinner":MEAL,"snacks":[MEAL]},"workouts":[]}]
+[{"date":"YYYY-MM-DD","day":"monday","meals":{${mealSchema}},"workouts":[]}]
 
 MEAL = {"name":string,"calories":number,"macros":{"protein":number,"carbs":number,"fat":number},"ingredients":[string],"prepTime":number${needsEnglishName ? `,"nameEn":string` : ""}}
 ${needsEnglishName ? `\nEvery MEAL must also include "nameEn": the plain English name of the same dish (e.g. "name":"עוף בגריל עם ברוקולי" → "nameEn":"Grilled Chicken with Broccoli"). It is used only to look up a photo — it is never shown to the user.\n` : ""}

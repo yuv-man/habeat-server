@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
@@ -1055,6 +1056,11 @@ export class PlanService {
     if (!plan) {
       throw new NotFoundException("Plan not found");
     }
+    // The plan is addressed by its own id, so verify it belongs to the caller
+    // before mutating it — otherwise any valid token could edit any plan.
+    if (String((plan as any).userId) !== String(userId)) {
+      throw new ForbiddenException("Access denied");
+    }
 
     const dateKey = this.getDateKey(date, plan);
     const weeklyPlan = (plan as any).weeklyPlan || {};
@@ -1620,8 +1626,16 @@ export class PlanService {
     };
   }
 
-  async addSnack(planId: string, date: string, snackName: string) {
+  async addSnack(
+    ownerUserId: string,
+    planId: string,
+    date: string,
+    snackName: string
+  ) {
     const plan = await this.planModel.findById(planId);
+    if (plan && String((plan as any).userId) !== String(ownerUserId)) {
+      throw new ForbiddenException("Access denied");
+    }
     if (!plan) {
       throw new NotFoundException("Plan not found");
     }
@@ -1735,8 +1749,16 @@ export class PlanService {
     };
   }
 
-  async deleteSnack(planId: string, date: string, snackId: string) {
+  async deleteSnack(
+    ownerUserId: string,
+    planId: string,
+    date: string,
+    snackId: string
+  ) {
     const plan = await this.planModel.findById(planId);
+    if (plan && String((plan as any).userId) !== String(ownerUserId)) {
+      throw new ForbiddenException("Access denied");
+    }
     if (!plan) {
       throw new NotFoundException("Plan not found");
     }

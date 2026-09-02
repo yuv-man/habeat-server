@@ -186,11 +186,20 @@ ${goals.map((g) => `- ${g.title}: ${g.current}/${g.target} ${g.unit}`).join("\n"
     }
 
     if (todayMeals) {
+      const formatMeal = (meal: IMeal | undefined, label: string) => {
+        if (!meal) return `- ${label}: Not planned`;
+        const m = meal.macros;
+        if (m?.protein !== undefined) {
+          return `- ${label}: ${meal.name} (${meal.calories || 0} kcal | P: ${m.protein}g, C: ${m.carbs}g, F: ${m.fat}g)`;
+        }
+        return `- ${label}: ${meal.name} (${meal.calories || 0} kcal)`;
+      };
+
       prompt += `## Today's Meal Plan:
-- Breakfast: ${todayMeals.breakfast?.name || "Not planned"} (${todayMeals.breakfast?.calories || 0} kcal)
-- Lunch: ${todayMeals.lunch?.name || "Not planned"} (${todayMeals.lunch?.calories || 0} kcal)
-- Dinner: ${todayMeals.dinner?.name || "Not planned"} (${todayMeals.dinner?.calories || 0} kcal)
-- Snacks: ${todayMeals.snacks?.length ? todayMeals.snacks.map((s: IMeal) => s.name).join(", ") : "None"}
+${formatMeal(todayMeals.breakfast, "Breakfast")}
+${formatMeal(todayMeals.lunch, "Lunch")}
+${formatMeal(todayMeals.dinner, "Dinner")}
+- Snacks: ${todayMeals.snacks?.length ? todayMeals.snacks.map((s: IMeal) => `${s.name} (${s.calories || 0} kcal)`).join(", ") : "None"}
 
 `;
     }
@@ -219,9 +228,9 @@ For meal swaps:
   "proposedMeal": {
     "name": "Grilled Chicken Salad",
     "calories": 450,
-    "macros": { "protein": 35, "carbs": 20, "fat": 15 },
+    "macros": { "protein": 42, "carbs": 28, "fat": 16 },
     "category": "lunch",
-    "ingredients": [["chicken breast", "150g", "Proteins"], ["mixed greens", "100g", "Vegetables"]],
+    "ingredients": [["chicken breast", "150g", "Proteins"], ["mixed greens", "100g", "Vegetables"], ["olive oil", "10g", "Fats"]],
     "prepTime": 15
   },
   "reason": "Better aligned with your protein goals"
@@ -251,8 +260,8 @@ For adding snacks:
   "dateKey": "${today}",
   "proposedSnack": {
     "name": "Greek Yogurt with Berries",
-    "calories": 150,
-    "macros": { "protein": 15, "carbs": 20, "fat": 3 },
+    "calories": 180,
+    "macros": { "protein": 15, "carbs": 22, "fat": 3 },
     "category": "snack",
     "ingredients": [["greek yogurt", "150g", "Dairy"], ["mixed berries", "50g", "Fruits"]],
     "prepTime": 5
@@ -267,6 +276,7 @@ IMPORTANT:
 - The action block must be at the very end of your response
 - Make sure the JSON is valid and complete
 - For meal swaps: the "category" in proposedMeal and the "mealType" field MUST match exactly. If swapping breakfast, category must be "breakfast". If swapping lunch, category must be "lunch". If swapping dinner, category must be "dinner". This is mandatory — never cross meal types.
+- **CRITICAL for macros**: Macros must reflect the actual nutritional content of the meal. Verify: (protein × 4) + (carbs × 4) + (fat × 9) should approximately equal the calories. For example, 450 kcal with 42g protein (168 kcal), 28g carbs (112 kcal), 16g fat (144 kcal) = 424 kcal ≈ 450. Do NOT use token placeholder numbers — calculate realistic macros for the specific ingredients and portions listed.
 `;
 
     return prompt;

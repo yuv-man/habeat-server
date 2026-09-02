@@ -44,6 +44,7 @@ import {
   buildWeeklyPlanPrompt,
   planSeed,
   MEAL_PLAN_SYSTEM_INSTRUCTION,
+  computeActiveSlots,
 } from "./meal-plan-prompt";
 
 // Helper function to extract error message
@@ -726,6 +727,25 @@ const generateMealPlanWithGemini = async (
     );
   }
 
+  const activeSlots = computeActiveSlots({
+    fastingHours: userData.fastingHours,
+    fastingStartTime: userData.fastingStartTime,
+    mealsPerDay: (userData as any).mealsPerDay,
+  });
+
+  let fastingContext: string | undefined;
+  if (userData.fastingHours && userData.fastingStartTime) {
+    const eatingHours = 24 - userData.fastingHours;
+    fastingContext =
+      `INTERMITTENT FASTING: ${userData.fastingHours}:${eatingHours} schedule. Fasting begins at ${userData.fastingStartTime}. ` +
+      `Only generate meals for the eating window: ${activeSlots.join(", ")}. ` +
+      (activeSlots.includes("breakfast")
+        ? "Do NOT omit breakfast — it IS within the eating window."
+        : "Do NOT include a breakfast meal. No breakfast.");
+  } else if ((userData as any).mealsPerDay && (userData as any).mealsPerDay < 4) {
+    fastingContext = `MEAL FREQUENCY: User eats ${(userData as any).mealsPerDay} meals per day. Only generate: ${activeSlots.join(", ")}.`;
+  }
+
   // Get goal context for prompt
   const goalContextStr = planTemplate
     ? PLAN_TEMPLATE_STYLES[planTemplate] || ""
@@ -782,6 +802,7 @@ const generateMealPlanWithGemini = async (
       targetCalories,
       planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate)),
       userData.dislikes,
+      activeSlots,
     );
 
     const multiDayPrompt = buildWeeklyPlanPrompt({
@@ -794,6 +815,7 @@ const generateMealPlanWithGemini = async (
       styleNote: goalContextStr,
       moodContext,
       language,
+      fastingContext,
     });
 
     // generateMultiDayPlan rotates across candidateModels and throws
@@ -838,6 +860,7 @@ const generateMealPlanWithGemini = async (
             dayData.dateStr,
           ),
           userData.dislikes,
+          activeSlots,
         );
 
         const singleDayPrompt = buildWeeklyPlanPrompt({
@@ -850,6 +873,7 @@ const generateMealPlanWithGemini = async (
           styleNote: goalContextStr,
           moodContext,
           language,
+          fastingContext,
         });
 
         const result = await generateSingleDayPlan(
@@ -902,6 +926,7 @@ const generateMealPlanWithGemini = async (
           "repair",
         ),
         userData.dislikes,
+        activeSlots,
       );
 
       const repairPrompt = buildWeeklyPlanPrompt({
@@ -915,6 +940,7 @@ const generateMealPlanWithGemini = async (
         moodContext,
         repairNote,
         language,
+        fastingContext,
       });
 
       try {
@@ -1069,6 +1095,25 @@ const generateMealPlanWithOpenRouter = async (
     ? PLAN_TEMPLATE_STYLES[planTemplate] || ""
     : goalAdjustments.goalDescription || "";
 
+  const activeSlots = computeActiveSlots({
+    fastingHours: userData.fastingHours,
+    fastingStartTime: userData.fastingStartTime,
+    mealsPerDay: (userData as any).mealsPerDay,
+  });
+
+  let fastingContext: string | undefined;
+  if (userData.fastingHours && userData.fastingStartTime) {
+    const eatingHours = 24 - userData.fastingHours;
+    fastingContext =
+      `INTERMITTENT FASTING: ${userData.fastingHours}:${eatingHours} schedule. Fasting begins at ${userData.fastingStartTime}. ` +
+      `Only generate meals for the eating window: ${activeSlots.join(", ")}. ` +
+      (activeSlots.includes("breakfast")
+        ? "Do NOT omit breakfast — it IS within the eating window."
+        : "Do NOT include a breakfast meal. No breakfast.");
+  } else if ((userData as any).mealsPerDay && (userData as any).mealsPerDay < 4) {
+    fastingContext = `MEAL FREQUENCY: User eats ${(userData as any).mealsPerDay} meals per day. Only generate: ${activeSlots.join(", ")}.`;
+  }
+
   // Single-request batching (mirrors the Gemini path): all requested days in one
   // call minimizes request count against the fallback provider's limits too.
   const DAYS_PER_BATCH = datesToGenerate.length;
@@ -1182,11 +1227,12 @@ const generateMealPlanWithOpenRouter = async (
       targetCalories,
       planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate)),
       userData.dislikes,
+      activeSlots,
     );
 
     const prompt = buildWeeklyPlanPrompt({
       userData, skeleton, constraints, targetCalories, macros,
-      recentMeals, styleNote: goalContextStr, moodContext, language,
+      recentMeals, styleNote: goalContextStr, moodContext, language, fastingContext,
     });
 
     const batchResults = await runOpenRouterPrompt(
@@ -1224,11 +1270,12 @@ const generateMealPlanWithOpenRouter = async (
         targetCalories,
         planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate), "repair"),
         userData.dislikes,
+        activeSlots,
       );
 
       const repairPrompt = buildWeeklyPlanPrompt({
         userData, skeleton: repairSkeleton, constraints, targetCalories, macros,
-        recentMeals, styleNote: goalContextStr, moodContext, repairNote, language,
+        recentMeals, styleNote: goalContextStr, moodContext, repairNote, language, fastingContext,
       });
 
       const repaired = await runOpenRouterPrompt(
@@ -1264,7 +1311,20 @@ const generateMealPlanWithAI = async (
   recentMeals: string[] = [], // Dish names from earlier plans, to avoid repeats
 ): Promise<MealPlanResponse> => {
   try {
-    if (useMock) {
+    // Local-dev escape hatch: with no AI keys, opt into the canned mock plan by
+    // setting USE_MOCK_MEAL_PLAN=true. Hard-gated to non-production so a real
+    // deployment can NEVER silently serve a mock that ignores dietary
+    // restrictions — prod still fails loudly if its keys are missing.
+    const devMock =
+      process.env.USE_MOCK_MEAL_PLAN === "true" &&
+      process.env.NODE_ENV !== "production";
+    if (devMock && !useMock) {
+      logger.warn(
+        "[AI] USE_MOCK_MEAL_PLAN enabled (non-production) — returning a mock plan without calling any AI provider.",
+      );
+    }
+
+    if (useMock || devMock) {
       logger.info("Using mock data as requested");
       const mockPlan = generateFullWeek();
       return new Promise((resolve) =>

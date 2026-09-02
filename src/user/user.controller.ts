@@ -19,6 +19,8 @@ import {
 } from "@nestjs/swagger";
 import { UserService } from "./user.service";
 import { AuthGuard } from "../auth/auth.guard";
+import { UpdateUserDto } from "./dto/update-user.dto";
+import { resolveOwnUserId } from "../utils/ownership";
 
 @ApiTags("users")
 @Controller("users")
@@ -57,7 +59,11 @@ export class UserController {
   @Put(":id")
   @UseGuards(AuthGuard)
   @ApiBearerAuth("JWT-auth")
-  update(@Param("id") id: string, @Body() updateData: any, @Request() req) {
+  update(
+    @Param("id") id: string,
+    @Body() updateData: UpdateUserDto,
+    @Request() req
+  ) {
     const requesterId = req.user._id.toString();
     if (requesterId !== id) {
       throw new ForbiddenException("Access denied");
@@ -89,7 +95,7 @@ export class UserController {
   })
   @ApiResponse({ status: 404, description: "User not found" })
   getUserFavoriteMeals(@Param("userId") userId: string, @Request() req) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.userService.getUserFavoriteMeals(resolvedUserId);
   }
 
@@ -117,7 +123,7 @@ export class UserController {
     @Body() body: { isFavorite: boolean; mealId: string },
     @Request() req
   ) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.userService.updateUserFavoriteMeals(
       resolvedUserId,
       body.isFavorite,

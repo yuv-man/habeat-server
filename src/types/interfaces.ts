@@ -136,6 +136,7 @@ export interface IUserData {
   dislikes?: string[]; // disliked meals
   fastingHours?: number; // For 8-16 fasting diet type
   fastingStartTime?: string;
+  mealsPerDay?: number; // Optional: 2–4 meals per day (non-fasting users)
   foodRelationship?: string;
   emotionalTriggers?: string[];
   workoutFrequency?: number; // Number of workouts per week
@@ -500,6 +501,10 @@ export interface IDailyProgress extends Document {
 
 export interface JwtPayload {
   id: string;
+  /** Token version at sign time. Compared to the user's current tokenVersion
+   *  on every request; a mismatch means the token was revoked. Optional for
+   *  backward compatibility with tokens issued before revocation existed. */
+  tv?: number;
 }
 
 // Chat interfaces

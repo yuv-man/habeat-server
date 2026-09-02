@@ -125,7 +125,7 @@ const planSchema = new Schema<IPlan>(
     },
     generationStatus: {
       type: String,
-      enum: ["generating", "complete"],
+      enum: ["generating", "complete", "failed"],
       default: "generating",
     },
   },

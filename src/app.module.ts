@@ -2,7 +2,8 @@ import { Module } from "@nestjs/common";
 import { APP_GUARD } from "@nestjs/core";
 import { MongooseModule } from "@nestjs/mongoose";
 import { ConfigModule, ConfigService } from "@nestjs/config";
-import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
+import { ThrottlerModule } from "@nestjs/throttler";
+import { UserThrottlerGuard } from "./auth/guards/user-throttler.guard";
 import { AuthModule } from "./auth/auth.module";
 import { UserModule } from "./user/user.module";
 import { GeneratorModule } from "./generator/generator.module";
@@ -22,6 +23,7 @@ import { SubscriptionModule } from "./subscription/subscription.module";
 import { CBTModule } from "./cbt/cbt.module";
 import { SocialModule } from "./social/social.module";
 import { EatingProfileModule } from "./eating-profile/eating-profile.module";
+import { AnalyticsModule } from "./analytics/analytics.module";
 import logger from "./utils/logger";
 
 @Module({
@@ -95,9 +97,10 @@ import logger from "./utils/logger";
     CBTModule,
     SocialModule,
     EatingProfileModule,
+    AnalyticsModule,
   ],
   providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: UserThrottlerGuard },
   ],
 })
 export class AppModule {}

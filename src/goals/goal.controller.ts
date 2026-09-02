@@ -19,6 +19,7 @@ import {
 } from "@nestjs/swagger";
 import { GoalService } from "./goal.service";
 import { AuthGuard } from "../auth/auth.guard";
+import { resolveOwnUserId, actingUserId } from "../utils/ownership";
 import { CreateGoalDto, UpdateGoalDto, GenerateGoalDto } from "./dto";
 
 @ApiTags("goals")
@@ -47,8 +48,12 @@ export class GoalController {
     description: "Goal retrieved successfully",
   })
   @ApiResponse({ status: 404, description: "Goal not found" })
-  async getGoalById(@Param("userId") userId: string, @Param("id") id: string) {
-    return this.goalService.findById(id);
+  async getGoalById(
+    @Param("userId") userId: string,
+    @Param("id") id: string,
+    @Request() req
+  ) {
+    return this.goalService.findById(id, actingUserId(req));
   }
 
   @Post()
@@ -71,8 +76,12 @@ export class GoalController {
     description: "Goal updated successfully",
   })
   @ApiResponse({ status: 404, description: "Goal not found" })
-  async updateGoal(@Param("id") id: string, @Body() body: UpdateGoalDto) {
-    return this.goalService.update(id, body);
+  async updateGoal(
+    @Param("id") id: string,
+    @Body() body: UpdateGoalDto,
+    @Request() req
+  ) {
+    return this.goalService.update(id, body, actingUserId(req));
   }
 
   @Delete(":id")
@@ -83,8 +92,8 @@ export class GoalController {
     description: "Goal deleted successfully",
   })
   @ApiResponse({ status: 404, description: "Goal not found" })
-  async deleteGoal(@Param("id") id: string) {
-    return this.goalService.delete(id);
+  async deleteGoal(@Param("id") id: string, @Request() req) {
+    return this.goalService.delete(id, actingUserId(req));
   }
 
   @Post(":userId/generate")
@@ -99,9 +108,10 @@ export class GoalController {
   @ApiResponse({ status: 400, description: "Failed to generate goal" })
   async generateGoal(
     @Param("userId") userId: string,
-    @Body() body: GenerateGoalDto
+    @Body() body: GenerateGoalDto,
+    @Request() req
   ) {
-    return this.goalService.generateGoal(userId, body);
+    return this.goalService.generateGoal(resolveOwnUserId(req, userId), body);
   }
 
   @Post(":id/progress")
@@ -128,9 +138,10 @@ export class GoalController {
   @ApiResponse({ status: 404, description: "Goal not found" })
   async addProgressEntry(
     @Param("id") id: string,
+    @Request() req,
     @Body() body: { value: number; date?: string }
   ) {
-    return this.goalService.addProgressEntry(id, body.value, body.date);
+    return this.goalService.addProgressEntry(id, body.value, actingUserId(req), body.date);
   }
 
   @Put(":id/milestones/:milestoneId")
@@ -154,8 +165,9 @@ export class GoalController {
   async updateMilestone(
     @Param("id") id: string,
     @Param("milestoneId") milestoneId: string,
-    @Body() body: { completed: boolean }
+    @Body() body: { completed: boolean },
+    @Request() req
   ) {
-    return this.goalService.updateMilestone(id, milestoneId, body.completed);
+    return this.goalService.updateMilestone(id, milestoneId, body.completed, actingUserId(req));
   }
 }

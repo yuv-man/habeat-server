@@ -19,7 +19,25 @@ import {
   CognitiveDistortionType,
   CBTExerciseType,
   MealType,
+  EatingTrigger,
+  EatingFacilitator,
+  EATING_TRIGGERS,
+  EATING_FACILITATORS,
 } from "./cbt.model";
+
+export class DailyReflectionDto {
+  @ApiPropertyOptional({ enum: EATING_FACILITATORS, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(EATING_FACILITATORS, { each: true })
+  easedBy?: EatingFacilitator[];
+
+  @ApiPropertyOptional({ enum: EATING_TRIGGERS, isArray: true })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(EATING_TRIGGERS, { each: true })
+  hinderedBy?: EatingTrigger[];
+}
 
 // Mood DTOs
 export class LogMoodDto {
@@ -76,6 +94,12 @@ export class LogMoodDto {
   @IsOptional()
   @IsArray()
   triggers?: MoodTrigger[];
+
+  @ApiPropertyOptional({ type: DailyReflectionDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DailyReflectionDto)
+  reflection?: DailyReflectionDto;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -136,6 +160,12 @@ export class UpdateMoodDto {
   @IsOptional()
   @IsArray()
   triggers?: MoodTrigger[];
+
+  @ApiPropertyOptional({ type: DailyReflectionDto })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => DailyReflectionDto)
+  reflection?: DailyReflectionDto;
 }
 
 // Thought DTOs

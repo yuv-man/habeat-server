@@ -1,3 +1,4 @@
+import { Throttle } from "@nestjs/throttler";
 import {
   Controller,
   Get,
@@ -59,6 +60,7 @@ export class ChatController {
   }
 
   @Post(":userId/message")
+  @Throttle({ default: { limit: 30, ttl: 3_600_000 } })
   @ApiOperation({
     summary: "Send a message to the nutrition chatbot and get a response",
   })

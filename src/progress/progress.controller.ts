@@ -13,23 +13,28 @@ import {
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { ProgressService } from "./progress.service";
 import { AuthGuard } from "../auth/auth.guard";
+import { resolveOwnUserId } from "../utils/ownership";
+import { AnalyticsService } from "../analytics/analytics.service";
 
 @ApiTags("progress")
 @Controller("progress")
 @UseGuards(AuthGuard)
 @ApiBearerAuth("JWT-auth")
 export class ProgressController {
-  constructor(private progressService: ProgressService) {}
+  constructor(
+    private progressService: ProgressService,
+    private analyticsService: AnalyticsService
+  ) {}
 
   @Get("today/:userId")
   async getTodayProgress(@Param("userId") userId: string, @Request() req) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.progressService.getTodayProgress(resolvedUserId);
   }
 
   @Delete("today/:userId")
   async resetTodayProgress(@Param("userId") userId: string, @Request() req) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.progressService.resetTodayProgress(resolvedUserId);
   }
 
@@ -39,7 +44,7 @@ export class ProgressController {
     @Param("date") date: string,
     @Request() req
   ) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.progressService.getProgressByDate(resolvedUserId, date);
   }
 
@@ -50,7 +55,7 @@ export class ProgressController {
     @Query("endDate") endDate: string,
     @Request() req
   ) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.progressService.getProgressByDateRange(
       resolvedUserId,
       startDate,
@@ -65,12 +70,16 @@ export class ProgressController {
     @Request() req,
     @Body() body: { mealType: "breakfast" | "lunch" | "dinner" | "snacks" }
   ) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
-    return this.progressService.markMealCompleted(
+    const resolvedUserId = resolveOwnUserId(req, userId);
+    const result = await this.progressService.markMealCompleted(
       resolvedUserId,
       mealId,
       body.mealType
     );
+    this.analyticsService.capture(resolvedUserId, "meal_completed", {
+      mealType: body.mealType,
+    });
+    return result;
   }
 
   @Post("custom-calories/:userId")
@@ -79,7 +88,7 @@ export class ProgressController {
     @Body() body: { calories: number; mealName: string },
     @Request() req
   ) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.progressService.addCustomCalories(
       resolvedUserId,
       body.calories,
@@ -89,7 +98,7 @@ export class ProgressController {
 
   @Post("water/:userId")
   async addWaterGlass(@Param("userId") userId: string, @Request() req) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.progressService.addWaterGlass(resolvedUserId);
   }
 
@@ -99,7 +108,7 @@ export class ProgressController {
     @Body() body: { glasses: number },
     @Request() req
   ) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.progressService.updateWaterIntake(resolvedUserId, body.glasses);
   }
 
@@ -118,7 +127,7 @@ export class ProgressController {
     },
     @Request() req
   ) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     const { name, duration, caloriesBurned, category } = body.workout;
     return this.progressService.markWorkoutCompleted(
       resolvedUserId,
@@ -131,7 +140,7 @@ export class ProgressController {
 
   @Get("weekly/:userId")
   async getWeeklySummary(@Param("userId") userId: string, @Request() req) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.progressService.getWeeklySummary(resolvedUserId);
   }
 
@@ -141,7 +150,7 @@ export class ProgressController {
     @Query("period") period: "week" | "month" = "week",
     @Request() req
   ) {
-    const resolvedUserId = userId === "me" ? req.user._id.toString() : userId;
+    const resolvedUserId = resolveOwnUserId(req, userId);
     return this.progressService.getAnalytics(resolvedUserId, period);
   }
 }

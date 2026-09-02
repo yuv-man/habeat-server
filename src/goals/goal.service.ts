@@ -38,8 +38,13 @@ export class GoalService {
     };
   }
 
-  async findById(id: string) {
-    const goal = await this.goalModel.findById(id).lean().exec();
+  async findById(id: string, ownerUserId: string) {
+    // Scope by owner: a goal that isn't yours reads as "not found", so ids
+    // can't be probed for existence.
+    const goal = await this.goalModel
+      .findOne({ _id: id, userId: ownerUserId })
+      .lean()
+      .exec();
     if (!goal) {
       throw new NotFoundException("Goal not found");
     }
@@ -72,9 +77,11 @@ export class GoalService {
     };
   }
 
-  async update(id: string, updateData: UpdateGoalDto) {
+  async update(id: string, updateData: UpdateGoalDto, ownerUserId: string) {
     const updatedGoal = await this.goalModel
-      .findByIdAndUpdate(id, updateData, { new: true })
+      .findOneAndUpdate({ _id: id, userId: ownerUserId }, updateData, {
+        new: true,
+      })
       .lean()
       .exec();
 
@@ -94,8 +101,11 @@ export class GoalService {
     };
   }
 
-  async delete(id: string) {
-    const goal = await this.goalModel.findByIdAndDelete(id).lean().exec();
+  async delete(id: string, ownerUserId: string) {
+    const goal = await this.goalModel
+      .findOneAndDelete({ _id: id, userId: ownerUserId })
+      .lean()
+      .exec();
     if (!goal) {
       throw new NotFoundException("Goal not found");
     }
@@ -105,8 +115,16 @@ export class GoalService {
     };
   }
 
-  async addProgressEntry(goalId: string, value: number, date?: string) {
-    const goal = await this.goalModel.findById(goalId);
+  async addProgressEntry(
+    goalId: string,
+    value: number,
+    ownerUserId: string,
+    date?: string
+  ) {
+    const goal = await this.goalModel.findOne({
+      _id: goalId,
+      userId: ownerUserId,
+    });
     if (!goal) {
       throw new NotFoundException("Goal not found");
     }
@@ -136,9 +154,13 @@ export class GoalService {
   async updateMilestone(
     goalId: string,
     milestoneId: string,
-    completed: boolean
+    completed: boolean,
+    ownerUserId: string
   ) {
-    const goal = await this.goalModel.findById(goalId);
+    const goal = await this.goalModel.findOne({
+      _id: goalId,
+      userId: ownerUserId,
+    });
     if (!goal) {
       throw new NotFoundException("Goal not found");
     }

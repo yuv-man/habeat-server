@@ -13,6 +13,7 @@ import logger from "../utils/logger";
 import { JwtPayload } from "../types/interfaces";
 import { User } from "src/user/user.model";
 import { isMongoObjectIdString } from "../utils/mongoObjectId";
+import { isTokenRevoked } from "./token-version";
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -51,6 +52,14 @@ export class AuthGuard implements CanActivate {
         .lean();
       if (!user) {
         throw new UnauthorizedException("User not found");
+      }
+
+      // Reject revoked tokens. Missing tv (tokens issued before revocation
+      // existed) is treated as version 0, which matches every user's default —
+      // so old sessions keep working until the user's version is actually
+      // bumped (logout, incident response).
+      if (isTokenRevoked(payload.tv, (user as any).tokenVersion)) {
+        throw new UnauthorizedException("Session expired. Please sign in again.");
       }
 
       request.user = user;

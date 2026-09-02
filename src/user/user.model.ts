@@ -201,6 +201,7 @@ const userSchemaDefinition = {
   emotionalTriggers: { type: [String], required: false, default: [] },
   fastingHours: { type: Number, required: false }, // For 8-16 fasting diet type
   fastingStartTime: { type: String, required: false }, // Fasting start time
+  mealsPerDay: { type: Number, required: false }, // Optional: 2–4 meals per day
   preferences: {
     type: Map,
     of: mongoose.Schema.Types.Mixed,
@@ -218,6 +219,12 @@ const userSchemaDefinition = {
     default: "user",
     required: false,
   },
+  // Bumped to revoke every outstanding token for this user (logout-everywhere,
+  // incident response). Tokens carry the version they were signed at; the auth
+  // guard rejects any whose version is stale. Default 0 so existing tokens
+  // (which predate this field and carry no version) keep working until a
+  // revocation actually happens — no forced mass logout.
+  tokenVersion: { type: Number, default: 0, required: false },
   // Subscription tier
   subscriptionTier: {
     type: String,

@@ -83,15 +83,12 @@ async function bootstrap() {
         return callback(null, true);
       }
 
-      // In production, be more permissive for mobile apps
-      // Some Android apps might send unexpected origins
-      if (process.env.NODE_ENV === "production") {
-        logger.warn(
-          `CORS: Allowing origin in production (mobile app): ${origin}`,
-        );
-        return callback(null, true);
-      }
-
+      // Everything else is blocked in every environment. The previous code
+      // reflected ANY origin back in production with credentials:true, which
+      // nullified CORS on the one deployment that matters. Native mobile
+      // clients are already covered above (they send no Origin, or a
+      // capacitor:///ionic:///file:// scheme); only unknown *browser* origins
+      // reach here, which is exactly what should be refused.
       logger.warn(`CORS: Blocking origin: ${origin}`);
       return callback(new Error(`Not allowed by CORS: ${origin}`));
     },

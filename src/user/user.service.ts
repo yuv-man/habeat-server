@@ -39,7 +39,35 @@ export class UserService {
     return user;
   }
 
+  // Fields that must never be set through the generic user-update path,
+  // regardless of what a caller passes. The controller's UpdateUserDto already
+  // strips these on the HTTP boundary; this is the second lock, protecting any
+  // internal caller that hands us a raw object.
+  private static readonly PROTECTED_UPDATE_FIELDS = [
+    "role",
+    "subscriptionTier",
+    "subscriptionStatus",
+    "subscriptionEndDate",
+    "stripeCustomerId",
+    "stripeSubscriptionId",
+    "oauthProvider",
+    "oauthId",
+    "password",
+    "email",
+    "engagement",
+    "mealLearningProfile",
+    "_id",
+    "id",
+  ];
+
   async update(id: string, updateData: any) {
+    // Strip privilege- and billing-bearing fields before anything touches Mongo.
+    if (updateData && typeof updateData === "object") {
+      for (const field of UserService.PROTECTED_UPDATE_FIELDS) {
+        if (field in updateData) delete updateData[field];
+      }
+    }
+
     // Compress profile picture if provided
     if (updateData.profilePicture && isBase64Image(updateData.profilePicture)) {
       try {
