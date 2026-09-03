@@ -8,6 +8,7 @@ import { EatingProfileAgent } from "./eating-profile.agent";
 import { PATTERN_BANK, BankPattern } from "./banks/patterns.bank";
 import { SUGGESTION_BANK, BankSuggestion } from "./banks/suggestions.bank";
 import logger from "../utils/logger";
+import { getAppConnection } from "../utils/mongo-connection";
 
 function filterBank<T extends { tags: string[]; priority: number }>(
   bank: T[],
@@ -107,9 +108,14 @@ export class EatingProfileService {
     await this.agent.refreshScores(userId);
 
     // Count actual correlations to decide AI tier
-    const correlationCount = await mongoose.connection
-      .collection("mealmoodcorrelations")
-      .countDocuments({ userId: new mongoose.Types.ObjectId(userId) });
+    // Same root cause as the enrichment helpers: mongoose.connection is the
+    // default singleton Nest never opens, so this buffered until it timed out.
+    const connection = getAppConnection();
+    const correlationCount = connection
+      ? await connection
+          .collection("mealmoodcorrelations")
+          .countDocuments({ userId: new mongoose.Types.ObjectId(userId) })
+      : 0;
 
     const newDataPoints = correlationCount - totalCount;
 

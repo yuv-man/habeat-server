@@ -13,6 +13,7 @@ import {
 import { ingredientCategories } from "./ingredientCategories";
 import mongoose from "mongoose";
 import logger from "./logger";
+import { isMongoReady, getModelSafe } from "./mongo-connection";
 import {
   resolveDietaryConstraints,
   findMealViolations,
@@ -428,8 +429,14 @@ export const convertRecipeIngredientsToMealFormat = (
 // END INGREDIENT CONVERSION HELPERS
 // ============================================================================
 
-// Helper to get Meal model at runtime (after NestJS has registered it)
-const getMealModel = () => mongoose.model("Meal");
+// Helper to get Meal model at runtime (after NestJS has registered it).
+// Resolved through mongo-connection: Nest opens its own connection, so
+// mongoose.model("Meal") would bind to the default connection that never opens.
+const getMealModel = () => {
+  const model = getModelSafe("Meal");
+  if (!model) throw new Error("Meal model unavailable: no open Mongo connection");
+  return model;
+};
 
 // Helper to escape special regex characters to prevent regex injection attacks
 export const escapeRegex = (str: string): string => {
@@ -1560,8 +1567,7 @@ export const transformWeeklyPlan = async (
   const mealLookup = new Map();
 
   try {
-    const mongooseConnection = mongoose.connection;
-    if (mongooseConnection.readyState === 1) {
+    if (isMongoReady()) {
       const MealModel = getMealModel();
       const findQuery = MealModel.find({
         $or: allMeals.map((meal) => ({
@@ -1600,8 +1606,7 @@ export const transformWeeklyPlan = async (
 
   if (newMeals.length > 0) {
     try {
-      const mongooseConnection = mongoose.connection;
-      if (mongooseConnection.readyState === 1) {
+      if (isMongoReady()) {
         const MealModel = getMealModel();
         const insertPromise = MealModel.insertMany(
           newMeals.map((meal) => ({
@@ -2131,8 +2136,7 @@ export const enrichPlanWithFavoriteMeals = async (
       return planResponse;
     }
 
-    const mongooseConnection = mongoose.connection;
-    if (mongooseConnection.readyState !== 1) {
+    if (!isMongoReady()) {
       logger.warn(
         "[enrichPlanWithFavoriteMeals] MongoDB not connected, skipping enrichment"
       );
@@ -2374,8 +2378,7 @@ export const enrichPlanWithDBMeals = async (
       return planResponse;
     }
 
-    const mongooseConnection = mongoose.connection;
-    if (mongooseConnection.readyState !== 1) {
+    if (!isMongoReady()) {
       logger.warn(
         "[enrichPlanWithDBMeals] MongoDB not connected, skipping DB enrichment"
       );
@@ -2453,9 +2456,14 @@ export const enrichPlanWithDBMeals = async (
           },
         };
 
-        // Exclude allergens
-        if (userData.allergies && userData.allergies.length > 0) {
-          const allergenRegex = new RegExp(userData.allergies.join("|"), "i");
+        // Exclude allergens. Allergies are free text, so every term must be
+        // escaped: an unescaped "(" or "a*+" makes `new RegExp` throw and takes
+        // down the whole generation, and a crafted term is a ReDoS vector.
+        const allergenTerms = (userData.allergies || [])
+          .map((a: string) => escapeRegex(String(a).trim()))
+          .filter(Boolean);
+        if (allergenTerms.length > 0) {
+          const allergenRegex = new RegExp(allergenTerms.join("|"), "i");
           query.$nor = [
             { name: { $regex: allergenRegex } },
             { "ingredients.0": { $regex: allergenRegex } },

@@ -10,7 +10,7 @@ import {
   Min,
   Max,
 } from "class-validator";
-import { SafeText, SafeTextArray } from "../../utils/safe-input.decorator";
+import { SafeText, SafeTextArray, SafeTermArray } from "../../utils/safe-input.decorator";
 
 /**
  * The ONLY fields a user may set on their own record via `PUT /users/:id`.
@@ -88,24 +88,25 @@ export class UpdateUserDto {
   path?: string;
 
   @IsOptional()
-  @IsArray()
-  @SafeTextArray(60)
+  @SafeTermArray()
   allergies?: string[];
 
   @IsOptional()
-  @IsArray()
-  @SafeTextArray(60)
+  @SafeTermArray()
   dietaryRestrictions?: string[];
 
   @IsOptional()
-  @IsArray()
-  @SafeTextArray(60)
+  @SafeTermArray()
   foodPreferences?: string[];
 
   @IsOptional()
-  @IsArray()
-  @SafeTextArray(60)
+  @SafeTermArray()
   dislikes?: string[];
+
+  // Advisory flags from POST /food-terms/validate that the user chose to keep.
+  @IsOptional()
+  @SafeTermArray()
+  unrecognisedTerms?: string[];
 
   @IsOptional()
   @SafeText(60)

@@ -441,6 +441,7 @@ export interface WeeklyPromptInput {
     path?: string;
     dislikes?: string[];
     foodPreferences?: string[];
+    unrecognisedTerms?: string[];
   };
   skeleton: PlannedDay[];
   constraints: DietaryConstraints;
@@ -487,7 +488,21 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   } = input;
   const needsEnglishName = language.toLowerCase() !== "en";
 
-  const dislikes = (userData.dislikes || []).filter(Boolean);
+  // Terms the user was warned about but kept ("white socks" as a dislike) are
+  // dropped before the prompt: they are noise that costs tokens and competes
+  // with real instructions. Allergies are deliberately NOT filtered this way —
+  // they flow through `constraints`, so a wrongly flagged allergen still binds.
+  const unrecognised = new Set(
+    (userData.unrecognisedTerms || [])
+      .filter(Boolean)
+      .map((t: string) => t.trim().toLowerCase()),
+  );
+  const keepRecognised = (list: string[]) =>
+    unrecognised.size
+      ? list.filter((t) => !unrecognised.has(String(t).trim().toLowerCase()))
+      : list;
+
+  const dislikes = keepRecognised((userData.dislikes || []).filter(Boolean));
   const constraintBlock = buildDietaryConstraintBlock(constraints, dislikes);
 
   // Preferences MUST be filtered against the hard constraints before they reach
@@ -496,7 +511,7 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   // the same prompt that forbids meat — and the model resolves that
   // contradiction by cooking the steak.
   const { allowed: prefs, removed: droppedPrefs } = filterFoodPreferences(
-    (userData.foodPreferences || []).filter(Boolean),
+    keepRecognised((userData.foodPreferences || []).filter(Boolean)),
     constraints,
   );
   if (droppedPrefs.length) {

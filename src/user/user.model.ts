@@ -195,6 +195,11 @@ const userSchemaDefinition = {
   allergies: { type: [String], required: false, default: [] },
   dietaryRestrictions: { type: [String], required: false, default: [] },
   foodPreferences: { type: [String], required: false, default: [] }, // food preferences from KYC (e.g., "Italian", "Seafood")
+  // Terms the user kept after we flagged them as probably-not-food ("white
+  // socks"). Stored so the UI can still show them and stop re-asking, but
+  // excluded from generator prompts — see meal-plan-prompt.ts. Allergies are
+  // never filtered by this list: a wrongly flagged allergen must still apply.
+  unrecognisedTerms: { type: [String], required: false, default: [] },
   favoriteMeals: { type: [String], required: false, default: [] }, // actual meal IDs that user has favorited
   dislikes: { type: [String], required: false, default: [] }, // disliked meals/foods
   foodRelationship: { type: String, required: false, default: "" },

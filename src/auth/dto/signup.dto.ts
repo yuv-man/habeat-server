@@ -11,6 +11,7 @@ import {
   ValidateIf,
 } from "class-validator";
 import { Type } from "class-transformer";
+import { SafeTermArray } from "../../utils/safe-input.decorator";
 
 export class UserDataDto {
   @ApiProperty({ example: "John Doe" })
@@ -112,14 +113,12 @@ export class UserDataDto {
 
   @ApiProperty({ type: [String], required: false })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
+  @SafeTermArray()
   allergies?: string[];
 
   @ApiProperty({ type: [String], required: false })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
+  @SafeTermArray()
   dietaryRestrictions?: string[];
 
   @ApiProperty({
@@ -128,8 +127,7 @@ export class UserDataDto {
     description: "Food preferences/cuisines from KYC (not actual meal IDs)",
   })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
+  @SafeTermArray()
   foodPreferences?: string[];
 
   @ApiProperty({
@@ -138,9 +136,13 @@ export class UserDataDto {
     example: ["Cilantro", "Eggplant", "Tofu"],
   })
   @IsOptional()
-  @IsArray()
-  @IsString({ each: true })
+  @SafeTermArray()
   dislikes?: string[];
+
+  @ApiProperty({ type: [String], required: false })
+  @IsOptional()
+  @SafeTermArray()
+  unrecognisedTerms?: string[];
 
   @ApiProperty({
     example: "free",

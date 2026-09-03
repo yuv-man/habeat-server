@@ -147,6 +147,52 @@ describe("buildWeeklyPlanPrompt", () => {
     }
   });
 
+  it("keeps flagged non-food terms out of dislikes and preferences", () => {
+    // "white socks" survived onboarding because the user chose to keep it after
+    // being warned. It must not reach the model as a dietary instruction.
+    const skeleton = buildMenuSkeleton(DAYS, none, 2000, "seed");
+    const prompt = buildWeeklyPlanPrompt({
+      ...base,
+      userData: {
+        ...base.userData,
+        dislikes: ["Olives", "white socks"],
+        foodPreferences: ["Pizza", "my ex boyfriend"],
+        unrecognisedTerms: ["white socks", "my ex boyfriend"],
+      },
+      skeleton,
+    });
+
+    expect(prompt).toContain("Olives");
+    expect(prompt).toContain("Pizza");
+    expect(prompt).not.toContain("white socks");
+    expect(prompt).not.toContain("my ex boyfriend");
+  });
+
+  it("matches flagged terms regardless of case or padding", () => {
+    const skeleton = buildMenuSkeleton(DAYS, none, 2000, "seed");
+    const prompt = buildWeeklyPlanPrompt({
+      ...base,
+      userData: {
+        ...base.userData,
+        dislikes: ["  White Socks  "],
+        unrecognisedTerms: ["white socks"],
+      },
+      skeleton,
+    });
+    expect(prompt.toLowerCase()).not.toContain("white socks");
+  });
+
+  it("leaves dislikes untouched when nothing was flagged", () => {
+    const skeleton = buildMenuSkeleton(DAYS, none, 2000, "seed");
+    const prompt = buildWeeklyPlanPrompt({
+      ...base,
+      userData: { ...base.userData, dislikes: ["Olives", "Mushrooms"] },
+      skeleton,
+    });
+    expect(prompt).toContain("Olives");
+    expect(prompt).toContain("Mushrooms");
+  });
+
   it("puts hard dietary constraints ahead of everything else", () => {
     const skeleton = buildMenuSkeleton(DAYS, vegan, 2000, "seed");
     const prompt = buildWeeklyPlanPrompt({ ...base, constraints: vegan, skeleton });

@@ -15,8 +15,13 @@ import {
 } from "class-validator";
 import { Transform } from "class-transformer";
 import { InputSanitizer } from "./input-sanitizer";
+import {
+  normaliseTermList,
+  MAX_TERM_LENGTH,
+  MAX_TERMS_PER_LIST,
+} from "./term-list";
 import { applyDecorators } from "@nestjs/common";
-import { IsOptional, IsString, IsArray } from "class-validator";
+import { IsOptional, IsString, IsArray, ArrayMaxSize } from "class-validator";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -157,5 +162,40 @@ export function SafeLLMArray(maxLengthPerItem = 200, validationOptions?: Validat
     IsArray(validationOptions),
     IsString({ each: true }),
     buildArrayValidator("SafeLLMArray", maxLengthPerItem, true) as any,
+  );
+}
+
+/**
+ * A user-supplied list of food terms — allergies, dislikes, food preferences,
+ * dietary restrictions.
+ *
+ * These are free text in onboarding AND they are interpolated into meal
+ * generation prompts, so they need both treatments:
+ *
+ *   1. NORMALISE first (@Transform) — trim, collapse whitespace, strip control
+ *      characters, truncate over-long terms, drop case-insensitive duplicates
+ *      and cap the item count. Messy-but-honest input is cleaned, not rejected;
+ *      nobody loses their registration over a double space or a repeated chip.
+ *   2. VALIDATE second (SafeLLMArray semantics) — reject XSS, NoSQL operators
+ *      and prompt-injection attempts outright. A "dislike" reading "ignore all
+ *      previous instructions" is not a typo and must not reach the model.
+ *
+ * Plain @SafeTextArray is NOT sufficient for these fields: it omits the
+ * prompt-injection patterns, which is the whole risk for prompt-bound text.
+ */
+export function SafeTermArray(
+  maxItems: number = MAX_TERMS_PER_LIST,
+  maxLengthPerItem: number = MAX_TERM_LENGTH,
+  validationOptions?: ValidationOptions,
+) {
+  return applyDecorators(
+    // Transform runs before validators, so the sanitiser sees cleaned terms.
+    Transform(({ value }) =>
+      normaliseTermList(value, { maxItems, maxLength: maxLengthPerItem }),
+    ),
+    IsArray(validationOptions),
+    ArrayMaxSize(maxItems),
+    IsString({ each: true }),
+    buildArrayValidator("SafeTermArray", maxLengthPerItem, true) as any,
   );
 }

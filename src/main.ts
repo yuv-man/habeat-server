@@ -9,6 +9,7 @@ import helmet from "helmet";
 import type { Connection } from "mongoose";
 import { getConnectionToken } from "@nestjs/mongoose";
 import logger from "./utils/logger";
+import { setAppConnection } from "./utils/mongo-connection";
 
 dotenv.config();
 
@@ -20,6 +21,9 @@ async function bootstrap() {
   // Nest uses mongoose.createConnection(), not mongoose.connect(); the default
   // mongoose.connection never opens, so listeners there never run.
   const mongoConnection = app.get<Connection>(getConnectionToken());
+  // Publish it so plain helper modules stop reaching for the dead default
+  // connection (favourite-meal enrichment, DB meal reuse, meal persistence).
+  setAppConnection(mongoConnection);
   const dbName = mongoConnection.db?.databaseName ?? "(unknown)";
   const mongoReadyMsg = `MongoDB connected successfully (database: ${dbName})`;
   console.log(mongoReadyMsg);

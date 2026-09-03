@@ -133,6 +133,7 @@ export interface IUserData {
   dietaryRestrictions?: string[]; // dietary restrictions
   foodPreferences?: string[]; // food preferences from KYC (e.g., "Italian", "Seafood", "Spicy")
   favoriteMeals?: string[]; // actual meal IDs that user has favorited
+  unrecognisedTerms?: string[]; // custom terms flagged as probably-not-food
   dislikes?: string[]; // disliked meals
   fastingHours?: number; // For 8-16 fasting diet type
   fastingStartTime?: string;

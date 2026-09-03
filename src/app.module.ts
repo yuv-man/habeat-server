@@ -24,6 +24,8 @@ import { CBTModule } from "./cbt/cbt.module";
 import { SocialModule } from "./social/social.module";
 import { EatingProfileModule } from "./eating-profile/eating-profile.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
+import { FoodTermsModule } from "./food-terms/food-terms.module";
+import { AiAgentModule } from "./ai-agent/ai-agent.module";
 import logger from "./utils/logger";
 
 @Module({
@@ -98,6 +100,8 @@ import logger from "./utils/logger";
     SocialModule,
     EatingProfileModule,
     AnalyticsModule,
+    FoodTermsModule,
+    AiAgentModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: UserThrottlerGuard },
