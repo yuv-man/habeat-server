@@ -14,6 +14,7 @@ import {
   MoodCategory,
   MealType,
   CBTExerciseCategory,
+  IBiometricSnapshot,
 } from "./cbt.model";
 import {
   LogMoodDto,
@@ -22,7 +23,7 @@ import {
   CompleteExerciseDto,
   LinkMoodToMealDto,
 } from "./cbt.dto";
-import { IUserData } from "../types/interfaces";
+import { IUserData, IDailyProgress } from "../types/interfaces";
 import { User } from "../user/user.model";
 import logger from "../utils/logger";
 import {
@@ -30,9 +31,19 @@ import {
   computeRiskWindows,
   formatWindow,
 } from "../utils/risk-windows";
+import {
+  extractLoggedMeals,
+  extractSkippedMeals,
+  nearestMood,
+  timestampMoods,
+  toLocalDateKey,
+  LoggedMeal,
+  MEAL_SLOTS,
+} from "../utils/eating-episodes";
+import { DailyProgress } from "../progress/progress.model";
 import { ChallengeService } from "../challenge/challenge.service";
 import { EngagementService } from "../engagement/engagement.service";
-import { EatingProfileService } from "../eating-profile/eating-profile.service";
+import { BehaviorService } from "../behavior/behavior.service";
 
 // Built-in exercise library
 const EXERCISE_LIBRARY = [
@@ -257,6 +268,53 @@ const EXERCISE_LIBRARY = [
   },
 ];
 
+/** Everything the emotional-eating signal reads, regardless of where the
+ *  episode came from. */
+interface SignalInput {
+  mealType: MealType;
+  /** When the meal was eaten — drives the late-night term and risk windows. */
+  at: Date;
+  hungerLevelBefore?: number;
+  moodBefore?: { moodLevel: number; moodCategory: MoodCategory };
+  moodAfter?: { moodLevel: number; moodCategory: MoodCategory };
+  /** Only present when the user actually answered. Absent ≠ "no". */
+  wasEmotionalEating?: boolean;
+  biometrics?: IBiometricSnapshot;
+}
+
+/** How an episode came to be known, and therefore how much it can claim.
+ *  - `linked`   the user attached a mood to this meal on purpose
+ *  - `inferred` the meal was ticked off and a mood was logged close to it
+ *  - `unscored` the meal was ticked off with no mood anywhere near it */
+type EpisodeSource = "linked" | "inferred" | "unscored";
+
+interface EatingEpisode {
+  date: string;
+  at: Date;
+  atIsExact: boolean;
+  mealType: MealType;
+  mealName: string;
+  source: EpisodeSource;
+  /** 0–1 emotional-eating signal, or null for an unscored episode. */
+  score: number | null;
+  emotional: boolean;
+  moodCategory: MoodCategory | null;
+  hungerLevelBefore: number | null;
+}
+
+/** A pattern the data actually supports. Never a placeholder — the client has
+ *  its own clearly-labelled example rows for the empty case. */
+export interface ObservedPattern {
+  key: string;
+  emoji: string;
+  name: string;
+  context: string;
+  frequency: string;
+  impact: "positive" | "negative" | "neutral";
+  /** Number of observations behind the row, so the client can rank or filter. */
+  evidence: number;
+}
+
 @Injectable()
 export class CBTService {
   constructor(
@@ -267,12 +325,14 @@ export class CBTService {
     @InjectModel(MealMoodCorrelation.name)
     private mealMoodModel: Model<IMealMoodCorrelation>,
     @InjectModel(User.name) private userModel: Model<IUserData>,
+    @InjectModel(DailyProgress.name)
+    private progressModel: Model<IDailyProgress>,
     @Inject(forwardRef(() => ChallengeService))
     private challengeService: ChallengeService,
     @Inject(forwardRef(() => EngagementService))
     private engagementService: EngagementService,
-    @Inject(forwardRef(() => EatingProfileService))
-    private eatingProfileService: EatingProfileService,
+    @Inject(forwardRef(() => BehaviorService))
+    private behaviorService: BehaviorService,
   ) {}
 
   // ============== MOOD ENDPOINTS ==============
@@ -740,9 +800,11 @@ export class CBTService {
       `Meal-mood correlation logged for user ${userId}: ${dto.mealName}`
     );
 
-    // Trigger eating profile update (fire-and-forget)
-    this.eatingProfileService.onNewCorrelation(userId).catch((e) =>
-      logger.error(`[CBTService] Eating profile update failed: ${e}`)
+    // Refresh the cheap rule-based scores on the behaviour profile
+    // (fire-and-forget). The expensive analysis is deliberately not triggered
+    // here — it runs on a schedule, away from anything a user is waiting on.
+    this.behaviorService.onNewCorrelation(userId).catch((e) =>
+      logger.error(`[CBTService] Behaviour profile update failed: ${e}`)
     );
 
     // Update challenge progress
@@ -781,38 +843,56 @@ export class CBTService {
     };
   }
 
-  private calculateRawSignalScore(correlation: IMealMoodCorrelation): number {
+  /**
+   * The inputs the emotional-eating signal actually needs. Extracted from the
+   * correlation document so the same scoring can run over a meal that was
+   * merely ticked off on the tracker with a mood logged beside it — the far
+   * more common case, and previously invisible to this pipeline.
+   */
+  private toSignalInput(correlation: IMealMoodCorrelation): SignalInput {
+    return {
+      mealType: correlation.mealType,
+      at: new Date(correlation.createdAt),
+      hungerLevelBefore: correlation.hungerLevelBefore,
+      moodBefore: correlation.moodBefore,
+      moodAfter: correlation.moodAfter,
+      wasEmotionalEating: correlation.wasEmotionalEating,
+      biometrics: correlation.biometrics,
+    };
+  }
+
+  private calculateRawSignalScore(input: SignalInput): number {
     let score = 0;
 
-    const hunger = correlation.hungerLevelBefore ?? 0;
+    const hunger = input.hungerLevelBefore ?? 0;
     if (hunger === 1) score += 0.40;
     else if (hunger === 2) score += 0.25;
     else if (hunger === 3) score += 0.10;
 
     const emotionalCategories = ["stressed", "anxious", "sad", "angry"];
-    const moodCat = correlation.moodBefore?.moodCategory ?? "";
+    const moodCat = input.moodBefore?.moodCategory ?? "";
     if (emotionalCategories.includes(moodCat)) score += 0.25;
     else if (moodCat === "tired") score += 0.15;
 
     if (
       emotionalCategories.includes(moodCat) &&
-      (correlation.moodBefore?.moodLevel ?? 0) >= 4
+      (input.moodBefore?.moodLevel ?? 0) >= 4
     ) {
       score += 0.15;
     }
 
-    const hour = new Date(correlation.createdAt).getHours();
-    if (correlation.mealType === "snacks" && hour >= 21) score += 0.10;
+    const hour = input.at.getHours();
+    if (input.mealType === "snacks" && hour >= 21) score += 0.10;
 
     if (
-      correlation.moodAfter &&
-      correlation.moodBefore &&
-      correlation.moodAfter.moodLevel <= correlation.moodBefore.moodLevel
+      input.moodAfter &&
+      input.moodBefore &&
+      input.moodAfter.moodLevel <= input.moodBefore.moodLevel
     ) {
       score += 0.10;
     }
 
-    const bio = correlation.biometrics;
+    const bio = input.biometrics;
     if (bio) {
       if (bio.stressLevel === 'high') score += 0.20;
       else if (bio.stressLevel === 'moderate') score += 0.10;
@@ -831,7 +911,7 @@ export class CBTService {
     }
 
     // Self-report is a strong signal, but weighted alongside others rather than overriding them
-    if (correlation.wasEmotionalEating) score += 0.30;
+    if (input.wasEmotionalEating) score += 0.30;
 
     return Math.min(1.0, score);
   }
@@ -874,17 +954,37 @@ export class CBTService {
     correlation: IMealMoodCorrelation,
     patternMap: Map<string, number>
   ): number {
-    let raw = this.calculateRawSignalScore(correlation);
+    return this.scoreSignal(this.toSignalInput(correlation), patternMap, {
+      selfReported: true,
+    });
+  }
 
-    if (correlation.moodBefore?.moodCategory && patternMap.size > 0) {
-      const dow = new Date(correlation.createdAt).getDay();
-      const key = `${dow}-${correlation.moodBefore.moodCategory}-${correlation.mealType}`;
+  /**
+   * Score one eating episode, 0–1.
+   *
+   * `selfReported` says whether `wasEmotionalEating` is an answer the user
+   * actually gave. On an inferred pairing it is absent rather than false, so
+   * the "trust the user's denial" cap must not fire — treating silence as a
+   * denial would score every inferred meal as mindful by default.
+   */
+  private scoreSignal(
+    input: SignalInput,
+    patternMap: Map<string, number>,
+    opts: { selfReported: boolean }
+  ): number {
+    let raw = this.calculateRawSignalScore(input);
+
+    if (input.moodBefore?.moodCategory && patternMap.size > 0) {
+      const dow = input.at.getDay();
+      const key = `${dow}-${input.moodBefore.moodCategory}-${input.mealType}`;
       if ((patternMap.get(key) ?? 0) >= 3) {
         raw = Math.min(1.0, raw + 0.15);
       }
     }
 
-    return this.applyScoreOverrides(raw, correlation.wasEmotionalEating);
+    return opts.selfReported
+      ? this.applyScoreOverrides(raw, Boolean(input.wasEmotionalEating))
+      : raw;
   }
 
   private generatePatternSpotlight(
@@ -904,22 +1004,54 @@ export class CBTService {
     return `We noticed you tend to reach for ${mealType} when feeling ${moodCategory} on ${dayNames[parseInt(dow)]}s`;
   }
 
+  /**
+   * Four weeks of mindful-eating scores.
+   *
+   * Built from the same episodes the headline score is — correlations *and*
+   * meals ticked off with a mood logged nearby. When it read correlations only
+   * the trend beneath the score was measuring a different, much smaller thing
+   * than the score itself.
+   */
   private async calculateWeeklyTrend(
     userId: string
   ): Promise<{ week: string; score: number }[]> {
     const now = new Date();
     const cutoff = new Date(now);
     cutoff.setDate(cutoff.getDate() - 28);
+    const cutoffKey = toLocalDateKey(cutoff);
 
-    const allCorrelations = await this.mealMoodModel
-      .find({
-        userId: new mongoose.Types.ObjectId(userId),
-        date: { $gte: cutoff.toISOString().split("T")[0] },
-      })
-      .lean()
-      .exec();
+    const [allCorrelations, progressDocs, moodEntries] = await Promise.all([
+      this.mealMoodModel
+        .find({
+          userId: new mongoose.Types.ObjectId(userId),
+          date: { $gte: cutoffKey },
+        })
+        .lean()
+        .exec(),
+      this.progressModel
+        .find({
+          userId: new mongoose.Types.ObjectId(userId),
+          dateKey: { $gte: cutoffKey },
+        })
+        .lean()
+        .exec(),
+      this.moodModel
+        .find({
+          userId: new mongoose.Types.ObjectId(userId),
+          date: { $gte: cutoffKey },
+        })
+        .lean()
+        .exec(),
+    ]);
 
     const emptyMap = new Map<string, number>();
+    const episodes = this.buildEpisodes({
+      correlations: allCorrelations,
+      loggedMeals: extractLoggedMeals(progressDocs as any[]),
+      moodEntries,
+      patternMap: emptyMap,
+    }).filter((e): e is EatingEpisode & { score: number } => e.score !== null);
+
     const result: { week: string; score: number }[] = [];
 
     for (let i = 3; i >= 0; i--) {
@@ -928,19 +1060,18 @@ export class CBTService {
       const weekStart = new Date(weekEnd);
       weekStart.setDate(weekStart.getDate() - 7);
 
-      const startStr = weekStart.toISOString().split("T")[0];
-      const endStr = weekEnd.toISOString().split("T")[0];
+      const startStr = toLocalDateKey(weekStart);
+      const endStr = toLocalDateKey(weekEnd);
 
-      const week = allCorrelations.filter(
-        (c) => c.date >= startStr && c.date <= endStr
+      const week = episodes.filter(
+        (e) => e.date >= startStr && e.date <= endStr
       );
 
       if (week.length === 0) {
         result.push({ week: startStr, score: 100 });
       } else {
-        const scores = week.map((c) => this.calculateFinalScore(c, emptyMap));
         const eePercent = Math.round(
-          (scores.reduce((s, x) => s + x, 0) / week.length) * 100
+          (week.reduce((s, e) => s + e.score, 0) / week.length) * 100
         );
         result.push({ week: startStr, score: 100 - eePercent });
       }
@@ -961,53 +1092,99 @@ export class CBTService {
     } else {
       startDate.setMonth(now.getMonth() - 1);
     }
-    const startDateStr = startDate.toISOString().split("T")[0];
-    const endDateStr = now.toISOString().split("T")[0];
+    // Local, not UTC: progress writes its dateKey in the user's local day, and
+    // a UTC boundary was dropping (or borrowing) the edges of the window.
+    const startDateStr = toLocalDateKey(startDate);
+    const endDateStr = toLocalDateKey(now);
 
-    const [correlations, moodEntries, mealLinkedMoods, user, patternMap, weeklyTrend] =
-      await Promise.all([
-        this.mealMoodModel
-          .find({
-            userId: new mongoose.Types.ObjectId(userId),
-            date: { $gte: startDateStr, $lte: endDateStr },
-          })
-          .lean()
-          .exec(),
-        this.moodModel
-          .find({
-            userId: new mongoose.Types.ObjectId(userId),
-            date: { $gte: startDateStr, $lte: endDateStr },
-          })
-          .lean()
-          .exec(),
-        this.moodModel
-          .find({
-            userId: new mongoose.Types.ObjectId(userId),
-            date: { $gte: startDateStr, $lte: endDateStr },
-            linkedMealId: { $exists: true },
-          })
-          .lean()
-          .exec(),
-        this.userModel.findById(userId).lean().exec(),
-        this.buildPatternMap(userId),
-        this.calculateWeeklyTrend(userId),
-      ]);
+    const [
+      correlations,
+      moodEntries,
+      mealLinkedMoods,
+      progressDocs,
+      user,
+      patternMap,
+      weeklyTrend,
+    ] = await Promise.all([
+      this.mealMoodModel
+        .find({
+          userId: new mongoose.Types.ObjectId(userId),
+          date: { $gte: startDateStr, $lte: endDateStr },
+        })
+        .lean()
+        .exec(),
+      this.moodModel
+        .find({
+          userId: new mongoose.Types.ObjectId(userId),
+          date: { $gte: startDateStr, $lte: endDateStr },
+        })
+        .lean()
+        .exec(),
+      this.moodModel
+        .find({
+          userId: new mongoose.Types.ObjectId(userId),
+          date: { $gte: startDateStr, $lte: endDateStr },
+          linkedMealId: { $exists: true },
+        })
+        .lean()
+        .exec(),
+      // The meals the user actually ticked off. Without these the whole page
+      // was blind to eating unless the user had gone out of their way to
+      // attach a mood to it.
+      this.progressModel
+        .find({
+          userId: new mongoose.Types.ObjectId(userId),
+          dateKey: { $gte: startDateStr, $lte: endDateStr },
+        })
+        .lean()
+        .exec(),
+      this.userModel.findById(userId).lean().exec(),
+      this.buildPatternMap(userId),
+      this.calculateWeeklyTrend(userId),
+    ]);
 
-    const totalMeals = correlations.length;
-    const scores = correlations.map((c) => this.calculateFinalScore(c, patternMap));
-    const scoreSum = scores.reduce((s, x) => s + x, 0);
+    // ── Build the unified episode list ───────────────────────────────────────
+    const loggedMeals = extractLoggedMeals(progressDocs as any[]);
+    const skippedMeals = extractSkippedMeals(progressDocs as any[], endDateStr);
+    const episodes = this.buildEpisodes({
+      correlations,
+      loggedMeals,
+      moodEntries,
+      patternMap,
+    });
+
+    const scoredEpisodes = episodes.filter(
+      (e): e is EatingEpisode & { score: number } => e.score !== null
+    );
+
+    const mealsLogged = loggedMeals.length;
+    const linkedMeals = correlations.length;
+    const inferredMeals = episodes.filter((e) => e.source === "inferred").length;
+    const unscoredMeals = episodes.filter((e) => e.source === "unscored").length;
+
+    // `totalMeals` stays the count of *analysable* episodes — the number the
+    // score is actually computed from — so the client's "do we have enough to
+    // show a score" gate keeps meaning what it meant.
+    const totalMeals = scoredEpisodes.length;
+    const scoreSum = scoredEpisodes.reduce((s, e) => s + e.score, 0);
 
     const emotionalEatingPercentage =
       totalMeals > 0 ? Math.round((scoreSum / totalMeals) * 100) : 0;
     const mindfulEatingScore = 100 - emotionalEatingPercentage;
-    const emotionalEatingInstances = scores.filter((s) => s > 0.5).length;
+    const emotionalEatingInstances = scoredEpisodes.filter((e) => e.emotional).length;
 
     // ── Satiety rate: meals eaten for genuine hunger (hungerLevelBefore ≥ 3) ──
-    const hungerDrivenMeals = correlations.filter(
-      (c) => (c.hungerLevelBefore ?? 0) >= 3
+    // Only meals where hunger was actually asked can answer this, so they are
+    // also the denominator — diluting it with meals that were never asked
+    // would report a low rate for a question the user was never put.
+    const hungerRated = episodes.filter((e) => (e.hungerLevelBefore ?? 0) > 0);
+    const hungerDrivenMeals = hungerRated.filter(
+      (e) => (e.hungerLevelBefore ?? 0) >= 3
     ).length;
     const satietyRate =
-      totalMeals > 0 ? Math.round((hungerDrivenMeals / totalMeals) * 100) : 0;
+      hungerRated.length > 0
+        ? Math.round((hungerDrivenMeals / hungerRated.length) * 100)
+        : 0;
 
     // ── Triggers: derive from emotional eating correlations + meal-linked mood entries ──
     // Maps moodCategory → eating trigger vocabulary
@@ -1030,12 +1207,14 @@ export class CBTService {
       if (at) (triggerTimes[trigger] ??= []).push(at);
     };
 
-    // From emotional eating correlations — derive trigger from moodBefore emotion
-    correlations
-      .filter((c) => c.wasEmotionalEating && c.moodBefore?.moodCategory)
-      .forEach((c) => {
-        const trigger = MOOD_TO_EATING_TRIGGER[c.moodBefore!.moodCategory];
-        if (trigger) noteTrigger(trigger, c.createdAt ? new Date(c.createdAt) : undefined);
+    // From eating episodes that read as emotional — the mood beside the meal
+    // names the trigger. Inferred episodes count here too: the meal is real and
+    // so is the mood, only the link between them is our inference.
+    episodes
+      .filter((e) => e.emotional && e.moodCategory)
+      .forEach((e) => {
+        const trigger = MOOD_TO_EATING_TRIGGER[e.moodCategory!];
+        if (trigger) noteTrigger(trigger, e.atIsExact ? e.at : undefined);
       });
 
     // From mood entries explicitly linked to meals — use their trigger tags.
@@ -1104,61 +1283,78 @@ export class CBTService {
     }
     const triggersAreFromOnboarding = observedTriggerCount === 0;
 
-    // ── Emotions: from meal-linked mood entries + correlation moodBefore ──
+    // ── Emotions: every mood we were able to place beside a meal ──
+    // A mood entry linked to a meal usually also produced a correlation, so it
+    // is already in `episodes`. Counting both sources unconditionally scored
+    // one feeling as two, inflating whichever emotion the user was most
+    // diligent about logging.
     const emotionCounts: Record<string, number> = {};
-    mealLinkedMoods.forEach((m) => {
-      emotionCounts[m.moodCategory] = (emotionCounts[m.moodCategory] || 0) + 1;
+    const episodeSlots = new Set(episodes.map((e) => `${e.date}|${e.mealType}`));
+    episodes.forEach((e) => {
+      if (!e.moodCategory) return;
+      emotionCounts[e.moodCategory] = (emotionCounts[e.moodCategory] || 0) + 1;
     });
-    correlations.forEach((c) => {
-      if (c.moodBefore?.moodCategory) {
-        emotionCounts[c.moodBefore.moodCategory] =
-          (emotionCounts[c.moodBefore.moodCategory] || 0) + 1;
-      }
-    });
+    mealLinkedMoods
+      .filter((m) => !episodeSlots.has(`${m.date}|${m.linkedMealType}`))
+      .forEach((m) => {
+        emotionCounts[m.moodCategory] = (emotionCounts[m.moodCategory] || 0) + 1;
+      });
 
     // ── Meal type breakdown ──
+    // `mealTypeBreakdown` counts emotional episodes per slot (what it always
+    // meant); `mealTypeLogged` counts every meal logged in that slot, which is
+    // what makes a "you log dinner most days" pattern statable.
     const mealTypeBreakdown = { breakfast: 0, lunch: 0, dinner: 0, snacks: 0 };
+    const mealTypeLogged = { breakfast: 0, lunch: 0, dinner: 0, snacks: 0 };
     const mealTypeScoreSum: Record<string, number> = { breakfast: 0, lunch: 0, dinner: 0, snacks: 0 };
     const mealTypeCount: Record<string, number> = { breakfast: 0, lunch: 0, dinner: 0, snacks: 0 };
 
-    correlations.forEach((c, i) => {
-      if (scores[i] > 0.5) mealTypeBreakdown[c.mealType]++;
-      mealTypeScoreSum[c.mealType] += scores[i];
-      mealTypeCount[c.mealType]++;
+    episodes.forEach((e) => {
+      mealTypeLogged[e.mealType]++;
+      if (e.score === null) return;
+      if (e.emotional) mealTypeBreakdown[e.mealType]++;
+      mealTypeScoreSum[e.mealType] += e.score;
+      mealTypeCount[e.mealType]++;
     });
 
-    const strongestMealType =
-      Object.entries(mealTypeCount)
-        .filter(([, count]) => count >= 2)
-        .map(([type]) => ({ type, avg: mealTypeScoreSum[type] / mealTypeCount[type] }))
-        .sort((a, b) => a.avg - b.avg)[0]?.type ?? null;
+    const slotAverages = MEAL_SLOTS.filter((slot) => mealTypeCount[slot] >= 2).map(
+      (slot) => ({
+        type: slot,
+        avg: mealTypeScoreSum[slot] / mealTypeCount[slot],
+        count: mealTypeCount[slot],
+      })
+    );
+    const rankedSlots = [...slotAverages].sort((a, b) => a.avg - b.avg);
+    const strongestMealType = rankedSlots[0]?.type ?? null;
+    const weakestSlot =
+      rankedSlots.length > 1 ? rankedSlots[rankedSlots.length - 1] : null;
 
     // ── Daily breakdown for the 7/30-day chart ──
     const dailyBreakdown: {
       date: string;
       mindfulScore: number | null;
       moodAvg: number | null;
+      mealsLogged: number;
+      mealsScored: number;
       hasData: boolean;
     }[] = [];
 
     for (let i = days - 1; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split("T")[0];
+      const dateStr = toLocalDateKey(d);
 
-      const dayCorrelations = correlations.filter((c) => c.date === dateStr);
+      const dayEpisodes = episodes.filter((e) => e.date === dateStr);
+      const dayScored = dayEpisodes.filter(
+        (e): e is EatingEpisode & { score: number } => e.score !== null
+      );
       const dayMoods = moodEntries.filter((m) => m.date === dateStr);
 
       const dayMindfulScore =
-        dayCorrelations.length > 0
+        dayScored.length > 0
           ? 100 -
             Math.round(
-              (dayCorrelations.reduce(
-                (s, c) => s + this.calculateFinalScore(c, patternMap),
-                0
-              ) /
-                dayCorrelations.length) *
-                100
+              (dayScored.reduce((s, e) => s + e.score, 0) / dayScored.length) * 100
             )
           : null;
 
@@ -1171,18 +1367,42 @@ export class CBTService {
         date: dateStr,
         mindfulScore: dayMindfulScore,
         moodAvg: dayMoodAvg,
-        hasData: dayCorrelations.length > 0 || dayMoods.length > 0,
+        // Every meal ticked off that day, scored or not — so a day with meals
+        // and no mood reads as "meals logged", not as an empty day.
+        mealsLogged: dayEpisodes.length,
+        mealsScored: dayScored.length,
+        hasData: dayEpisodes.length > 0 || dayMoods.length > 0,
       });
     }
 
     // ── Pattern spotlight — include KYC-seeded insight for new users ──
-    let patternSpotlight = this.generatePatternSpotlight(patternMap);
+    // `patternMap` only ever saw deliberate correlations, so the spotlight sat
+    // silent for users whose evidence is meals-plus-moods. Fall back to the
+    // same shape computed over every episode we have.
+    let patternSpotlight =
+      this.generatePatternSpotlight(patternMap) ??
+      this.generatePatternSpotlight(this.buildEpisodePatternMap(episodes));
     if (!patternSpotlight && totalMeals < 3 && user?.foodRelationship) {
       patternSpotlight = this.buildOnboardingSpotlight(
         user.foodRelationship,
         user.emotionalTriggers ?? []
       );
     }
+
+    // ── The patterns table, built from what actually happened ──
+    const patterns = this.buildObservedPatterns({
+      period,
+      days,
+      episodes,
+      skippedMeals,
+      slotAverages,
+      strongestMealType,
+      weakestSlot,
+      mealTypeLogged,
+      triggerCounts,
+      triggerTimes,
+      triggersAreFromOnboarding,
+    });
 
     // ── Personalised recommendations ──
     const recommendations = this.buildRecommendations(
@@ -1198,14 +1418,25 @@ export class CBTService {
         insight: {
           period: { start: startDateStr, end: endDateStr },
           totalMeals,
+          // How the analysed episodes were come by, so the client can say
+          // where its numbers stand rather than implying they're all
+          // deliberate check-ins.
+          mealsLogged,
+          linkedMeals,
+          inferredMeals,
+          unscoredMeals,
           emotionalEatingInstances,
           emotionalEatingPercentage,
           mindfulEatingScore,
           satietyRate,
+          // How many meals the satiety rate is actually computed over — 0 means
+          // the question was never asked, not that the answer was "never".
+          satietyBasis: hungerRated.length,
           patternSpotlight,
           weeklyTrend,
           strongestMealType,
           dailyBreakdown,
+          patterns,
           commonTriggers: Object.entries(triggerCounts)
             .map(([trigger, count]) => {
               const window = computeDominantWindow(triggerTimes[trigger] ?? []);
@@ -1235,21 +1466,298 @@ export class CBTService {
             .map(([facilitator, count]) => ({ facilitator, count }))
             .sort((a, b) => b.count - a.count),
           riskWindows: computeRiskWindows(
-            correlations.map((c) => ({
-              at: new Date(c.createdAt),
-              emotional: c.wasEmotionalEating,
-            })),
+            scoredEpisodes
+              .filter((e) => e.atIsExact)
+              .map((e) => ({ at: e.at, emotional: e.emotional })),
           ),
           commonEmotions: Object.entries(emotionCounts)
             .map(([emotion, count]) => ({ emotion, count }))
             .sort((a, b) => b.count - a.count)
             .slice(0, 5),
           mealTypeBreakdown,
+          mealTypeLogged,
           recommendations,
         },
       },
     };
   }
+
+  /** day-of-week × mood × meal-slot counts over every episode, for the
+   *  spotlight sentence. Needs a handful of episodes before it will say
+   *  anything — one repeat is a coincidence, not a pattern. */
+  private buildEpisodePatternMap(episodes: EatingEpisode[]): Map<string, number> {
+    const withMood = episodes.filter((e) => e.moodCategory);
+    if (withMood.length < 5) return new Map();
+
+    const counts = new Map<string, number>();
+    withMood.forEach((e) => {
+      const key = `${e.at.getDay()}-${e.moodCategory}-${e.mealType}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    });
+    return counts;
+  }
+
+  /**
+   * Fold correlations, ticked-off meals and mood check-ins into one list of
+   * eating episodes.
+   *
+   * A correlation always wins over the meal it describes: it carries answers
+   * the user actually gave, where a pairing by time is only ever our reading of
+   * two independent logs.
+   */
+  private buildEpisodes(input: {
+    correlations: IMealMoodCorrelation[];
+    loggedMeals: LoggedMeal[];
+    moodEntries: { date?: string; time?: string; moodLevel: number; moodCategory: MoodCategory }[];
+    patternMap: Map<string, number>;
+  }): EatingEpisode[] {
+    const { correlations, loggedMeals, moodEntries, patternMap } = input;
+    const timedMoods = timestampMoods(moodEntries);
+
+    const claimedMealIds = new Set(
+      correlations.map((c) => c.mealId?.toString()).filter(Boolean) as string[]
+    );
+    const claimedSlots = new Set(
+      correlations.map((c) => `${c.date}|${c.mealType}`)
+    );
+
+    const episodes: EatingEpisode[] = correlations.map((c) => {
+      const score = this.calculateFinalScore(c, patternMap);
+      const at = new Date(c.createdAt);
+      return {
+        date: c.date,
+        at,
+        atIsExact: !isNaN(at.getTime()),
+        mealType: c.mealType,
+        mealName: c.mealName,
+        source: "linked" as const,
+        score,
+        emotional: score > 0.5,
+        moodCategory: c.moodBefore?.moodCategory ?? null,
+        hungerLevelBefore: c.hungerLevelBefore ?? null,
+      };
+    });
+
+    loggedMeals
+      .filter(
+        (m) =>
+          !claimedMealIds.has(m.mealId) &&
+          !claimedSlots.has(`${m.date}|${m.mealType}`)
+      )
+      .forEach((meal) => {
+        const match = nearestMood(meal, timedMoods);
+
+        // No mood anywhere near it. The meal is still real and still counted as
+        // logged — it simply can't be scored, and saying so beats scoring it
+        // neutral and calling that a finding.
+        if (!match) {
+          episodes.push({
+            date: meal.date,
+            at: meal.at,
+            atIsExact: meal.atIsExact,
+            mealType: meal.mealType,
+            mealName: meal.mealName,
+            source: "unscored",
+            score: null,
+            emotional: false,
+            moodCategory: null,
+            hungerLevelBefore: null,
+          });
+          return;
+        }
+
+        const mood = match.entry;
+        const score = this.scoreSignal(
+          {
+            mealType: meal.mealType,
+            at: meal.at,
+            moodBefore: {
+              moodLevel: mood.moodLevel,
+              moodCategory: mood.moodCategory,
+            },
+          },
+          patternMap,
+          { selfReported: false }
+        );
+
+        episodes.push({
+          date: meal.date,
+          at: meal.at,
+          atIsExact: meal.atIsExact,
+          mealType: meal.mealType,
+          mealName: meal.mealName,
+          source: "inferred",
+          score,
+          emotional: score > 0.5,
+          moodCategory: mood.moodCategory,
+          hungerLevelBefore: null,
+        });
+      });
+
+    return episodes.sort((a, b) => a.at.getTime() - b.at.getTime());
+  }
+
+  /**
+   * The "Top Recurring Patterns" rows.
+   *
+   * Every row here is something that happened, counted from logged meals, the
+   * moods around them, and the meals that never got ticked off. The client
+   * keeps its own example rows for the case where this comes back empty — the
+   * one thing this must never do is manufacture a row to fill the table.
+   */
+  private buildObservedPatterns(input: {
+    period: "week" | "month";
+    days: number;
+    episodes: EatingEpisode[];
+    skippedMeals: { date: string; mealType: MealType }[];
+    slotAverages: { type: MealType; avg: number; count: number }[];
+    strongestMealType: MealType | null;
+    weakestSlot: { type: MealType; avg: number; count: number } | null;
+    mealTypeLogged: Record<MealType, number>;
+    triggerCounts: Record<string, number>;
+    triggerTimes: Record<string, Date[]>;
+    triggersAreFromOnboarding: boolean;
+  }): ObservedPattern[] {
+    const {
+      period,
+      days,
+      episodes,
+      skippedMeals,
+      strongestMealType,
+      weakestSlot,
+      mealTypeLogged,
+      triggerCounts,
+      triggerTimes,
+      triggersAreFromOnboarding,
+    } = input;
+
+    const rows: ObservedPattern[] = [];
+    const cap = (s: string) => `${s.charAt(0).toUpperCase()}${s.slice(1)}`;
+    const perPeriod = (n: number) => `${n}× this ${period}`;
+
+    const SLOT_EMOJI: Record<MealType, string> = {
+      breakfast: "🌅",
+      lunch: "🥗",
+      dinner: "🍽️",
+      snacks: "🍎",
+    };
+
+    const TRIGGER_EMOJIS: Record<string, string> = {
+      stress: "😤", boredom: "😑", sadness: "😢", anxiety: "😰",
+      social: "👥", tiredness: "😴", habit: "🔄", celebration: "🎉",
+      procrastination: "📱", "late-night": "🌙", cravings: "🍫",
+      "time-pressure": "🏃",
+    };
+
+    // 1. The slot the user eats most mindfully in.
+    if (strongestMealType) {
+      const scored = episodes.filter(
+        (e) => e.mealType === strongestMealType && e.score !== null
+      ).length;
+      rows.push({
+        key: `slot-strongest-${strongestMealType}`,
+        emoji: SLOT_EMOJI[strongestMealType],
+        name: `${cap(strongestMealType)} mindfulness`,
+        context: "Your calmest meal of the day",
+        frequency: `${scored} meal${scored === 1 ? "" : "s"} analysed`,
+        impact: "positive",
+        evidence: scored,
+      });
+    }
+
+    // 2. The slot that runs most emotional — only when it genuinely does.
+    if (weakestSlot && weakestSlot.avg >= 0.4 && weakestSlot.type !== strongestMealType) {
+      const emotionalCount = episodes.filter(
+        (e) => e.mealType === weakestSlot.type && e.emotional
+      ).length;
+      rows.push({
+        key: `slot-weakest-${weakestSlot.type}`,
+        emoji: SLOT_EMOJI[weakestSlot.type],
+        name: `${cap(weakestSlot.type)} under pressure`,
+        context: "Most often eaten on emotion rather than hunger",
+        frequency: `${emotionalCount} of ${weakestSlot.count} logged`,
+        impact: "negative",
+        evidence: weakestSlot.count,
+      });
+    }
+
+    // 3. Late-night eating — real timestamps only, since the claim is entirely
+    //    about the clock.
+    const lateNights = episodes.filter((e) => e.atIsExact && e.at.getHours() >= 21);
+    const lateNightDays = new Set(lateNights.map((e) => e.date)).size;
+    if (lateNightDays >= 2) {
+      const window = computeDominantWindow(lateNights.map((e) => e.at));
+      rows.push({
+        key: "late-night",
+        emoji: "🌙",
+        name: "Late-night eating",
+        context: window ? formatWindow(window) : "After 9 PM",
+        frequency: `${lateNightDays} night${lateNightDays === 1 ? "" : "s"}`,
+        impact: "negative",
+        evidence: lateNightDays,
+      });
+    }
+
+    // 4. A slot logged so consistently it counts as a habit worth naming.
+    MEAL_SLOTS.filter((slot) => slot !== "snacks").forEach((slot) => {
+      const logged = mealTypeLogged[slot] ?? 0;
+      if (logged < 3 || logged / days < 0.6) return;
+      rows.push({
+        key: `consistency-${slot}`,
+        emoji: SLOT_EMOJI[slot],
+        name: `${cap(slot)} most days`,
+        context: `Logged on ${logged} of the last ${days} days`,
+        frequency: `${Math.round((logged / days) * 100)}% of days`,
+        impact: "positive",
+        evidence: logged,
+      });
+    });
+
+    // 5. A slot that keeps getting skipped.
+    const skipCounts = new Map<MealType, number>();
+    skippedMeals.forEach((s) =>
+      skipCounts.set(s.mealType, (skipCounts.get(s.mealType) ?? 0) + 1)
+    );
+    [...skipCounts.entries()]
+      .filter(([, count]) => count >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 1)
+      .forEach(([slot, count]) => {
+        rows.push({
+          key: `skipped-${slot}`,
+          emoji: "⏭️",
+          name: `Skipped ${slot}`,
+          context: "Planned, never logged",
+          frequency: perPeriod(count),
+          impact: "negative",
+          evidence: count,
+        });
+      });
+
+    // 6. Emotional triggers we actually watched fire.
+    if (!triggersAreFromOnboarding) {
+      Object.entries(triggerCounts)
+        .filter(([, count]) => count > 0)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .forEach(([trigger, count]) => {
+          const window = computeDominantWindow(triggerTimes[trigger] ?? []);
+          rows.push({
+            key: `trigger-${trigger}`,
+            emoji: TRIGGER_EMOJIS[trigger] ?? "⚡",
+            name: `${cap(trigger)}-eating`,
+            context: window ? formatWindow(window) : "Observed from your logs",
+            frequency: perPeriod(count),
+            impact: "negative",
+            evidence: count,
+          });
+        });
+    }
+
+    // Strongest evidence first, and keep the table readable.
+    return rows.sort((a, b) => b.evidence - a.evidence).slice(0, 6);
+  }
+
 
   private buildOnboardingSpotlight(
     foodRelationship: string,

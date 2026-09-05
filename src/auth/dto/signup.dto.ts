@@ -12,6 +12,7 @@ import {
 } from "class-validator";
 import { Type } from "class-transformer";
 import { SafeTermArray } from "../../utils/safe-input.decorator";
+import { COOKING_LEVELS, CookingLevel } from "../../constants/cookingLevel";
 
 export class UserDataDto {
   @ApiProperty({ example: "John Doe" })
@@ -143,6 +144,16 @@ export class UserDataDto {
   @IsOptional()
   @SafeTermArray()
   unrecognisedTerms?: string[];
+
+  @ApiProperty({
+    example: "home-cook",
+    enum: COOKING_LEVELS,
+    required: false,
+    description: "How much cooking the user is up for; caps generated prep time",
+  })
+  @IsOptional()
+  @IsEnum(COOKING_LEVELS)
+  cookingLevel?: CookingLevel;
 
   @ApiProperty({
     example: "free",

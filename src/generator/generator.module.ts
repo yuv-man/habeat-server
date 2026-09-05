@@ -14,6 +14,7 @@ import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 import { StreamingGeneratorService } from "./streaming/streaming.service";
 import { GeneratorGateway } from "./streaming/generator.gateway";
 import { UserModule } from "../user/user.module";
+import { BehaviorModule } from "../behavior/behavior.module";
 
 @Module({
   imports: [
@@ -31,6 +32,9 @@ import { UserModule } from "../user/user.module";
       signOptions: { expiresIn: "7d" },
     }),
     forwardRef(() => UserModule),
+    // The weekly planner reads the behavioural profile so next week's plan is
+    // shaped by how the user actually ate, not only by what they asked for.
+    BehaviorModule,
   ],
   controllers: [GeneratorController],
   providers: [

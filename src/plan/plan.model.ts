@@ -1,5 +1,6 @@
 import { Schema } from "mongoose";
 import { IDayPlan, IPlan, IWorkout } from "../types/interfaces";
+import { COOKING_LEVELS } from "../constants/cookingLevel";
 
 // Model name constant for NestJS
 export const Plan = { name: "Plan" };
@@ -96,6 +97,7 @@ const planSchema = new Schema<IPlan>(
       dislikes: { type: [String], required: false, default: [] },
       fastingHours: { type: Number, required: false },
       fastingStartTime: { type: String, required: false },
+      cookingLevel: { type: String, enum: COOKING_LEVELS, required: false },
     },
     weeklyPlan: {
       type: Schema.Types.Mixed,

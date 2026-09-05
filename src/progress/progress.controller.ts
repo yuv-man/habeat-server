@@ -82,6 +82,34 @@ export class ProgressController {
     return result;
   }
 
+  /** Correct when a completed meal was actually eaten ("we planned 08:00, I ate
+   *  at 11:00"). Times, not ticks, are what the eating-pattern work reads. */
+  @Put("meal-time/:userId/:mealId")
+  async updateMealEatenTime(
+    @Param("userId") userId: string,
+    @Param("mealId") mealId: string,
+    @Request() req,
+    @Body()
+    body: {
+      mealType: "breakfast" | "lunch" | "dinner" | "snacks";
+      time: string;
+      date?: string;
+    },
+  ) {
+    const resolvedUserId = resolveOwnUserId(req, userId);
+    const result = await this.progressService.updateMealEatenTime(
+      resolvedUserId,
+      mealId,
+      body.mealType,
+      body.time,
+      body.date,
+    );
+    this.analyticsService.capture(resolvedUserId, "meal_time_corrected", {
+      mealType: body.mealType,
+    });
+    return result;
+  }
+
   @Post("custom-calories/:userId")
   async addCustomCalories(
     @Param("userId") userId: string,

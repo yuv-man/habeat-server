@@ -8,15 +8,15 @@ import mongoose from "mongoose";
 import { IUserData, IMeal } from "../types/interfaces";
 import { compressImage, isBase64Image } from "../utils/imageCompression";
 import { updateMealLearningProfile } from "../utils/meal-learning";
-import { EatingProfileService } from "../eating-profile/eating-profile.service";
+import { BehaviorService } from "../behavior/behavior.service";
 
 @Injectable()
 export class UserService {
   constructor(
     @InjectModel(User.name) private userModel: Model<IUserData>,
     @InjectModel(Meal.name) private mealModel: Model<IMeal>,
-    @Inject(forwardRef(() => EatingProfileService))
-    private eatingProfileService: EatingProfileService,
+    @Inject(forwardRef(() => BehaviorService))
+    private behaviorService: BehaviorService,
   ) {}
 
   async findAll() {
@@ -100,7 +100,7 @@ export class UserService {
 
     // Seed eating profile on KYC completion
     if (updateData.kycCompleted === true) {
-      this.eatingProfileService.seed(id).catch((e) =>
+      this.behaviorService.seed(id).catch((e) =>
         logger.error(`[UserService] Eating profile seed failed for ${id}: ${e}`)
       );
     }

@@ -4,7 +4,7 @@ import { UserController } from "./user.controller";
 import { UserService } from "./user.service";
 import { User, UserSchema } from "./user.model";
 import { Meal, MealSchema } from "../meal/meal.model";
-import { EatingProfileModule } from "../eating-profile/eating-profile.module";
+import { BehaviorModule } from "../behavior/behavior.module";
 
 @Module({
   imports: [
@@ -12,7 +12,7 @@ import { EatingProfileModule } from "../eating-profile/eating-profile.module";
       { name: User.name, schema: UserSchema },
       { name: Meal.name, schema: MealSchema },
     ]),
-    forwardRef(() => EatingProfileModule),
+    forwardRef(() => BehaviorModule),
   ],
   controllers: [UserController],
   providers: [UserService],

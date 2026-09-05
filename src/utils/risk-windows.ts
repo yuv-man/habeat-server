@@ -1,7 +1,7 @@
 /**
  * Risk windows — when, concretely, a user's eating pattern tends to fire.
  *
- * Both the eating-profile agent and the CBT insight endpoint need the same
+ * Both the behaviour profile and the CBT insight endpoint need the same
  * "bucket these events into 3-hour slots and find the concentration" logic, and
  * both previously either duplicated it or threw the result away at display time
  * (pattern cards showed a fixed string like "After 9 PM" regardless of what the

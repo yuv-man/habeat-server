@@ -3,6 +3,7 @@ import { getModelToken } from "@nestjs/mongoose";
 import { UserService } from "../../../src/user/user.service";
 import { User } from "../../../src/user/user.model";
 import { Meal } from "../../../src/meal/meal.model";
+import { BehaviorService } from "../../../src/behavior/behavior.service";
 import { NotFoundException } from "@nestjs/common";
 
 describe("UserService", () => {
@@ -57,6 +58,12 @@ describe("UserService", () => {
         {
           provide: getModelToken(Meal.name),
           useValue: mockMealModel,
+        },
+        // UserService seeds a behaviour profile on signup. The suite never
+        // provided this dependency, so every case here failed to construct.
+        {
+          provide: BehaviorService,
+          useValue: { seed: jest.fn().mockResolvedValue(undefined) },
         },
       ],
     }).compile();

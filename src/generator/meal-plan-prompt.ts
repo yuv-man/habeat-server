@@ -29,6 +29,14 @@ import {
   findMealViolations,
 } from "../utils/dietary-constraints";
 import logger from "../utils/logger";
+import {
+  COOKING_LEVEL_SPECS,
+  CookingLevel,
+  prepCeilingFor,
+} from "../constants/cookingLevel";
+
+/** Used when the user has not told us how much cooking they are up for. */
+const DEFAULT_MAX_PREP_MINUTES = 45;
 
 // ─── Slot definitions ───────────────────────────────────────────────────────
 
@@ -442,6 +450,9 @@ export interface WeeklyPromptInput {
     dislikes?: string[];
     foodPreferences?: string[];
     unrecognisedTerms?: string[];
+    /** How much cooking the user says they'll do. Sets the prep ceiling and the
+     *  techniques the plan may assume. */
+    cookingLevel?: CookingLevel;
   };
   skeleton: PlannedDay[];
   constraints: DietaryConstraints;
@@ -453,9 +464,15 @@ export interface WeeklyPromptInput {
   styleNote?: string;
   /** Mood/wellness context, already summarised. */
   moodContext?: string;
+  /** What the user's own history says about how this week has to be shaped —
+   *  which meals they actually follow, how long they'll really cook for, which
+   *  days are hard. Produced by the behaviour pipeline, already reduced to
+   *  instructions. See src/behavior/behavior.prompts.ts. */
+  behaviourContext?: string;
   /** Instruction added when re-generating days that failed verification. */
   repairNote?: string;
-  /** Cooking-time ceiling in minutes. */
+  /** Cooking-time ceiling in minutes, as observed by the behaviour pipeline.
+   *  It can only tighten the user's declared cooking level, never loosen it. */
   maxPrepMinutes?: number;
   /** BCP-47/ISO language code for the response text. Defaults to English. */
   language?: string;
@@ -483,9 +500,24 @@ const renderDay = (day: PlannedDay): string => {
 export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   const {
     userData, skeleton, constraints, targetCalories, macros,
-    recentMeals = [], styleNote, moodContext, repairNote, maxPrepMinutes = 45,
-    language = "en", fastingContext,
+    recentMeals = [], styleNote, moodContext, behaviourContext, repairNote,
+    maxPrepMinutes, language = "en", fastingContext,
   } = input;
+
+  // Two sources want a say in how long a meal may take: what the user told us
+  // they can cook, and what their history shows they actually finish. The
+  // lower one wins — a declared "confident cook" who abandons anything over 25
+  // minutes should not keep being handed 75-minute dinners, and a declared
+  // beginner should never be handed one because the behaviour pipeline hasn't
+  // seen enough of them yet.
+  const declaredPrepCeiling = prepCeilingFor(userData.cookingLevel);
+  const effectiveMaxPrep = Math.min(
+    declaredPrepCeiling ?? DEFAULT_MAX_PREP_MINUTES,
+    maxPrepMinutes ?? Number.POSITIVE_INFINITY,
+  );
+  const cookingSpec = userData.cookingLevel
+    ? COOKING_LEVEL_SPECS[userData.cookingLevel]
+    : null;
   const needsEnglishName = language.toLowerCase() !== "en";
 
   // Terms the user was warned about but kept ("white socks" as a dislike) are
@@ -531,7 +563,10 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
       `PERSON: ${userData.age ?? "?"}y ${userData.gender ?? "?"}, ${userData.height ?? "?"}cm, ${userData.weight ?? "?"}kg, goal: ${userData.path ?? "maintain"}`,
       `LANGUAGE: Respond in ${language} — dish names and ingredient names must be written in ${language}.`,
       `DAILY TARGET: ${targetCalories} kcal — protein ${macros.protein}g, carbs ${macros.carbs}g, fat ${macros.fat}g`,
-      `MAX PREP TIME: ${maxPrepMinutes} minutes per meal`,
+      `MAX PREP TIME: ${effectiveMaxPrep} minutes per meal`,
+      cookingSpec
+        ? `COOKING SKILL: ${cookingSpec.label} — ${cookingSpec.guidance}`
+        : null,
       dislikes.length ? `NEVER INCLUDE (disliked): ${dislikes.join(", ")}` : null,
       // Scoped to lunch and dinner: a preference like "steak" or "curry" is a
       // dinner taste, and letting it reach breakfast is how it turns up next to
@@ -545,6 +580,16 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
       .filter(Boolean)
       .join("\n"),
   );
+
+  // Placed before the menu outline: these are constraints on the shape of the
+  // week, and the model should read them before it reads what to cook. This is
+  // the whole reason the plan differs from last week's — a plan that ignored a
+  // repeatedly skipped breakfast just produced the same breakfast again.
+  if (behaviourContext) {
+    sections.push(
+      `COACH'S BRIEF ON THIS USER — written by the analyst who reviewed a month of their logs.\nTreat it as requirements, not suggestions. The aim is a week they will actually follow, not the most impressive week you can write:\n${behaviourContext}`,
+    );
+  }
 
   if (recentMeals.length) {
     sections.push(

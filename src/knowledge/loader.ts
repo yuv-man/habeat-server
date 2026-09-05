@@ -4,7 +4,9 @@ import * as path from "path";
 // ─── types ───────────────────────────────────────────────────────────────────
 
 export type KnowledgeAgent =
-  | "eating-profile"
+  // Renamed with the module: one behaviour analyst now covers what the
+  // eating-profile agent used to, so the routing key follows it.
+  | "behavior-analyst"
   | "meal-generator"
   | "chloe-voice"
   | "chat-ai";
@@ -23,15 +25,15 @@ const REGISTRY: KnowledgeFile[] = [
   // meal-generation-specific files loaded first (highest priority for generator)
   { path: "nutrition/dietary-paths.md",          agents: ["meal-generator", "chat-ai"],                       tokensEst: 400 },
   { path: "meal-generation/meal-slot-rules.md",  agents: ["meal-generator"],                                  tokensEst: 300 },
-  { path: "nutrition/meal-timing.md",            agents: ["meal-generator", "eating-profile", "chat-ai"],     tokensEst: 360 },
+  { path: "nutrition/meal-timing.md",            agents: ["meal-generator", "behavior-analyst", "chat-ai"],     tokensEst: 360 },
   { path: "nutrition/mood-foods.md",             agents: ["meal-generator", "chat-ai"],                       tokensEst: 420 },
   // profile & CBT files
-  { path: "nutrition/macros-mood.md",            agents: ["eating-profile", "meal-generator", "chat-ai"],     tokensEst: 480 },
-  { path: "cbt/emotional-eating.md",             agents: ["eating-profile", "chloe-voice", "chat-ai"],        tokensEst: 500 },
-  { path: "cbt/interventions.md",                agents: ["eating-profile", "chloe-voice", "chat-ai"],        tokensEst: 460 },
+  { path: "nutrition/macros-mood.md",            agents: ["behavior-analyst", "meal-generator", "chat-ai"],     tokensEst: 480 },
+  { path: "cbt/emotional-eating.md",             agents: ["behavior-analyst", "chloe-voice", "chat-ai"],        tokensEst: 500 },
+  { path: "cbt/interventions.md",                agents: ["behavior-analyst", "chloe-voice", "chat-ai"],        tokensEst: 460 },
   { path: "cbt/distortions.md",                  agents: ["chat-ai", "chloe-voice"],                          tokensEst: 340 },
-  { path: "profile/eating-archetypes.md",        agents: ["eating-profile", "meal-generator", "chat-ai"],     tokensEst: 440 },
-  { path: "profile/psych-profile.md",            agents: ["eating-profile", "chat-ai"],                       tokensEst: 460 },
+  { path: "profile/eating-archetypes.md",        agents: ["behavior-analyst", "meal-generator", "chat-ai"],     tokensEst: 440 },
+  { path: "profile/psych-profile.md",            agents: ["behavior-analyst", "chat-ai"],                       tokensEst: 460 },
 ];
 
 // ─── strip YAML front matter ─────────────────────────────────────────────────

@@ -13,6 +13,7 @@ import { ShoppingList } from "../shopping/shopping-list.model";
 import { MoodEntry, IMoodEntry } from "../cbt/cbt.model";
 import aiService from "./generate.service";
 import { UsdaNutritionService } from "../utils/usda-nutrition.service";
+import { BehaviorService } from "../behavior/behavior.service";
 import logger from "../utils/logger";
 import {
   IPlan,
@@ -49,6 +50,7 @@ import {
 } from "../utils/dietary-constraints";
 import { ensureMealPersisted } from "../utils/meal-persistence";
 import {} from "./helper"; // helper imports kept for future use
+import { CookingLevel } from "../constants/cookingLevel";
 
 @Injectable()
 export class GeneratorService {
@@ -62,7 +64,8 @@ export class GeneratorService {
     @InjectModel(ShoppingList.name)
     private shoppingListModel: Model<IShoppingList>,
     @InjectModel(MoodEntry.name) private moodModel: Model<IMoodEntry>,
-    private usdaNutritionService: UsdaNutritionService
+    private usdaNutritionService: UsdaNutritionService,
+    private behaviorService: BehaviorService
   ) {}
 
   /**
@@ -311,6 +314,19 @@ export class GeneratorService {
       logger.info(`[generateWeeklyMealPlan] Mood context: ${moodContext}`);
     }
 
+    // The behavioural half: how this user has actually eaten over the last
+    // month, reduced to instructions for the week ahead. Never blocks — a plan
+    // still generates when the profile is thin or the pipeline is unavailable.
+    const [behaviourContext, behaviourMaxPrep] = await Promise.all([
+      this.behaviorService.buildPlannerContext(userId).catch(() => null),
+      this.behaviorService.effectiveMaxPrepMinutes(userId).catch(() => null),
+    ]);
+    if (behaviourContext) {
+      logger.info(
+        `[generateWeeklyMealPlan] Behaviour context applied (${behaviourContext.split("\n").length} directives)`
+      );
+    }
+
     // Pre-calculate user metrics (shared by both phases)
     const bmr = calculateBMR(userData.weight, userData.height, userData.age, userData.gender);
     const tdee = calculateTDEE(bmr, userData.workoutFrequency);
@@ -351,7 +367,9 @@ export class GeneratorService {
       planTemplate,
       [today], // datesOverride: only today
       moodContext,
-      previousMeals
+      previousMeals,
+      behaviourContext,
+      behaviourMaxPrep
     );
 
     if (!mealPlan?.weeklyPlan || Object.keys(mealPlan.weeklyPlan).length === 0) {
@@ -423,7 +441,9 @@ export class GeneratorService {
           moodContext,
           // Exclude both the old plan and the day we just generated, so
           // Tuesday's dinner cannot come back as Monday's.
-          [...previousMeals, ...this.mealNamesFrom(todayResult.weeklyPlanObject)]
+          [...previousMeals, ...this.mealNamesFrom(todayResult.weeklyPlanObject)],
+          behaviourContext,
+          behaviourMaxPrep
         ).catch(async (err) => {
           logger.error(
             `[Phase2] Background generation failed for user ${userId}: ${err?.message || err}`
@@ -546,7 +566,9 @@ export class GeneratorService {
     targetCalories: number,
     macros: { protein: number; carbs: number; fat: number },
     moodContext?: string | null,
-    recentMeals: string[] = []
+    recentMeals: string[] = [],
+    behaviourContext?: string | null,
+    behaviourMaxPrep?: number | null
   ): Promise<void> {
     logger.info(
       `[Phase2] Generating ${remainingDates.length} remaining days for user ${userId}: ` +
@@ -563,7 +585,9 @@ export class GeneratorService {
       planTemplate,
       remainingDates, // datesOverride: only remaining days
       moodContext,
-      recentMeals
+      recentMeals,
+      behaviourContext,
+      behaviourMaxPrep
     );
 
     if (!mealPlan?.weeklyPlan || Object.keys(mealPlan.weeklyPlan).length === 0) {
@@ -950,6 +974,7 @@ export class GeneratorService {
       preferences?: string[];
       dislikes?: string[];
       numberOfSuggestions?: number;
+      cookingLevel?: CookingLevel;
       aiRules?: string; // Can contain free-text meal name query
       // Mood-aware parameters
       currentMood?: {
@@ -1016,6 +1041,9 @@ export class GeneratorService {
       if (!mealCriteria.preferences?.length) {
         mealCriteria.preferences = (user as any).foodPreferences || [];
       }
+      // A swapped-in meal has to be as cookable as the one it replaces.
+      mealCriteria.cookingLevel =
+        mealCriteria.cookingLevel ?? (user as any).cookingLevel;
     }
 
     let allMeals: IMeal[] = [];

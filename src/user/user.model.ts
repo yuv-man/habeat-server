@@ -1,6 +1,7 @@
 import { IUserData } from "../types/interfaces";
 import bcrypt from "bcrypt";
 import mongoose, { CallbackError, Schema } from "mongoose";
+import { COOKING_LEVELS } from "../constants/cookingLevel";
 
 // Model name constant
 export const User = { name: "User" };
@@ -99,10 +100,23 @@ const swappedMealEntrySchema = new Schema(
   { _id: false }
 );
 
+/** One swap, with the moment it happened. `swappedMeals` only ever kept a
+ *  running total, which cannot answer "how often did they replace a planned
+ *  meal *this month*" — the question the behavioural summary needs. */
+const swapEventSchema = new Schema(
+  {
+    name: { type: String, required: true },
+    at: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const mealLearningProfileSchema = new Schema(
   {
     completedMeals: { type: [completedMealEntrySchema], default: [] },
     swappedMeals: { type: [swappedMealEntrySchema], default: [] },
+    /** Rolling window of recent swaps, newest last, capped in the writer. */
+    recentSwaps: { type: [swapEventSchema], default: [] },
     cuisineScores: { type: Map, of: Number, default: new Map() },
   },
   { _id: false }
@@ -207,6 +221,9 @@ const userSchemaDefinition = {
   fastingHours: { type: Number, required: false }, // For 8-16 fasting diet type
   fastingStartTime: { type: String, required: false }, // Fasting start time
   mealsPerDay: { type: Number, required: false }, // Optional: 2–4 meals per day
+  // How much cooking the user is up for. Drives the prep-time ceiling and the
+  // technique the generator may assume — see src/constants/cookingLevel.ts.
+  cookingLevel: { type: String, enum: COOKING_LEVELS, required: false },
   preferences: {
     type: Map,
     of: mongoose.Schema.Types.Mixed,
@@ -307,7 +324,12 @@ const userSchemaDefinition = {
   mealLearningProfile: {
     type: mealLearningProfileSchema,
     required: false,
-    default: () => ({ completedMeals: [], swappedMeals: [], cuisineScores: new Map() }),
+    default: () => ({
+      completedMeals: [],
+      swappedMeals: [],
+      recentSwaps: [],
+      cuisineScores: new Map(),
+    }),
   },
   // Sensory & Routine Profile
   sensoryProfile: {

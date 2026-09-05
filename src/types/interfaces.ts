@@ -1,5 +1,6 @@
 import mongoose, { Document } from "mongoose";
 import { SubscriptionTier } from "../enums/enumSubscription";
+import { CookingLevel } from "../constants/cookingLevel";
 
 // Badge earned by user
 export interface IBadge {
@@ -140,6 +141,9 @@ export interface IUserData {
   mealsPerDay?: number; // Optional: 2–4 meals per day (non-fasting users)
   foodRelationship?: string;
   emotionalTriggers?: string[];
+  /** How much cooking the user is up for. Caps prep time and technique in the
+   *  generator — see src/constants/cookingLevel.ts. */
+  cookingLevel?: CookingLevel;
   workoutFrequency?: number; // Number of workouts per week
   bmr?: number; // Basal Metabolic Rate
   tdee?: number; // Total Daily Energy Expenditure
@@ -212,6 +216,13 @@ export interface IMeal {
 // Meal with done status (used in day plans)
 export interface IMealWithStatus extends IMeal {
   done: boolean;
+  /** Set when the meal is marked done, cleared when it's un-marked. Absent on
+   *  meals completed before the field existed — consumers fall back to the
+   *  slot's typical hour rather than dropping the meal. */
+  completedAt?: Date;
+  /** Whether `completedAt` is the tick's own timestamp or a time the user
+   *  corrected it to afterwards ("I ate breakfast at 11, not 8"). */
+  completedAtSource?: "tick" | "user";
 }
 
 // Daily Plan - part of weeklyPlan, basic structure without progress tracking

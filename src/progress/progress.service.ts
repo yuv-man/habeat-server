@@ -524,6 +524,11 @@ export class ProgressService {
     // Toggle done status
     const wasDone = meal.done;
     meal.done = !wasDone;
+    // Stamp when it happened, so the meal can later be paired with the mood
+    // logged around it. Cleared on un-tick — a meal that didn't happen has no
+    // time, and a stale one would pull the wrong mood into the pairing.
+    meal.completedAt = meal.done ? new Date() : undefined;
+    meal.completedAtSource = meal.done ? "tick" : undefined;
 
     const calories = Math.round(meal.calories || 0);
     const protein = Math.round(meal.macros?.protein || 0);
@@ -654,6 +659,89 @@ export class ProgressService {
               newBadges: engagementResult.newBadges,
             }
           : null,
+      },
+    };
+  }
+
+  /**
+   * Correct the time a completed meal was actually eaten.
+   *
+   * Ticking a meal stamps the moment of the tick, which is only the eating
+   * time when the two coincide. Someone who eats breakfast at 11 and logs it
+   * over lunch was previously recorded as having eaten at lunchtime — and
+   * everything built on meal timing (spacing between meals, late-night eating,
+   * the mood pairing window) read that as fact. This lets the user say when it
+   * really happened.
+   *
+   * Only the timestamp moves: calories, macros and completion are untouched.
+   */
+  async updateMealEatenTime(
+    userId: string,
+    mealId: string,
+    mealType: "breakfast" | "lunch" | "dinner" | "snacks",
+    time: string,
+    date?: string,
+  ) {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time || "")) {
+      throw new BadRequestException("time must be in HH:MM format");
+    }
+
+    const dateKey = date ?? this.getLocalDateKey(new Date());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+      throw new BadRequestException("date must be in YYYY-MM-DD format");
+    }
+
+    const progress = await this.progressModel.findOne({ userId, dateKey });
+    if (!progress) {
+      throw new NotFoundException(`Progress not found for ${dateKey}`);
+    }
+
+    const meal =
+      mealType === "snacks"
+        ? (progress as any).meals.snacks.find(
+            (m: any) => m._id.toString() === mealId,
+          )
+        : (progress as any).meals[mealType];
+
+    if (!meal) {
+      throw new NotFoundException("Meal not found");
+    }
+
+    // A time on a meal that never happened would be a fabricated episode: the
+    // pattern pipeline treats every dated meal as one that was eaten.
+    if (!meal.done) {
+      throw new BadRequestException(
+        "Only a meal marked as eaten can have its time changed",
+      );
+    }
+
+    const [year, month, day] = dateKey.split("-").map(Number);
+    const [hours, minutes] = time.split(":").map(Number);
+    // Built from parts rather than parsing a string, so the local day the user
+    // is looking at is the day we store — the same reason dateKey exists.
+    // Like dateKey (and like the hour-of-day reads in the pattern pipeline),
+    // this assumes the server's clock is the user's clock; there is no
+    // per-user timezone in the model yet.
+    const eatenAt = new Date(year, month - 1, day, hours, minutes, 0, 0);
+
+    // A minute of slack for clock skew between the phone and the server.
+    if (eatenAt.getTime() > Date.now() + 60_000) {
+      throw new BadRequestException("A meal cannot be eaten in the future");
+    }
+
+    meal.completedAt = eatenAt;
+    meal.completedAtSource = "user";
+    await progress.save();
+
+    logger.info(
+      `[ProgressService] ${mealType} eaten time set to ${time} on ${dateKey} for user ${userId}`,
+    );
+
+    return {
+      success: true,
+      data: {
+        progress,
+        message: `${mealType} eaten time updated`,
       },
     };
   }
@@ -1108,12 +1196,16 @@ export class ProgressService {
     (progress as any).protein.consumed = 0;
     (progress as any).carbs.consumed = 0;
     (progress as any).fat.consumed = 0;
-    (progress as any).meals.breakfast.done = false;
-    (progress as any).meals.lunch.done = false;
-    (progress as any).meals.dinner.done = false;
-    (progress as any).meals.snacks.forEach(
-      (snack: any) => (snack.done = false)
-    );
+    const clearMeal = (meal: any) => {
+      if (!meal) return;
+      meal.done = false;
+      meal.completedAt = undefined;
+      meal.completedAtSource = undefined;
+    };
+    clearMeal((progress as any).meals.breakfast);
+    clearMeal((progress as any).meals.lunch);
+    clearMeal((progress as any).meals.dinner);
+    (progress as any).meals.snacks.forEach(clearMeal);
     (progress as any).workouts.forEach(
       (workout: any) => (workout.done = false)
     );
@@ -1319,16 +1411,15 @@ export class ProgressService {
       allMeals.reduce((sum, meal) => sum + (meal?.macros?.fat || 0), 0)
     );
 
-    // Preserve existing done status
-    if (meals.breakfast) {
-      meals.breakfast.done = (progress as any)?.meals?.breakfast?.done || false;
-    }
-    if (meals.lunch) {
-      meals.lunch.done = (progress as any)?.meals?.lunch?.done || false;
-    }
-    if (meals.dinner) {
-      meals.dinner.done = (progress as any)?.meals?.dinner?.done || false;
-    }
+    // Preserve existing done status — and the time it was done at, which is
+    // what pairs the meal with the mood logged around it.
+    (["breakfast", "lunch", "dinner"] as const).forEach((slot) => {
+      if (!meals[slot]) return;
+      const previous = (progress as any)?.meals?.[slot];
+      meals[slot].done = previous?.done || false;
+      meals[slot].completedAt = previous?.completedAt ?? undefined;
+      meals[slot].completedAtSource = previous?.completedAtSource ?? undefined;
+    });
 
     const progressData = {
       userId,

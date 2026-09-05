@@ -46,6 +46,7 @@ import {
   MEAL_PLAN_SYSTEM_INSTRUCTION,
   computeActiveSlots,
 } from "./meal-plan-prompt";
+import { COOKING_LEVEL_SPECS, CookingLevel } from "../constants/cookingLevel";
 
 // Helper function to extract error message
 const getErrorMessage = (error: unknown): string => {
@@ -644,6 +645,10 @@ const generateMealPlanWithGemini = async (
   datesOverride?: Date[], // Optional: generate only these specific dates (two-phase support)
   moodContext?: string,
   recentMeals: string[] = [], // Dish names to avoid repeating from earlier plans
+  // What the user's own history says this week has to look like. Optional: a
+  // plan must still generate when the behaviour pipeline has nothing to say.
+  behaviourContext?: string,
+  behaviourMaxPrepMinutes?: number | null,
 ): Promise<MealPlanResponse> => {
   const models = await getAvailableGeminiModelsCached(apiKey);
 
@@ -814,6 +819,8 @@ const generateMealPlanWithGemini = async (
       recentMeals,
       styleNote: goalContextStr,
       moodContext,
+      behaviourContext,
+      ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
       language,
       fastingContext,
     });
@@ -872,6 +879,8 @@ const generateMealPlanWithGemini = async (
           recentMeals,
           styleNote: goalContextStr,
           moodContext,
+          behaviourContext,
+          ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
           language,
           fastingContext,
         });
@@ -938,6 +947,8 @@ const generateMealPlanWithGemini = async (
         recentMeals,
         styleNote: goalContextStr,
         moodContext,
+        behaviourContext,
+        ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
         repairNote,
         language,
         fastingContext,
@@ -1069,6 +1080,8 @@ const generateMealPlanWithOpenRouter = async (
   datesOverride?: Date[],
   moodContext?: string,
   recentMeals: string[] = [],
+  behaviourContext?: string,
+  behaviourMaxPrepMinutes?: number | null,
 ): Promise<MealPlanResponse> => {
   logger.info("[OpenRouter] Starting generation...");
 
@@ -1232,7 +1245,9 @@ const generateMealPlanWithOpenRouter = async (
 
     const prompt = buildWeeklyPlanPrompt({
       userData, skeleton, constraints, targetCalories, macros,
-      recentMeals, styleNote: goalContextStr, moodContext, language, fastingContext,
+      recentMeals, styleNote: goalContextStr, moodContext, behaviourContext,
+      ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
+      language, fastingContext,
     });
 
     const batchResults = await runOpenRouterPrompt(
@@ -1275,7 +1290,9 @@ const generateMealPlanWithOpenRouter = async (
 
       const repairPrompt = buildWeeklyPlanPrompt({
         userData, skeleton: repairSkeleton, constraints, targetCalories, macros,
-        recentMeals, styleNote: goalContextStr, moodContext, repairNote, language, fastingContext,
+        recentMeals, styleNote: goalContextStr, moodContext, behaviourContext,
+        ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
+        repairNote, language, fastingContext,
       });
 
       const repaired = await runOpenRouterPrompt(
@@ -1309,6 +1326,10 @@ const generateMealPlanWithAI = async (
   datesOverride?: Date[], // Optional: generate only these specific dates
   moodContext?: string | null,
   recentMeals: string[] = [], // Dish names from earlier plans, to avoid repeats
+  // Produced by the behaviour pipeline (src/behavior). Null when the user has
+  // too little history for anything to be claimed about how they eat.
+  behaviourContext?: string | null,
+  behaviourMaxPrepMinutes?: number | null,
 ): Promise<MealPlanResponse> => {
   try {
     // Local-dev escape hatch: with no AI keys, opt into the canned mock plan by
@@ -1348,6 +1369,7 @@ const generateMealPlanWithAI = async (
         return await generateMealPlanWithGemini(
           userData, weekStartDate, planType, language, geminiKey,
           goals, planTemplate, datesOverride, moodContext ?? undefined, recentMeals,
+          behaviourContext ?? undefined, behaviourMaxPrepMinutes,
         );
       } catch (geminiError: unknown) {
         logger.warn(`[AI] Gemini failed: ${getErrorMessage(geminiError)}. Trying OpenRouter...`);
@@ -1367,6 +1389,7 @@ const generateMealPlanWithAI = async (
         return await generateMealPlanWithOpenRouter(
           userData, weekStartDate, planType, language, openRouterKey,
           goals, planTemplate, datesOverride, moodContext ?? undefined, recentMeals,
+          behaviourContext ?? undefined, behaviourMaxPrepMinutes,
         );
       } catch (openRouterError: unknown) {
         logger.warn(`[AI] OpenRouter failed: ${getErrorMessage(openRouterError)}`);
@@ -1836,6 +1859,7 @@ const generateMealSuggestions = async (
     numberOfSuggestions?: number;
     aiRules?: string;
     allergies?: string[];
+    cookingLevel?: CookingLevel;
   },
   language: string = "en",
 ): Promise<IMeal[]> => {
@@ -1895,6 +1919,17 @@ If "${requestedMeal}" is not a typical ${mealCriteria.category} food (e.g. steak
 
   const needsEnglishName = language.toLowerCase() !== "en";
 
+  // A replacement meal has to be as cookable as the one it replaces. Without
+  // the user's level this said "home cooking" to everyone, which is the wrong
+  // answer at both ends: too much for someone who doesn't cook, too little for
+  // someone who does.
+  const cookingSpec = mealCriteria.cookingLevel
+    ? COOKING_LEVEL_SPECS[mealCriteria.cookingLevel]
+    : null;
+  const cookingLine = cookingSpec
+    ? `Cooking level: ${cookingSpec.label} — ${cookingSpec.guidance} Keep prepTime at or under ${cookingSpec.maxPrepMinutes} minutes.`
+    : "Cooking level: home cooking, simple everyday methods only (boiling, frying, baking, grilling, sautéing)";
+
   const prompt = `You are a professional nutritionist. ${focusBlock}
 
 ${suggestionKnowledge ? `${suggestionKnowledge}\n\n` : ""}CATEGORY: ${mealCriteria.category.toUpperCase()} — every suggestion must fit this slot; it overrides food preferences.
@@ -1909,7 +1944,7 @@ Never place a dinner-type food (pasta, rice bowls, steak, curry, heavy proteins)
 - Language: ${language}
 ${constraintBlock ? `${constraintBlock}\n` : ""}${allowedPreferences.length ? `- Food preferences (inspiration for lunch/dinner; for breakfast adapt the flavor/protein rather than forcing the literal dish): ${allowedPreferences.join(", ")}` : ""}
 ${mealCriteria.dislikes?.length ? `- Dislikes (avoid if possible): ${mealCriteria.dislikes.join(", ")}` : ""}
-- Cooking level: home cooking, simple everyday methods only (boiling, frying, baking, grilling, sautéing)
+- ${cookingLine}
 ${mealCriteria.aiRules && !isVariationRequest ? `- Additional rules: ${mealCriteria.aiRules}` : ""}
 
 ## Response Format:

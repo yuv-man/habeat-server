@@ -20,7 +20,7 @@ import {
   generateTextWithRateLimit,
   getErrorMessage,
 } from "../utils/gemini-rate-limiter";
-import { EatingProfileService } from "../eating-profile/eating-profile.service";
+import { BehaviorService } from "../behavior/behavior.service";
 
 interface ChatContext {
   currentScreen?: string;
@@ -62,8 +62,8 @@ export class ChatAIService {
     @InjectModel(Goal.name) private goalModel: Model<IGoal>,
     @InjectModel(DailyProgress.name)
     private progressModel: Model<IDailyProgress>,
-    @Inject(forwardRef(() => EatingProfileService))
-    private eatingProfileService: EatingProfileService,
+    @Inject(forwardRef(() => BehaviorService))
+    private behaviorService: BehaviorService,
   ) {}
 
   /**
@@ -304,7 +304,7 @@ IMPORTANT:
       const [{ user, plan, goals, todayProgress, todayMeals }, eatingProfile] =
         await Promise.all([
           this.buildContext(userId),
-          this.eatingProfileService.getProfile(userId),
+          this.behaviorService.getProfile(userId),
         ]);
 
       // Generate system prompt
@@ -318,7 +318,7 @@ IMPORTANT:
       );
 
       if (eatingProfile) {
-        systemPrompt += `\n## Eating Profile:\n${this.eatingProfileService.profileSummaryText(eatingProfile)}\n`;
+        systemPrompt += `\n## Eating Profile:\n${this.behaviorService.profileSummaryText(eatingProfile)}\n`;
       }
 
       const fullPrompt = `${systemPrompt}

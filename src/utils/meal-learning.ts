@@ -39,8 +39,10 @@ export async function updateMealLearningProfile(
     const profile = (user as any).mealLearningProfile || {
       completedMeals: [],
       swappedMeals: [],
+      recentSwaps: [],
       cuisineScores: {},
     };
+    if (!Array.isArray(profile.recentSwaps)) profile.recentSwaps = [];
 
     // Normalise cuisineScores to a plain object (Mongoose Map → plain obj)
     const scores: Record<string, number> =
@@ -74,6 +76,13 @@ export async function updateMealLearningProfile(
         existing.count += 1;
       } else {
         profile.swappedMeals.push({ name: mealName, count: 1 });
+      }
+
+      // Dated, so "how often did they replace a planned meal this month" is
+      // answerable. The running count above can only ever say "ever".
+      profile.recentSwaps.push({ name: mealName, at: new Date() });
+      if (profile.recentSwaps.length > 60) {
+        profile.recentSwaps = profile.recentSwaps.slice(-60);
       }
 
       if (cuisine) {

@@ -20,6 +20,20 @@ const mealSnapshotSchema = new Schema(
     },
     prepTime: { type: Number, required: true },
     done: { type: Boolean, required: true, default: false },
+    // When the meal was actually ticked off. `done` alone says a meal happened
+    // but not when, which is exactly what the emotional-eating join needs in
+    // order to pair a meal with the mood logged around it.
+    completedAt: { type: Date, required: false },
+    // Where completedAt came from. "tick" is the moment the box was ticked,
+    // which is only the eating time when the two happen together; "user" is a
+    // time the user typed in afterwards. The distinction matters downstream:
+    // meal spacing and late-night claims are far stronger evidence when the
+    // user stated the time than when we inferred it from a late tick.
+    completedAtSource: {
+      type: String,
+      enum: ["tick", "user"],
+      required: false,
+    },
     _id: { type: Schema.Types.ObjectId, ref: "Meal", required: true },
   },
   { _id: false }

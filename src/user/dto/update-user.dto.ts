@@ -11,6 +11,7 @@ import {
   Max,
 } from "class-validator";
 import { SafeText, SafeTextArray, SafeTermArray } from "../../utils/safe-input.decorator";
+import { COOKING_LEVELS, CookingLevel } from "../../constants/cookingLevel";
 
 /**
  * The ONLY fields a user may set on their own record via `PUT /users/:id`.
@@ -128,6 +129,10 @@ export class UpdateUserDto {
   @Min(2)
   @Max(4)
   mealsPerDay?: number;
+
+  @IsOptional()
+  @IsIn(COOKING_LEVELS)
+  cookingLevel?: CookingLevel;
 
   @IsOptional()
   @IsNumber()

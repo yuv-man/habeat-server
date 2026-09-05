@@ -22,7 +22,7 @@ import { PhotoRecognitionModule } from "./photo-recognition/photo-recognition.mo
 import { SubscriptionModule } from "./subscription/subscription.module";
 import { CBTModule } from "./cbt/cbt.module";
 import { SocialModule } from "./social/social.module";
-import { EatingProfileModule } from "./eating-profile/eating-profile.module";
+import { BehaviorModule } from "./behavior/behavior.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
 import { FoodTermsModule } from "./food-terms/food-terms.module";
 import { AiAgentModule } from "./ai-agent/ai-agent.module";
@@ -98,7 +98,7 @@ import logger from "./utils/logger";
     SubscriptionModule,
     CBTModule,
     SocialModule,
-    EatingProfileModule,
+    BehaviorModule,
     AnalyticsModule,
     FoodTermsModule,
     AiAgentModule,

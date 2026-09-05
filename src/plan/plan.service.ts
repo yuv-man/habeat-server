@@ -880,6 +880,7 @@ export class PlanService {
       dislikes: userData.dislikes || [],
       fastingHours: userData.fastingHours,
       fastingStartTime: userData.fastingStartTime,
+      cookingLevel: userData.cookingLevel,
     };
 
     // Convert userId to ObjectId if it's a string

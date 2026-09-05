@@ -274,6 +274,26 @@ describe("buildWeeklyPlanPrompt", () => {
     expect(prompt).not.toContain("ALREADY EATEN RECENTLY");
     expect(prompt).not.toContain("STYLE NOTE");
     expect(prompt).not.toContain("CORRECTION REQUIRED");
+    expect(prompt).not.toContain("COACH'S BRIEF ON THIS USER");
+  });
+
+  it("carries the behavioural findings above the menu, as requirements", () => {
+    // The point of the behaviour pipeline: a plan that ignores a repeatedly
+    // skipped breakfast just serves the same breakfast again.
+    const skeleton = buildMenuSkeleton(DAYS, none, 2000, "seed");
+    const prompt = buildWeeklyPlanPrompt({
+      ...base,
+      skeleton,
+      behaviourContext:
+        "The user follows breakfast (30%) far less often than the rest of the day.",
+    });
+
+    expect(prompt).toContain("COACH'S BRIEF ON THIS USER");
+    expect(prompt).toContain("breakfast (30%)");
+    // Ahead of the outline, so the constraints are read before the cooking.
+    expect(prompt.indexOf("COACH'S BRIEF ON THIS USER")).toBeLessThan(
+      prompt.indexOf("MENU OUTLINE"),
+    );
   });
 
   it("marks training days so the model can skew protein", () => {
@@ -281,5 +301,50 @@ describe("buildWeeklyPlanPrompt", () => {
     const prompt = buildWeeklyPlanPrompt({ ...base, skeleton });
     expect(prompt).toContain("training day");
     expect(prompt).toContain("rest day");
+  });
+
+  describe("cooking level", () => {
+    const skeleton = buildMenuSkeleton(DAYS, none, 2000, "seed");
+
+    it("caps prep time and states the technique the user is up for", () => {
+      const prompt = buildWeeklyPlanPrompt({
+        ...base,
+        userData: { ...base.userData, cookingLevel: "beginner" },
+        skeleton,
+      });
+
+      expect(prompt).toContain("MAX PREP TIME: 20 minutes per meal");
+      expect(prompt).toContain("COOKING SKILL: beginner");
+      expect(prompt).toContain("one oven tray");
+    });
+
+    it("falls back to the default ceiling when the user never said", () => {
+      const prompt = buildWeeklyPlanPrompt({ ...base, skeleton });
+      expect(prompt).toContain("MAX PREP TIME: 45 minutes per meal");
+      expect(prompt).not.toContain("COOKING SKILL");
+    });
+
+    it("lets observed behaviour tighten the declared ceiling", () => {
+      // Says they love to cook, but abandons anything over 25 minutes.
+      const prompt = buildWeeklyPlanPrompt({
+        ...base,
+        userData: { ...base.userData, cookingLevel: "confident" },
+        skeleton,
+        maxPrepMinutes: 25,
+      });
+      expect(prompt).toContain("MAX PREP TIME: 25 minutes per meal");
+    });
+
+    it("never lets observed behaviour loosen the declared ceiling", () => {
+      // A beginner does not get 60-minute dinners because the behaviour
+      // pipeline hasn't watched them abandon one yet.
+      const prompt = buildWeeklyPlanPrompt({
+        ...base,
+        userData: { ...base.userData, cookingLevel: "beginner" },
+        skeleton,
+        maxPrepMinutes: 60,
+      });
+      expect(prompt).toContain("MAX PREP TIME: 20 minutes per meal");
+    });
   });
 });

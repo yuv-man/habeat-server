@@ -13,9 +13,10 @@ import {
   MealMoodCorrelationSchema,
 } from "./cbt.model";
 import { User, UserSchema } from "../user/user.model";
+import { DailyProgress, DailyProgressSchema } from "../progress/progress.model";
 import { ChallengeModule } from "../challenge/challenge.module";
 import { EngagementModule } from "../engagement/engagement.module";
-import { EatingProfileModule } from "../eating-profile/eating-profile.module";
+import { BehaviorModule } from "../behavior/behavior.module";
 
 @Module({
   imports: [
@@ -25,10 +26,13 @@ import { EatingProfileModule } from "../eating-profile/eating-profile.module";
       { name: CBTExerciseCompletion.name, schema: CBTExerciseCompletionSchema },
       { name: MealMoodCorrelation.name, schema: MealMoodCorrelationSchema },
       { name: User.name, schema: UserSchema },
+      // Read-only: the emotional-eating insights join meals ticked off on the
+      // daily tracker with the moods logged around them.
+      { name: DailyProgress.name, schema: DailyProgressSchema },
     ]),
     forwardRef(() => ChallengeModule),
     forwardRef(() => EngagementModule),
-    forwardRef(() => EatingProfileModule),
+    forwardRef(() => BehaviorModule),
   ],
   controllers: [CBTController],
   providers: [CBTService],
