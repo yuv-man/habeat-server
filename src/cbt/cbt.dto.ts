@@ -6,6 +6,7 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsIn,
   Min,
   Max,
   ValidateNested,
@@ -19,6 +20,7 @@ import {
   CognitiveDistortionType,
   CBTExerciseType,
   MealType,
+  EatingMode,
   EatingTrigger,
   EatingFacilitator,
   EATING_TRIGGERS,
@@ -468,6 +470,11 @@ export class LinkMoodToMealDto {
   @ApiProperty()
   @IsBoolean()
   wasEmotionalEating: boolean;
+
+  @ApiPropertyOptional({ enum: ["mindful", "comfort", "social", "fuel", "habit"] })
+  @IsOptional()
+  @IsIn(["mindful", "comfort", "social", "fuel", "habit"])
+  eatingMode?: EatingMode;
 
   @ApiPropertyOptional({ minimum: 1, maximum: 5 })
   @IsOptional()

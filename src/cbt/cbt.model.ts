@@ -14,6 +14,12 @@ export type MoodCategory =
   | "sad"
   | "angry";
 
+/** Why the meal was eaten, as the user names it in the post-meal check-in.
+ *  Kept beside `wasEmotionalEating` rather than folded into it — "comfort" and
+ *  "habit" both set that boolean, but they are not the same behaviour and the
+ *  insights lose the distinction if only the boolean survives. */
+export type EatingMode = "mindful" | "comfort" | "social" | "fuel" | "habit";
+
 export type MoodTrigger =
   | "work"
   | "relationships"
@@ -181,11 +187,13 @@ export interface IMealMoodCorrelation extends Document {
     moodCategory: MoodCategory;
   };
   wasEmotionalEating: boolean;
+  eatingMode?: EatingMode;
   hungerLevelBefore?: MoodLevel;
   satisfactionAfter?: MoodLevel;
   notes?: string;
   biometrics?: IBiometricSnapshot;
   createdAt: Date;
+  updatedAt: Date;
 }
 
 // Mood Entry Schema
@@ -498,6 +506,10 @@ const mealMoodCorrelationSchema = new Schema(
       required: true,
       default: false,
     },
+    eatingMode: {
+      type: String,
+      enum: ["mindful", "comfort", "social", "fuel", "habit"],
+    },
     hungerLevelBefore: {
       type: Number,
       min: 1,
@@ -519,11 +531,15 @@ const mealMoodCorrelationSchema = new Schema(
     },
   },
   {
-    timestamps: { createdAt: true, updatedAt: false },
+    timestamps: true,
     collection: "meal_mood_correlations",
   }
 );
 
+// One correlation per meal per day. The post-meal check-in saves on every tap
+// rather than behind a Save button, so writes for the same meal must land on
+// the same document instead of stacking up duplicates.
+mealMoodCorrelationSchema.index({ userId: 1, mealId: 1, date: 1 }, { unique: true });
 mealMoodCorrelationSchema.index({ userId: 1, createdAt: -1 });
 mealMoodCorrelationSchema.index({ userId: 1, wasEmotionalEating: 1 });
 mealMoodCorrelationSchema.index({ userId: 1, mealType: 1 });

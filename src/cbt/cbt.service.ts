@@ -781,23 +781,64 @@ export class CBTService {
   // ============== MEAL-MOOD ENDPOINTS ==============
 
   async linkMoodToMeal(userId: string, dto: LinkMoodToMealDto) {
-    const correlation = await this.mealMoodModel.create({
-      userId: new mongoose.Types.ObjectId(userId),
-      mealId: new mongoose.Types.ObjectId(dto.mealId),
+    // The post-meal check-in saves on every tap instead of behind a Save
+    // button, so this arrives several times for one meal: mode first, then the
+    // mood, then whatever detail the user chose to add. Each call carries only
+    // what that tap knew, so it upserts and merges rather than creating — a
+    // create per tap left three partial rows where there was one meal, and
+    // inflated every count built on top of them.
+    const set: Record<string, unknown> = {
       mealName: dto.mealName,
       mealType: dto.mealType,
-      date: dto.date,
+      wasEmotionalEating: dto.wasEmotionalEating,
+    };
+
+    // Only fields the caller actually sent. A later tap that says nothing
+    // about hunger must not erase the hunger an earlier one recorded.
+    const optional = {
       moodBefore: dto.moodBefore,
       moodAfter: dto.moodAfter,
-      wasEmotionalEating: dto.wasEmotionalEating,
+      eatingMode: dto.eatingMode,
       hungerLevelBefore: dto.hungerLevelBefore,
       satisfactionAfter: dto.satisfactionAfter,
       notes: dto.notes,
       biometrics: dto.biometrics,
-    });
+    };
+    for (const [key, value] of Object.entries(optional)) {
+      if (value !== undefined) set[key] = value;
+    }
+
+    const key = {
+      userId: new mongoose.Types.ObjectId(userId),
+      mealId: new mongoose.Types.ObjectId(dto.mealId),
+      date: dto.date,
+    };
+
+    const before = await this.mealMoodModel.findOne(key).select("_id").lean();
+    let isNew = !before;
+
+    let correlation: IMealMoodCorrelation;
+    try {
+      correlation = await this.mealMoodModel.findOneAndUpdate(
+        key,
+        { $set: set, $setOnInsert: key },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+    } catch (error: any) {
+      // Two taps close enough together can both read "not found" and both try
+      // to insert; the unique index lets exactly one win. The loser is a plain
+      // update, not an error the user should ever see.
+      if (error?.code !== 11000) throw error;
+      isNew = false;
+      correlation = await this.mealMoodModel.findOneAndUpdate(
+        key,
+        { $set: set },
+        { new: true }
+      );
+    }
 
     logger.info(
-      `Meal-mood correlation logged for user ${userId}: ${dto.mealName}`
+      `Meal-mood correlation ${isNew ? "logged" : "updated"} for user ${userId}: ${dto.mealName}`
     );
 
     // Refresh the cheap rule-based scores on the behaviour profile
@@ -807,20 +848,23 @@ export class CBTService {
       logger.error(`[CBTService] Behaviour profile update failed: ${e}`)
     );
 
-    // Update challenge progress
-    try {
-      await this.challengeService.onMealMoodLinked(userId);
+    // Challenge progress and the awareness badge count meals reflected on, not
+    // taps. Refining an existing correlation must not advance either.
+    if (isNew) {
+      try {
+        await this.challengeService.onMealMoodLinked(userId);
 
-      // Check for emotional awareness milestones
-      const correlationCount = await this.mealMoodModel.countDocuments({
-        userId: new mongoose.Types.ObjectId(userId),
-      });
+        // Check for emotional awareness milestones
+        const correlationCount = await this.mealMoodModel.countDocuments({
+          userId: new mongoose.Types.ObjectId(userId),
+        });
 
-      if (correlationCount === 10) {
-        await this.engagementService.awardBadge(userId, "emotional_eater_aware");
+        if (correlationCount === 10) {
+          await this.engagementService.awardBadge(userId, "emotional_eater_aware");
+        }
+      } catch (error) {
+        logger.error(`Failed to update challenge progress for meal-mood link: ${error}`);
       }
-    } catch (error) {
-      logger.error(`Failed to update challenge progress for meal-mood link: ${error}`);
     }
 
     return {
