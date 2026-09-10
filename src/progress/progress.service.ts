@@ -31,6 +31,7 @@ import {
 import {
   IPlan,
   IDailyProgress,
+  MealSource,
   IDailyPlan,
   IDayPlan,
   IMeal,
@@ -493,7 +494,10 @@ export class ProgressService {
   async markMealCompleted(
     userId: string,
     mealId: string,
-    mealType: "breakfast" | "lunch" | "dinner" | "snacks"
+    mealType: "breakfast" | "lunch" | "dinner" | "snacks",
+    /** Where the food came from, when the user said. Optional — the tick is
+     *  never blocked on answering it. */
+    source?: MealSource
   ) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -529,6 +533,19 @@ export class ProgressService {
     // time, and a stale one would pull the wrong mood into the pairing.
     meal.completedAt = meal.done ? new Date() : undefined;
     meal.completedAtSource = meal.done ? "tick" : undefined;
+
+    // Where the food came from. Cleared on un-tick alongside the timestamp: a
+    // meal that didn't happen has no source, and leaving a stale one would let
+    // an undone takeaway keep counting toward the Brain's P08 detection.
+    //
+    // On the way in, only overwrite when the user actually answered. A tick
+    // with no answer must not erase a source given earlier in the day when
+    // they swapped the meal in.
+    if (!meal.done) {
+      meal.source = undefined;
+    } else if (source) {
+      meal.source = source;
+    }
 
     const calories = Math.round(meal.calories || 0);
     const protein = Math.round(meal.macros?.protein || 0);

@@ -34,6 +34,14 @@ const mealSnapshotSchema = new Schema(
       enum: ["tick", "user"],
       required: false,
     },
+    // Where the food actually came from, when the user told us. Absent means
+    // unanswered, never "cooked" — the Brain's takeaway detection (P08) treats
+    // a missing answer as no evidence rather than as home cooking.
+    source: {
+      type: String,
+      enum: ["cooked", "ordered", "eaten-out"],
+      required: false,
+    },
     _id: { type: Schema.Types.ObjectId, ref: "Meal", required: true },
   },
   { _id: false }

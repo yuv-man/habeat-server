@@ -38,7 +38,7 @@ import {
   DeleteSnackResponse,
   DeleteWorkoutResponse,
 } from "./subjects";
-import { IMeal } from "src/types/interfaces";
+import { MealSource, IMeal } from "src/types/interfaces";
 
 @ApiTags("plan")
 @Controller("plan")
@@ -103,7 +103,7 @@ export class PlanController {
       planId,
       body.date,
       body.mealType,
-      body.newMeal as IMeal,
+      body.newMeal as IMeal & { source?: MealSource },
       body.snackIndex
     );
   }

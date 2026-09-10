@@ -1,5 +1,6 @@
 import { Module, forwardRef } from "@nestjs/common";
 import { MongooseModule } from "@nestjs/mongoose";
+import { ShoppingModule } from "../shopping/shopping.module";
 import { PlanController } from "./plan.controller";
 import { PlanService } from "./plan.service";
 import { Plan, PlanSchema } from "./plan.model";
@@ -16,6 +17,7 @@ import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 
 @Module({
   imports: [
+    ShoppingModule,
     MongooseModule.forFeature([
       { name: Plan.name, schema: PlanSchema },
       { name: ShoppingList.name, schema: ShoppingListSchema },

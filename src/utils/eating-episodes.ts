@@ -54,6 +54,9 @@ export interface LoggedMeal {
    *  day claims (late-night eating, risk windows) require a real one. */
   atIsExact: boolean;
   calories?: number;
+  /** Where the food came from, when the user told us. Undefined means they
+   *  were never asked or declined to say — never read it as home cooking. */
+  source?: "cooked" | "ordered" | "eaten-out";
 }
 
 interface ProgressMealSnapshot {
@@ -62,6 +65,7 @@ interface ProgressMealSnapshot {
   done?: boolean;
   completedAt?: Date | string | null;
   calories?: number;
+  source?: "cooked" | "ordered" | "eaten-out";
 }
 
 interface ProgressDoc {
@@ -126,6 +130,7 @@ export const extractLoggedMeals = (progressDocs: ProgressDoc[]): LoggedMeal[] =>
         at,
         atIsExact: Boolean(exact),
         calories: snapshot.calories,
+        source: snapshot.source,
       });
     };
 

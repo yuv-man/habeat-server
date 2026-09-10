@@ -188,6 +188,9 @@ export interface IMealMoodCorrelation extends Document {
   };
   wasEmotionalEating: boolean;
   eatingMode?: EatingMode;
+  /** Where the food came from, when the user said so at check-in. Absent means
+   *  unanswered — never assume home cooking. */
+  source?: "cooked" | "ordered" | "eaten-out";
   hungerLevelBefore?: MoodLevel;
   satisfactionAfter?: MoodLevel;
   notes?: string;
@@ -509,6 +512,11 @@ const mealMoodCorrelationSchema = new Schema(
     eatingMode: {
       type: String,
       enum: ["mindful", "comfort", "social", "fuel", "habit"],
+    },
+    source: {
+      type: String,
+      enum: ["cooked", "ordered", "eaten-out"],
+      required: false,
     },
     hungerLevelBefore: {
       type: Number,

@@ -13,6 +13,7 @@ import {
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { ProgressService } from "./progress.service";
 import { AuthGuard } from "../auth/auth.guard";
+import { MealSource } from "../types/interfaces";
 import { resolveOwnUserId } from "../utils/ownership";
 import { AnalyticsService } from "../analytics/analytics.service";
 
@@ -68,16 +69,24 @@ export class ProgressController {
     @Param("userId") userId: string,
     @Param("mealId") mealId: string,
     @Request() req,
-    @Body() body: { mealType: "breakfast" | "lunch" | "dinner" | "snacks" }
+    @Body()
+    body: {
+      mealType: "breakfast" | "lunch" | "dinner" | "snacks";
+      /** Where the food came from, when the user said. Optional: the tick
+       *  must never be blocked on answering it. */
+      source?: MealSource;
+    }
   ) {
     const resolvedUserId = resolveOwnUserId(req, userId);
     const result = await this.progressService.markMealCompleted(
       resolvedUserId,
       mealId,
-      body.mealType
+      body.mealType,
+      body.source
     );
     this.analyticsService.capture(resolvedUserId, "meal_completed", {
       mealType: body.mealType,
+      source: body.source,
     });
     return result;
   }

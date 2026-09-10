@@ -808,6 +808,7 @@ const generateMealPlanWithGemini = async (
       planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate)),
       userData.dislikes,
       activeSlots,
+      userData.path,
     );
 
     const multiDayPrompt = buildWeeklyPlanPrompt({
@@ -868,6 +869,7 @@ const generateMealPlanWithGemini = async (
           ),
           userData.dislikes,
           activeSlots,
+          userData.path,
         );
 
         const singleDayPrompt = buildWeeklyPlanPrompt({
@@ -936,6 +938,7 @@ const generateMealPlanWithGemini = async (
         ),
         userData.dislikes,
         activeSlots,
+        userData.path,
       );
 
       const repairPrompt = buildWeeklyPlanPrompt({
@@ -1241,6 +1244,7 @@ const generateMealPlanWithOpenRouter = async (
       planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate)),
       userData.dislikes,
       activeSlots,
+      userData.path,
     );
 
     const prompt = buildWeeklyPlanPrompt({
@@ -1286,6 +1290,7 @@ const generateMealPlanWithOpenRouter = async (
         planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate), "repair"),
         userData.dislikes,
         activeSlots,
+        userData.path,
       );
 
       const repairPrompt = buildWeeklyPlanPrompt({

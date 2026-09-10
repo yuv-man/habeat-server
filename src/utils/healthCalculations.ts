@@ -1,5 +1,5 @@
 import {
-  WORKOUT_FREQUENCY_MULTIPLIERS,
+  activityMultiplierForWorkouts,
   PATH_ADJUSTMENTS,
 } from "../enums/enumPaths";
 
@@ -16,17 +16,13 @@ export const calculateBMR = (
   }
 };
 
+/**
+ * @param workoutFrequency workouts per week (0-7), as collected in KYC.
+ */
 export const calculateTDEE = (
   bmr: number,
   workoutFrequency?: number
-): number => {
-  const multiplier = workoutFrequency
-    ? WORKOUT_FREQUENCY_MULTIPLIERS[
-        workoutFrequency as keyof typeof WORKOUT_FREQUENCY_MULTIPLIERS
-      ]
-    : 1.55;
-  return bmr * multiplier;
-};
+): number => bmr * activityMultiplierForWorkouts(workoutFrequency);
 
 export const calculateIdealWeight = (
   height: number,
@@ -47,7 +43,10 @@ export const calculateIdealWeight = (
 export const calculateMacros = (calories: number, path: string) => {
   let proteinPercent, carbPercent, fatPercent;
 
-  switch (path) {
+  // PATH_ADJUSTMENTS and PATH_WORKOUTS_GOAL both accept the hyphenated aliases,
+  // so a user stored as "gain-muscle" was getting a muscle-gain calorie surplus
+  // on top of the default healthy macro split.
+  switch (path === "gain-muscle" ? "muscle" : path === "lose-weight" ? "lose" : path) {
     case "muscle":
       proteinPercent = 0.3;
       carbPercent = 0.4;
@@ -82,6 +81,8 @@ export const calculateMacros = (calories: number, path: string) => {
 };
 
 export const calculateTargetCalories = (tdee: number, path: string): number => {
-  const adjustment = PATH_ADJUSTMENTS[path as keyof typeof PATH_ADJUSTMENTS];
+  // An unrecognised path used to make this NaN, which then propagated all the
+  // way into the meal-plan prompt as the per-meal calorie budget.
+  const adjustment = PATH_ADJUSTMENTS[path as keyof typeof PATH_ADJUSTMENTS] ?? 0;
   return Math.round(tdee + adjustment);
 };

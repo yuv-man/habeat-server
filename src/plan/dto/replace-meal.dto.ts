@@ -53,6 +53,17 @@ class MealDto {
   @IsOptional()
   @IsNumber()
   prepTime?: number;
+
+  /**
+   * Where the food came from, when the user said.
+   *
+   * Must be declared here or the global `whitelist: true` ValidationPipe
+   * strips it off the nested object before the service ever sees it — the
+   * request would look accepted and the field would silently vanish.
+   */
+  @IsOptional()
+  @IsEnum(["cooked", "ordered", "eaten-out"])
+  source?: "cooked" | "ordered" | "eaten-out";
 }
 
 export class ReplaceMealDto {

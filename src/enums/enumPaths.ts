@@ -1,10 +1,39 @@
 // Activity level multipliers for TDEE calculation
+/**
+ * Harris-Benedict activity multipliers, keyed by ACTIVITY LEVEL (1-5).
+ *
+ * `user.workoutFrequency` is NOT this scale — it is workouts per week (0-7,
+ * straight off the KYC slider). Indexing this table with it treated a
+ * never-trains user as moderately active and produced `undefined` (and so a
+ * NaN calorie target) at 6 and 7 workouts a week. Go through
+ * `activityMultiplierForWorkouts` instead of subscripting this directly.
+ */
 export const WORKOUT_FREQUENCY_MULTIPLIERS = {
   1: 1.2, // Little or no exercise
   2: 1.375, // Light exercise 1-3 days/week
   3: 1.55, // Moderate exercise 3-5 days/week
   4: 1.725, // Hard exercise 6-7 days/week
   5: 1.9, // Physical job + exercise or 2x/day training
+};
+
+/**
+ * Workouts per week (the number the user actually gave us) -> activity
+ * multiplier. Anything unusable falls back to lightly active rather than to
+ * the middle of the scale: over-feeding someone we know nothing about is the
+ * worse error of the two.
+ */
+export const activityMultiplierForWorkouts = (
+  workoutsPerWeek?: number | null
+): number => {
+  if (typeof workoutsPerWeek !== "number" || !Number.isFinite(workoutsPerWeek)) {
+    return WORKOUT_FREQUENCY_MULTIPLIERS[2];
+  }
+  const w = Math.max(0, Math.min(7, Math.round(workoutsPerWeek)));
+  if (w === 0) return WORKOUT_FREQUENCY_MULTIPLIERS[1]; // sedentary
+  if (w <= 2) return WORKOUT_FREQUENCY_MULTIPLIERS[2]; // light
+  if (w <= 4) return WORKOUT_FREQUENCY_MULTIPLIERS[3]; // moderate
+  if (w <= 6) return WORKOUT_FREQUENCY_MULTIPLIERS[4]; // hard
+  return WORKOUT_FREQUENCY_MULTIPLIERS[5]; // daily training
 };
 
 // Path-specific calorie adjustments

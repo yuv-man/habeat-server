@@ -476,6 +476,15 @@ export class LinkMoodToMealDto {
   @IsIn(["mindful", "comfort", "social", "fuel", "habit"])
   eatingMode?: EatingMode;
 
+  @ApiPropertyOptional({
+    enum: ["cooked", "ordered", "eaten-out"],
+    description:
+      "Where the food came from. Drives the Brain's frequent-takeaway detection (P08).",
+  })
+  @IsOptional()
+  @IsIn(["cooked", "ordered", "eaten-out"])
+  source?: "cooked" | "ordered" | "eaten-out";
+
   @ApiPropertyOptional({ minimum: 1, maximum: 5 })
   @IsOptional()
   @IsNumber()

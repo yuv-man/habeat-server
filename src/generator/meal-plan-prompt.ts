@@ -127,51 +127,63 @@ interface Archetype {
   form: string;
   /** Ingredient families this form depends on. */
   requires?: string[];
+  /**
+   * The form is built on a starch (grains, flour, batter, potato). Dropped for
+   * low-carb diets, where a 5%-carb macro target and a pancake brief in the
+   * same prompt are a straight contradiction — and the model resolves it by
+   * ignoring one of them.
+   */
+  carbLed?: boolean;
 }
 
 const BREAKFAST_ARCHETYPES: Archetype[] = [
   { form: "egg-based hot dish (scramble, omelette, frittata, shakshuka)", requires: ["egg"] },
-  { form: "hot porridge or cooked grain bowl (oats, congee, semolina, millet)" },
+  { form: "hot porridge or cooked grain bowl (oats, congee, semolina, millet)", carbLed: true },
   { form: "creamy yogurt- or curd-style bowl with fruit and a crunchy topping", requires: ["yogurt"] },
-  { form: "handheld toast, flatbread or breakfast wrap with a savoury topping", requires: ["bread"] },
+  { form: "handheld toast, flatbread or breakfast wrap with a savoury topping", requires: ["bread"], carbLed: true },
   { form: "blended smoothie or smoothie bowl with a thickener and topping" },
-  { form: "batter-based griddle item (pancakes, waffles, crepes)", requires: ["flour"] },
-  { form: "savoury breakfast skillet or hash built on potato or sweet potato" },
-  { form: "overnight / no-cook soaked grain or chia pot with fruit" },
-  { form: "protein-forward breakfast plate with a starch and a vegetable" },
+  { form: "batter-based griddle item (pancakes, waffles, crepes)", requires: ["flour"], carbLed: true },
+  { form: "savoury breakfast skillet or hash built on potato or sweet potato", carbLed: true },
+  { form: "overnight / no-cook soaked grain or chia pot with fruit", carbLed: true },
+  // Was "protein-forward breakfast plate with a starch and a vegetable", which
+  // named no morning protein and no morning form. The model read it as licence
+  // to plate a dinner main and returned things like "Garlic Herb Broccoli with
+  // Sirloin and Sunny Side Up Eggs" for breakfast. The form now says what the
+  // plate actually is.
+  { form: "protein-forward breakfast plate: eggs or a soft cheese with a fruit or vegetable side (no steak, chops or roast joints)" },
 ];
 
 const LUNCH_ARCHETYPES: Archetype[] = [
   { form: "substantial salad bowl with a protein and a dressing" },
-  { form: "sandwich, wrap or pita filled with a protein and vegetables", requires: ["bread"] },
-  { form: "grain bowl with a protein, two vegetables and a sauce" },
-  { form: "hearty soup or broth with a side of bread or crackers" },
-  { form: "cold noodle or pasta salad with a protein" , requires: ["pasta"] },
-  { form: "one-pan skillet of protein, vegetables and a starch" },
-  { form: "stuffed or filled vegetable (peppers, sweet potato, courgette)" },
-  { form: "flatbread, quesadilla or savoury pancake with a filling", requires: ["flour"] },
-  { form: "rice or grain plate with a stew-style topping" },
+  { form: "sandwich, wrap or pita filled with a protein and vegetables", requires: ["bread"], carbLed: true },
+  { form: "grain bowl with a protein, two vegetables and a sauce", carbLed: true },
+  { form: "hearty soup or broth with a side of bread or crackers", carbLed: true },
+  { form: "cold noodle or pasta salad with a protein", requires: ["pasta"], carbLed: true },
+  { form: "one-pan skillet of protein, vegetables and a starch", carbLed: true },
+  { form: "stuffed or filled vegetable (peppers, sweet potato, courgette)", carbLed: true },
+  { form: "flatbread, quesadilla or savoury pancake with a filling", requires: ["flour"], carbLed: true },
+  { form: "rice or grain plate with a stew-style topping", carbLed: true },
 ];
 
 const DINNER_ARCHETYPES: Archetype[] = [
   { form: "roasted or baked main with two simple sides" },
-  { form: "stir-fry over rice or noodles" },
-  { form: "slow-simmered stew, chilli or curry with a starch" },
-  { form: "grilled or pan-seared main with a salad and a starch" },
-  { form: "pasta or noodle dish with a sauce and a vegetable", requires: ["pasta"] },
+  { form: "stir-fry over rice or noodles", carbLed: true },
+  { form: "slow-simmered stew, chilli or curry with a starch", carbLed: true },
+  { form: "grilled or pan-seared main with a salad and a starch", carbLed: true },
+  { form: "pasta or noodle dish with a sauce and a vegetable", requires: ["pasta"], carbLed: true },
   { form: "sheet-pan tray bake of protein and vegetables" },
-  { form: "tacos, burritos or filled tortillas with sides", requires: ["tortilla"] },
+  { form: "tacos, burritos or filled tortillas with sides", requires: ["tortilla"], carbLed: true },
   { form: "layered or baked casserole" },
-  { form: "soup-and-side dinner with a substantial bread", requires: ["bread"] },
-  { form: "burger, patty or kofta with a starch and a vegetable" },
+  { form: "soup-and-side dinner with a substantial bread", requires: ["bread"], carbLed: true },
+  { form: "burger, patty or kofta with a starch and a vegetable", carbLed: true },
 ];
 
 const SNACK_ARCHETYPES: Archetype[] = [
   { form: "fruit paired with a protein or fat source" },
   { form: "yogurt-style pot or pudding", requires: ["yogurt"] },
   { form: "raw vegetables with a dip" },
-  { form: "no-bake energy bite or bar" },
-  { form: "cracker, rice cake or toast with a spread", requires: ["bread"] },
+  { form: "no-bake energy bite or bar", carbLed: true },
+  { form: "cracker, rice cake or toast with a spread", requires: ["bread"], carbLed: true },
   { form: "small savoury portion (roasted chickpeas, edamame, olives)" },
   { form: "blended drink or small smoothie" },
   { form: "handful-style mix of seeds, dried fruit and a crunchy element" },
@@ -182,6 +194,35 @@ const ARCHETYPES: Record<MealSlot, Archetype[]> = {
   lunch: LUNCH_ARCHETYPES,
   dinner: DINNER_ARCHETYPES,
   snack: SNACK_ARCHETYPES,
+};
+
+/**
+ * Extra forms offered only to low-carb diets.
+ *
+ * Most of the standard lunch and dinner shapes are built on a starch, so simply
+ * filtering them out left keto with one usable lunch form and the same salad
+ * every day. These replace the variety that the filter removes, rather than
+ * leaving the user with a narrower plan for having picked a stricter diet.
+ */
+const LOW_CARB_ARCHETYPES: Record<MealSlot, Archetype[]> = {
+  breakfast: [
+    { form: "baked or pan-fried egg dish with a soft cheese and greens", requires: ["egg"] },
+    { form: "savoury breakfast bowl built on avocado and a soft protein" },
+  ],
+  lunch: [
+    { form: "protein and vegetable plate with a rich sauce or dressing" },
+    { form: "lettuce or cabbage wrap with a protein filling" },
+    { form: "creamy vegetable soup finished with a protein" },
+  ],
+  dinner: [
+    { form: "roasted main with a cauliflower or courgette side" },
+    { form: "skillet of protein and greens in a pan sauce" },
+    { form: "baked main topped with cheese and served with a salad" },
+  ],
+  snack: [
+    { form: "cheese or cured protein with olives or nuts" },
+    { form: "hard-boiled or devilled eggs", requires: ["egg"] },
+  ],
 };
 
 /**
@@ -324,17 +365,56 @@ const makeCycler = <T>(items: T[], random: () => number) => {
 };
 
 /**
- * Drop archetypes whose required ingredient family the user cannot eat.
+ * The diet the user picked, as stored on `user.path`. Only the low-carb ones
+ * change which *forms* are on the table; the rest are expressed through the
+ * calorie and macro targets, which the archetypes are neutral about.
+ */
+const LOW_CARB_PATHS = new Set(["keto"]);
+
+/** Whether this user's chosen diet rules out starch-led meal forms. */
+export const isLowCarbPath = (path?: string): boolean =>
+  LOW_CARB_PATHS.has((path ?? "").toLowerCase());
+
+/**
+ * Drop archetypes the user cannot eat: the required ingredient family is
+ * forbidden, or the form is starch-led and the diet they chose is not.
+ *
+ * Without the diet check a keto user was handed a 5%-carb macro target and a
+ * "pancakes, waffles, crepes" brief in the same prompt. The two cannot both be
+ * satisfied, so the model silently picked one — usually the pancakes.
+ *
  * Falls back to the unrestricted forms so a heavily-restricted user still gets
  * a full set of shapes rather than the same two every day.
  */
-const usableArchetypes = (slot: MealSlot, c: DietaryConstraints): string[] => {
-  const safe = ARCHETYPES[slot].filter((a) => {
+const usableArchetypes = (
+  slot: MealSlot,
+  c: DietaryConstraints,
+  path?: string,
+): string[] => {
+  const lowCarb = isLowCarbPath(path);
+
+  const allowed = (a: Archetype) => {
+    if (lowCarb && a.carbLed) return false;
     if (!a.requires || !c.hasConstraints) return true;
     return a.requires.every((family) => findMealViolations({ name: family }, c).length === 0);
-  });
-  const chosen = safe.length >= 3 ? safe : ARCHETYPES[slot].filter((a) => !a.requires);
-  return (chosen.length ? chosen : ARCHETYPES[slot]).map((a) => a.form);
+  };
+
+  const pool = lowCarb
+    ? [...ARCHETYPES[slot], ...LOW_CARB_ARCHETYPES[slot]]
+    : ARCHETYPES[slot];
+
+  const safe = pool.filter(allowed);
+  if (safe.length >= 3) return safe.map((a) => a.form);
+
+  // Not enough shapes survived. Relax the ingredient-family requirement (the
+  // hard dietary block in the prompt still protects the user) but never the
+  // diet-style one — a low-carb plan made of grain bowls is not a fallback,
+  // it is the wrong plan.
+  const relaxed = pool.filter((a) => !a.requires && (!lowCarb || !a.carbLed));
+  if (relaxed.length) return relaxed.map((a) => a.form);
+
+  const lastResort = lowCarb ? pool.filter((a) => !a.carbLed) : pool;
+  return (lastResort.length ? lastResort : ARCHETYPES[slot]).map((a) => a.form);
 };
 
 export interface DaySpec {
@@ -374,6 +454,8 @@ export const buildMenuSkeleton = (
   dislikes: string[] = [],
   /** Which meal slots to include. Defaults to all four. */
   activeSlots: MealSlot[] = ["breakfast", "lunch", "dinner", "snack"],
+  /** The diet the user chose (`user.path`). Rules starch-led forms in or out. */
+  path?: string,
 ): PlannedDay[] => {
   const random = rng(hashSeed(seed));
 
@@ -381,10 +463,10 @@ export const buildMenuSkeleton = (
   // Build cyclers for all four slots regardless of activeSlots — the RNG
   // must consume the same number of values so the seed stays stable.
   const archetypeCyclers: Record<MealSlot, () => string> = {
-    breakfast: makeCycler(usableArchetypes("breakfast", constraints), random),
-    lunch: makeCycler(usableArchetypes("lunch", constraints), random),
-    dinner: makeCycler(usableArchetypes("dinner", constraints), random),
-    snack: makeCycler(usableArchetypes("snack", constraints), random),
+    breakfast: makeCycler(usableArchetypes("breakfast", constraints, path), random),
+    lunch: makeCycler(usableArchetypes("lunch", constraints, path), random),
+    dinner: makeCycler(usableArchetypes("dinner", constraints, path), random),
+    snack: makeCycler(usableArchetypes("snack", constraints, path), random),
   };
   const proteinCyclers: Record<MealSlot, () => string> = {
     breakfast: makeCycler(proteinsForSlot("breakfast", constraints, dislikes), random),

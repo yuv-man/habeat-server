@@ -348,3 +348,61 @@ describe("buildWeeklyPlanPrompt", () => {
     });
   });
 });
+
+describe("diet type shapes the menu", () => {
+  const CARB_WORDS = /porridge|grain|oats|pancake|waffle|crepe|toast|flatbread|pasta|noodle|rice|tortilla|potato|bread|cracker|energy bite/i;
+
+  it("keeps starch-led forms out of a keto plan", () => {
+    // Keto sets a 5%-carb macro target. Handing the same prompt a "pancakes,
+    // waffles, crepes" brief asks for two incompatible things, and the model
+    // resolves it by ignoring one of them.
+    const week = buildMenuSkeleton(DAYS, none, 2000, "seed", [], undefined, "keto");
+    const forms = week.flatMap((d) => d.meals.map((m) => m.archetype));
+    expect(forms.length).toBeGreaterThan(0);
+    for (const form of forms) {
+      expect(form).not.toMatch(CARB_WORDS);
+    }
+  });
+
+  it("still offers starch-led forms on a non-keto plan", () => {
+    const week = buildMenuSkeleton(DAYS, none, 2000, "seed", [], undefined, "healthy");
+    const forms = week.flatMap((d) => d.meals.map((m) => m.archetype));
+    expect(forms.some((f) => CARB_WORDS.test(f))).toBe(true);
+  });
+
+  it("leaves keto with enough shapes to avoid the same meal every day", () => {
+    const week = buildMenuSkeleton(DAYS, none, 2000, "seed", [], undefined, "keto");
+    const breakfasts = new Set(
+      week.flatMap((d) => d.meals.filter((m) => m.slot === "breakfast").map((m) => m.archetype)),
+    );
+    expect(breakfasts.size).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("breakfast reads as breakfast", () => {
+  it("never briefs a breakfast as an unqualified protein plate", () => {
+    // "protein-forward breakfast plate with a starch and a vegetable" named no
+    // morning protein and no morning form, and the model filled the gap with a
+    // dinner main — "Garlic Herb Broccoli with Sirloin and Sunny Side Up Eggs".
+    const week = buildMenuSkeleton(DAYS, none, 2000, "seed");
+    const breakfasts = week.flatMap((d) =>
+      d.meals.filter((m) => m.slot === "breakfast").map((m) => m.archetype),
+    );
+    for (const form of breakfasts) {
+      if (/protein-forward/.test(form)) {
+        expect(form).toMatch(/eggs|cheese/i);
+        expect(form).toMatch(/no steak/i);
+      }
+    }
+  });
+
+  it("assigns breakfast a morning protein, never the dinner rotation", () => {
+    const week = buildMenuSkeleton(DAYS, none, 2000, "seed");
+    const proteins = week.flatMap((d) =>
+      d.meals.filter((m) => m.slot === "breakfast").map((m) => m.protein),
+    );
+    for (const p of proteins) {
+      expect(p).not.toMatch(/sirloin|steak|beef|lamb|pork|chicken/i);
+    }
+  });
+});

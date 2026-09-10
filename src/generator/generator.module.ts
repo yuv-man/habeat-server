@@ -1,5 +1,6 @@
 import { Module, forwardRef } from "@nestjs/common";
 import { MongooseModule } from "@nestjs/mongoose";
+import { ShoppingModule } from "../shopping/shopping.module";
 import { JwtModule } from "@nestjs/jwt";
 import { GeneratorController } from "./generator.controller";
 import { GeneratorService } from "./generator.service";
@@ -14,10 +15,11 @@ import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 import { StreamingGeneratorService } from "./streaming/streaming.service";
 import { GeneratorGateway } from "./streaming/generator.gateway";
 import { UserModule } from "../user/user.module";
-import { BehaviorModule } from "../behavior/behavior.module";
+import { BrainModule } from "../brain/brain.module";
 
 @Module({
   imports: [
+    ShoppingModule,
     MongooseModule.forFeature([
       { name: Plan.name, schema: PlanSchema },
       { name: User.name, schema: UserSchema },
@@ -34,7 +36,7 @@ import { BehaviorModule } from "../behavior/behavior.module";
     forwardRef(() => UserModule),
     // The weekly planner reads the behavioural profile so next week's plan is
     // shaped by how the user actually ate, not only by what they asked for.
-    BehaviorModule,
+    BrainModule,
   ],
   controllers: [GeneratorController],
   providers: [

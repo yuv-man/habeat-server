@@ -340,4 +340,6 @@ export const BehaviorProfileSchema = new Schema(
   { timestamps: true, versionKey: false },
 );
 
-BehaviorProfileSchema.index({ userId: 1 }, { unique: true });
+// The unique index is declared on the path itself (`unique: true` above).
+// Repeating it here made Mongoose warn about a duplicate definition on every
+// boot that loaded this schema.

@@ -9,6 +9,10 @@ import {
 } from "./shopping-list.model";
 import { Plan, PlanSchema } from "../plan/plan.model";
 import { IPlan } from "../types/interfaces";
+import {
+  ingredientKey,
+  ingredientKeyCandidates,
+} from "../utils/ingredient-key";
 
 @Injectable()
 export class ShoppingService {
@@ -19,12 +23,12 @@ export class ShoppingService {
     private planModel: Model<IPlan>
   ) {}
 
-  // Helper to normalize ingredient keys
+  /**
+   * Group key for an ingredient. Lives in utils/ingredient-key so the merging
+   * rules ("tomato" and "tomatoes" are one product) can be tested on their own.
+   */
   private normalizeIngredientKey(ingredientName: string): string {
-    return ingredientName
-      .toLowerCase()
-      .replace(/\s+/g, "_")
-      .replace(/[^a-z0-9_]/g, "");
+    return ingredientKey(ingredientName);
   }
 
   // Parse amount string like "200 g" into { value: 200, unit: "g" }
@@ -60,6 +64,100 @@ export class ShoppingService {
     return parts.join(" + ") || "";
   }
 
+  /**
+   * Read an amount string back into units. Stored amounts can already be a
+   * sum ("300 g + 2"), because that is how `formatAmounts` writes a product
+   * bought in two different units.
+   */
+  private collectAmountParts(
+    amountStr: string,
+    amounts: Map<string, number>,
+    unparsed: string[]
+  ): void {
+    if (!amountStr) return;
+    for (const part of amountStr.split("+")) {
+      const trimmed = part.trim();
+      if (!trimmed) continue;
+      const parsed = this.parseAmount(trimmed);
+      if (parsed) {
+        amounts.set(
+          parsed.unit,
+          (amounts.get(parsed.unit) || 0) + parsed.value
+        );
+      } else if (!unparsed.includes(trimmed)) {
+        // Something like "to taste" — keep it rather than drop it.
+        unparsed.push(trimmed);
+      }
+    }
+  }
+
+  /**
+   * Fold rows that are the same product into one.
+   *
+   * Lists written before the key rules understood plurals hold one row per
+   * spelling — "tomato" and "tomatoes" sitting next to each other — and every
+   * row on such a list carries a stale key. Repairing them on read means an
+   * existing cart fixes itself, instead of staying wrong until the user
+   * regenerates the list.
+   */
+  private mergeDuplicateIngredients(ingredients: IShoppingListIngredient[]): {
+    ingredients: IShoppingListIngredient[];
+    changed: boolean;
+  } {
+    const merged = new Map<
+      string,
+      {
+        ingredient: IShoppingListIngredient;
+        amounts: Map<string, number>;
+        unparsed: string[];
+      }
+    >();
+    let changed = false;
+
+    for (const ing of ingredients) {
+      const key = this.normalizeIngredientKey(ing.name || "");
+      const existing = merged.get(key);
+
+      if (!existing) {
+        if (ing.key !== key) changed = true;
+        const amounts = new Map<string, number>();
+        const unparsed: string[] = [];
+        this.collectAmountParts(ing.amount || "", amounts, unparsed);
+        merged.set(key, {
+          ingredient: {
+            name: ing.name,
+            amount: ing.amount || "",
+            category: ing.category,
+            done: ing.done,
+            key,
+          },
+          amounts,
+          unparsed,
+        });
+        continue;
+      }
+
+      changed = true;
+      this.collectAmountParts(ing.amount || "", existing.amounts, existing.unparsed);
+      // Still to buy unless every spelling of it was already ticked off.
+      existing.ingredient.done = existing.ingredient.done && ing.done;
+      if (!existing.ingredient.category && ing.category) {
+        existing.ingredient.category = ing.category;
+      }
+    }
+
+    const result = Array.from(merged.values()).map(
+      ({ ingredient, amounts, unparsed }) => ({
+        ...ingredient,
+        amount: [this.formatAmounts(amounts), ...unparsed]
+          .filter(Boolean)
+          .join(" + "),
+      })
+    );
+
+    return { ingredients: result, changed };
+  }
+
   async generateShoppingList(planId: string) {
     const plan = await this.planModel.findById(planId);
     if (!plan) {
@@ -78,10 +176,17 @@ export class ShoppingService {
       existingShoppingList.ingredients &&
       existingShoppingList.ingredients.length > 0
     ) {
+      const { ingredients, changed } = this.mergeDuplicateIngredients(
+        existingShoppingList.ingredients
+      );
+      if (changed) {
+        existingShoppingList.ingredients = ingredients;
+        await existingShoppingList.save();
+      }
       return {
         success: true,
         data: {
-          ingredients: existingShoppingList.ingredients,
+          ingredients,
         },
       };
     }
@@ -214,6 +319,136 @@ export class ShoppingService {
     };
   }
 
+  /**
+   * Rebuild a plan's shopping list from the plan's current meals, keeping every
+   * item the user has already ticked off ticked off.
+   *
+   * This is the path every meal swap goes through. It deliberately is *not*
+   * `regenerateShoppingList`, which deletes the document first and so throws
+   * away the `done` flags — fine when a user asks for a fresh list, wrong when
+   * one dinner changed.
+   *
+   * Both swap routes call this: `PlanService.replaceMeal` (the swap modal) and
+   * `GeneratorService`'s rescue meal (the "I'm Tired" button), which used to
+   * update the plan and the day's progress but leave the shopping list showing
+   * ingredients for a meal that was no longer in the plan.
+   */
+  async syncFromPlan(planId: string | mongoose.Types.ObjectId): Promise<void> {
+    try {
+      const plan = await this.planModel.findById(planId);
+      if (!plan) return;
+
+      const weeklyPlan = ((plan as any).weeklyPlan || {}) as Record<string, any>;
+
+      // Aggregate every ingredient in the plan, summing amounts per unit.
+      const ingredientMap = new Map<
+        string,
+        { name: string; amounts: Map<string, number>; category?: string }
+      >();
+
+      for (const dayPlan of Object.values(weeklyPlan)) {
+        const meals = [
+          dayPlan?.meals?.breakfast,
+          dayPlan?.meals?.lunch,
+          dayPlan?.meals?.dinner,
+          ...(dayPlan?.meals?.snacks || []),
+        ];
+
+        for (const meal of meals) {
+          if (!Array.isArray(meal?.ingredients)) continue;
+
+          for (const ing of meal.ingredients) {
+            // Three shapes reach this point, and `generateShoppingList`
+            // already reads all three: the current tuple
+            // [name, amount, category?], the legacy bare string, and an object
+            // form. Reading fewer here would silently drop ingredients on swap
+            // that a full regeneration would keep.
+            let name: string;
+            let amount: string;
+            let category: string | undefined;
+
+            if (Array.isArray(ing)) {
+              name = String(ing[0] ?? "");
+              amount = String(ing[1] ?? "");
+              category = ing.length > 2 ? ing[2] : undefined;
+            } else if (typeof ing === "string") {
+              name = ing;
+              amount = "";
+              category = undefined;
+            } else if (ing && typeof ing === "object" && (ing as any).name) {
+              name = String((ing as any).name);
+              amount = String((ing as any).amount ?? "");
+              category = (ing as any).category;
+            } else {
+              continue;
+            }
+
+            if (!name.trim()) continue;
+
+            const key = this.normalizeIngredientKey(name);
+            const parsed = this.parseAmount(amount);
+            const entry = ingredientMap.get(key);
+
+            if (entry) {
+              if (parsed) {
+                entry.amounts.set(
+                  parsed.unit,
+                  (entry.amounts.get(parsed.unit) || 0) + parsed.value
+                );
+              }
+              if (!entry.category && category) entry.category = category;
+            } else {
+              const amounts = new Map<string, number>();
+              if (parsed) amounts.set(parsed.unit, parsed.value);
+              ingredientMap.set(key, { name, amounts, category });
+            }
+          }
+        }
+      }
+
+      const existing = await this.shoppingListModel.findOne({
+        userId: plan.userId,
+        planId: plan._id,
+      });
+
+      // Keyed by the same normalizer that built them, so an item the user
+      // ticked survives a swap that didn't touch it.
+      // Indexed by the stored key and by the key its name produces today, so a
+      // list written before the key rules changed still keeps its ticks.
+      const wasDone = new Map<string, boolean>();
+      existing?.ingredients?.forEach((ing) => {
+        wasDone.set(ing.key, ing.done);
+        const currentKey = this.normalizeIngredientKey(ing.name || "");
+        if (!wasDone.get(currentKey)) wasDone.set(currentKey, ing.done);
+      });
+
+      const ingredients = Array.from(ingredientMap.entries()).map(
+        ([key, ing]) => ({
+          name: ing.name,
+          amount: this.formatAmounts(ing.amounts),
+          category: ing.category,
+          done: wasDone.get(key) || false,
+          key,
+        })
+      );
+
+      if (existing) {
+        existing.ingredients = ingredients;
+        await existing.save();
+      } else {
+        await this.shoppingListModel.create({
+          userId: plan.userId,
+          planId: plan._id,
+          ingredients,
+        });
+      }
+    } catch (error) {
+      // A stale shopping list is a much smaller problem than a swap that
+      // fails, so this never propagates.
+      console.error("[ShoppingService.syncFromPlan] Error:", error);
+    }
+  }
+
   // Force regenerate shopping list (deletes existing and creates new)
   async regenerateShoppingList(planId: string) {
     const plan = await this.planModel.findById(planId);
@@ -249,11 +484,12 @@ export class ShoppingService {
 
     for (const product of products) {
       const key = this.normalizeIngredientKey(product.name);
+      const keys = ingredientKeyCandidates(product.name);
       const newParsed = this.parseAmount(product.amount || "");
 
       // Find existing ingredient with same key that is NOT done
       const existingNotDone = shoppingList.ingredients.find(
-        (ing) => ing.key === key && !ing.done
+        (ing) => keys.includes(ing.key) && !ing.done
       );
 
       if (existingNotDone) {
@@ -364,9 +600,9 @@ export class ShoppingService {
       throw new NotFoundException("Shopping list not found");
     }
 
-    const normalizedKey = this.normalizeIngredientKey(productName);
+    const keys = ingredientKeyCandidates(productName);
     const ingredientIndex = shoppingList.ingredients.findIndex(
-      (ing) => ing.key === normalizedKey || ing.name === productName
+      (ing) => keys.includes(ing.key) || ing.name === productName
     );
 
     if (ingredientIndex === -1) {
@@ -389,10 +625,12 @@ export class ShoppingService {
     ingredientName: string,
     done: boolean
   ) {
-    const normalizedKey = this.normalizeIngredientKey(ingredientName);
+    // Accept the pre-plural-merge key as well, so items on a list written by
+    // the old rules can still be ticked off.
+    const keys = ingredientKeyCandidates(ingredientName);
 
     const shoppingList = await this.shoppingListModel.findOneAndUpdate(
-      { planId, "ingredients.key": normalizedKey },
+      { planId, "ingredients.key": { $in: keys } },
       { $set: { "ingredients.$.done": done } },
       { new: true }
     );
@@ -411,12 +649,12 @@ export class ShoppingService {
 
   // Update a shopping item
   async updateShoppingItems(planId: string, name: string, done: boolean) {
-    const normalizedKey = this.normalizeIngredientKey(name);
+    const keys = ingredientKeyCandidates(name);
 
     const shoppingList = await this.shoppingListModel.findOneAndUpdate(
       {
         planId,
-        "ingredients.key": normalizedKey,
+        "ingredients.key": { $in: keys },
       },
       { $set: { "ingredients.$.done": done } },
       { new: true }

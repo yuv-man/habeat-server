@@ -13,7 +13,8 @@ import { ShoppingList } from "../shopping/shopping-list.model";
 import { MoodEntry, IMoodEntry } from "../cbt/cbt.model";
 import aiService from "./generate.service";
 import { UsdaNutritionService } from "../utils/usda-nutrition.service";
-import { BehaviorService } from "../behavior/behavior.service";
+import { ShoppingService } from "../shopping/shopping.service";
+import { BrainService } from "../brain/brain.service";
 import logger from "../utils/logger";
 import {
   IPlan,
@@ -65,7 +66,8 @@ export class GeneratorService {
     private shoppingListModel: Model<IShoppingList>,
     @InjectModel(MoodEntry.name) private moodModel: Model<IMoodEntry>,
     private usdaNutritionService: UsdaNutritionService,
-    private behaviorService: BehaviorService
+    private brainService: BrainService,
+    private shoppingService: ShoppingService
   ) {}
 
   /**
@@ -314,16 +316,23 @@ export class GeneratorService {
       logger.info(`[generateWeeklyMealPlan] Mood context: ${moodContext}`);
     }
 
-    // The behavioural half: how this user has actually eaten over the last
-    // month, reduced to instructions for the week ahead. Never blocks — a plan
-    // still generates when the profile is thin or the pipeline is unavailable.
+    // The Brain: the single source of behavioural guidance for this plan.
+    //
+    // This used to call BehaviorService directly, alongside the Brain's own
+    // pattern work — two systems reaching the model with separate briefs and
+    // nothing arbitrating when they disagreed. The generator now asks one
+    // thing; the analyst's findings reach it through BrainState, already
+    // reconciled against the active intervention and its stage.
+    //
+    // Never blocks: a plan still generates when the Brain is cold or the
+    // window is too thin to claim anything.
     const [behaviourContext, behaviourMaxPrep] = await Promise.all([
-      this.behaviorService.buildPlannerContext(userId).catch(() => null),
-      this.behaviorService.effectiveMaxPrepMinutes(userId).catch(() => null),
+      this.brainService.buildPlannerContext(userId).catch(() => null),
+      this.brainService.effectiveMaxPrepMinutes(userId).catch(() => null),
     ]);
     if (behaviourContext) {
       logger.info(
-        `[generateWeeklyMealPlan] Behaviour context applied (${behaviourContext.split("\n").length} directives)`
+        `[generateWeeklyMealPlan] Brain context applied (${behaviourContext.split("\n").length} directives)`
       );
     }
 
@@ -1667,6 +1676,11 @@ export class GeneratorService {
       await progress.save();
       logger.info(`[RescueMeal] Updated progress record for ${date}`);
     }
+
+    // 10. Rebuild the shopping list. Without this the plan and the day's
+    // progress moved on but the list still asked the user to buy ingredients
+    // for a meal that is no longer anywhere in their week.
+    await this.shoppingService.syncFromPlan(plan._id as mongoose.Types.ObjectId);
 
     logger.info(
       `[RescueMeal] Successfully swapped "${originalMeal.name}" with "${rescueMeal.name}" (${rescueMeal.prepTime} min prep)`

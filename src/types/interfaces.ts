@@ -213,6 +213,9 @@ export interface IMeal {
   usageCount?: number;
 }
 
+/** Where the food actually came from, as the user reported it. */
+export type MealSource = "cooked" | "ordered" | "eaten-out";
+
 // Meal with done status (used in day plans)
 export interface IMealWithStatus extends IMeal {
   done: boolean;
@@ -223,6 +226,11 @@ export interface IMealWithStatus extends IMeal {
   /** Whether `completedAt` is the tick's own timestamp or a time the user
    *  corrected it to afterwards ("I ate breakfast at 11, not 8"). */
   completedAtSource?: "tick" | "user";
+  /** Where the food actually came from. Only set when the user tells us — an
+   *  untouched plan meal stays undefined rather than claiming "cooked", which
+   *  would turn a missing answer into a fabricated one and make the takeaway
+   *  rate look better than it is. Read by the Brain to detect P08. */
+  source?: MealSource;
 }
 
 // Daily Plan - part of weeklyPlan, basic structure without progress tracking

@@ -23,6 +23,7 @@ import { SubscriptionModule } from "./subscription/subscription.module";
 import { CBTModule } from "./cbt/cbt.module";
 import { SocialModule } from "./social/social.module";
 import { BehaviorModule } from "./behavior/behavior.module";
+import { BrainModule } from "./brain/brain.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
 import { FoodTermsModule } from "./food-terms/food-terms.module";
 import { AiAgentModule } from "./ai-agent/ai-agent.module";
@@ -99,6 +100,9 @@ import logger from "./utils/logger";
     CBTModule,
     SocialModule,
     BehaviorModule,
+    // The Brain is the decision-maker; BehaviorModule above is one of its
+    // organs, not a peer. Only the Brain is on the meal-planning path.
+    BrainModule,
     AnalyticsModule,
     FoodTermsModule,
     AiAgentModule,

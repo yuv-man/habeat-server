@@ -28,6 +28,7 @@ import {
   escapeRegex,
 } from "../utils/helpers";
 import {
+  MealSource,
   IDayPlan,
   IDailyPlan,
   IWeeklyPlanObject,
@@ -41,6 +42,7 @@ import {
 } from "../types/interfaces";
 import { ProgressService } from "../progress/progress.service";
 import { GeneratorService } from "../generator/generator.service";
+import { ShoppingService } from "../shopping/shopping.service";
 import mongoose from "mongoose";
 import crypto from "crypto";
 import {
@@ -65,6 +67,7 @@ export class PlanService {
     @InjectModel(DailyProgress.name)
     private progressModel: Model<IDailyProgress>,
     private generatorService: GeneratorService,
+    private shoppingService: ShoppingService,
     private usdaNutritionService: UsdaNutritionService
   ) {}
 
@@ -399,15 +402,10 @@ export class PlanService {
     newMeal: IMeal
   ): Promise<void> {
     try {
-      const plan = await this.planModel.findById(planId);
-      if (!plan) return;
-
-      // Use existing sync method which handles the full shopping list
-      await this.syncShoppingListWithPlan(
-        userId,
-        planId,
-        plan.weeklyPlan as { [date: string]: IDayPlan }
-      );
+      // One shared implementation, so the swap modal and the rescue meal
+      // rebuild the list the same way and agree on the ingredient keys the
+      // `done` flags are preserved by.
+      await this.shoppingService.syncFromPlan(planId);
 
       logger.info(
         `[updateShoppingListAfterSwap] Shopping list updated after meal swap`
@@ -606,181 +604,6 @@ export class PlanService {
   }
 
   // Helper to collect all ingredients from a plan's weeklyPlan
-  private collectIngredientsFromPlan(weeklyPlan: {
-    [date: string]: IDayPlan;
-  }): ([string, string] | [string, string, string?])[] {
-    const allIngredients: ([string, string] | [string, string, string?])[] = [];
-
-    for (const dayPlan of Object.values(weeklyPlan)) {
-      const meals = [
-        dayPlan.meals.breakfast,
-        dayPlan.meals.lunch,
-        dayPlan.meals.dinner,
-        ...(dayPlan.meals.snacks || []),
-      ];
-
-      for (const meal of meals) {
-        if (meal && meal.ingredients && Array.isArray(meal.ingredients)) {
-          meal.ingredients.forEach(
-            (ing: [string, string] | [string, string, string?] | string) => {
-              if (Array.isArray(ing)) {
-                // Already in tuple format [name, amount] or [name, amount, category]
-                allIngredients.push(ing);
-              } else if (typeof ing === "string") {
-                // Legacy string format - convert to tuple without category
-                allIngredients.push([ing, ""]);
-              }
-            }
-          );
-        }
-      }
-    }
-
-    return allIngredients;
-  }
-
-  // Helper to normalize ingredient name for key generation
-  private normalizeIngredientKey(ingredientName: string): string {
-    return ingredientName
-      .toLowerCase()
-      .replace(/\s+/g, "_")
-      .replace(/[^a-z0-9_]/g, "");
-  }
-
-  // Helper to sync shopping list with plan ingredients
-  private async syncShoppingListWithPlan(
-    userId: string,
-    planId: mongoose.Types.ObjectId,
-    weeklyPlan: { [date: string]: IDayPlan }
-  ): Promise<void> {
-    try {
-      // Collect all ingredients from the plan
-      const allIngredients = this.collectIngredientsFromPlan(weeklyPlan);
-
-      // Parse amount string like "200 g" into { value: 200, unit: "g" }
-      const parseAmount = (
-        amountStr: string
-      ): { value: number; unit: string } | null => {
-        if (!amountStr) return null;
-        const match = amountStr.trim().match(/^(\d+(?:\.\d+)?)\s*(.*)$/);
-        if (match) {
-          return {
-            value: parseFloat(match[1]),
-            unit: match[2].trim().toLowerCase(),
-          };
-        }
-        return null;
-      };
-
-      // Aggregate ingredients by name (sum amounts for same ingredient)
-      const ingredientMap = new Map<
-        string,
-        {
-          name: string;
-          amounts: Map<string, number>;
-          category?: string;
-        }
-      >();
-
-      allIngredients.forEach((ing) => {
-        // Ensure ingredientName is always a string
-        let ingredientName: string;
-        if (Array.isArray(ing)) {
-          ingredientName = typeof ing[0] === 'string' ? ing[0] : String(ing[0] || '');
-        } else {
-          ingredientName = String(ing || '');
-        }
-        
-        // Skip if ingredientName is empty or invalid
-        if (!ingredientName || typeof ingredientName !== 'string') {
-          logger.warn(
-            `[syncShoppingListWithPlan] Invalid ingredient name: ${JSON.stringify(ing)}, skipping`
-          );
-          return;
-        }
-        
-        const ingredientAmount = Array.isArray(ing) ? (ing[1] || '') : "";
-        const ingredientCategory =
-          Array.isArray(ing) && ing.length > 2 ? ing[2] : undefined;
-        const key = this.normalizeIngredientKey(ingredientName);
-
-        const parsed = parseAmount(ingredientAmount);
-
-        if (ingredientMap.has(key)) {
-          const existing = ingredientMap.get(key)!;
-          if (parsed) {
-            const currentAmount = existing.amounts.get(parsed.unit) || 0;
-            existing.amounts.set(parsed.unit, currentAmount + parsed.value);
-          }
-          if (!existing.category && ingredientCategory) {
-            existing.category = ingredientCategory;
-          }
-        } else {
-          const amounts = new Map<string, number>();
-          if (parsed) {
-            amounts.set(parsed.unit, parsed.value);
-          }
-          ingredientMap.set(key, {
-            name: ingredientName,
-            amounts,
-            category: ingredientCategory,
-          });
-        }
-      });
-
-      // Helper to format amounts map back to string
-      const formatAmounts = (amounts: Map<string, number>): string => {
-        const parts: string[] = [];
-        amounts.forEach((value, unit) => {
-          const formattedValue =
-            value % 1 === 0 ? value.toString() : value.toFixed(1);
-          parts.push(unit ? `${formattedValue} ${unit}` : formattedValue);
-        });
-        return parts.join(" + ") || "";
-      };
-
-      // Get existing shopping list to preserve done status
-      const existingShoppingList = await this.shoppingListModel.findOne({
-        userId: new mongoose.Types.ObjectId(userId),
-        planId: planId,
-      });
-
-      // Create a map of existing done statuses by key
-      const existingDoneStatus = new Map<string, boolean>();
-      if (existingShoppingList?.ingredients) {
-        existingShoppingList.ingredients.forEach((ing) => {
-          existingDoneStatus.set(ing.key, ing.done);
-        });
-      }
-
-      // Create new ingredients list preserving done status
-      const newIngredients = Array.from(ingredientMap.entries()).map(
-        ([key, ing]) => ({
-          name: ing.name,
-          amount: formatAmounts(ing.amounts),
-          category: ing.category,
-          done: existingDoneStatus.get(key) || false,
-          key: key,
-        })
-      );
-
-      // Update or create shopping list
-      if (existingShoppingList) {
-        existingShoppingList.ingredients = newIngredients;
-        await existingShoppingList.save();
-      } else {
-        await this.shoppingListModel.create({
-          userId: new mongoose.Types.ObjectId(userId),
-          planId: planId,
-          ingredients: newIngredients,
-        });
-      }
-    } catch (error) {
-      logger.error("Error syncing shopping list with plan:", error);
-      // Don't throw - shopping list sync failure shouldn't break plan operations
-    }
-  }
-
   // Helper to convert day name or date string to date key (YYYY-MM-DD)
   private getDateKey(dayOrDate: string, plan?: any): string {
     // If it's already a date string (YYYY-MM-DD), return it
@@ -844,7 +667,10 @@ export class PlanService {
       userData.age,
       userData.gender
     );
-    const tdee = calculateTDEE(bmr);
+    // workoutFrequency was omitted here (but passed at every other call site),
+    // so the very first plan a user ever gets was budgeted as if they trained
+    // 3-4x a week no matter what they told us in KYC.
+    const tdee = calculateTDEE(bmr, userData.workoutFrequency);
     const targetCalories = calculateTargetCalories(tdee, userData.path);
     const idealWeight = calculateIdealWeight(userData.height, userData.gender);
     const macros = calculateMacros(targetCalories, userData.path);
@@ -1048,7 +874,13 @@ export class PlanService {
     planId: string,
     date: string,
     mealType: string,
-    newMeal: Partial<IMeal> & { name: string; calories?: number },
+    // `source` is deliberately not on IMeal: that type is the catalogue dish,
+    // and where food came from is a fact about one eating occasion.
+    newMeal: Partial<IMeal> & {
+      name: string;
+      calories?: number;
+      source?: MealSource;
+    },
     snackIndex?: number,
     language: string = "en",
     aiRules?: string
@@ -1189,6 +1021,11 @@ export class PlanService {
       category: normalizedMealType,
       ingredients: resolvedMeal.ingredients || [],
       prepTime: parsePrepTime(resolvedMeal.prepTime) || 30,
+      // Taken from the request, not from `resolvedMeal`: where the food came
+      // from is a fact about *this* eating occasion, not about the dish. The
+      // same Pad Thai is takeaway on Friday and home-cooked on Sunday, and the
+      // catalogue meal has no business remembering either.
+      ...(newMeal.source ? { source: newMeal.source } : {}),
     };
 
     let oldMeal: any = null;
@@ -1735,11 +1572,7 @@ export class PlanService {
     await plan.save();
 
     // Sync shopping list with updated plan
-    await this.syncShoppingListWithPlan(
-      plan.userId.toString(),
-      plan._id as mongoose.Types.ObjectId,
-      weeklyPlan
-    );
+    await this.shoppingService.syncFromPlan(plan._id as mongoose.Types.ObjectId);
 
     return {
       success: true,
@@ -1790,11 +1623,7 @@ export class PlanService {
     await plan.save();
 
     // Sync shopping list with updated plan
-    await this.syncShoppingListWithPlan(
-      plan.userId.toString(),
-      plan._id as mongoose.Types.ObjectId,
-      weeklyPlan
-    );
+    await this.shoppingService.syncFromPlan(plan._id as mongoose.Types.ObjectId);
 
     // If the snack is for today, also remove from progress
     const todayKey = getLocalDateKey(new Date());
@@ -1811,13 +1640,6 @@ export class PlanService {
         await progress.save();
       }
     }
-
-    // Sync shopping list with updated plan
-    await this.syncShoppingListWithPlan(
-      plan.userId.toString(),
-      plan._id as mongoose.Types.ObjectId,
-      weeklyPlan
-    );
 
     return {
       success: true,
@@ -2023,11 +1845,7 @@ export class PlanService {
     await plan.save();
 
     // Sync shopping list with updated plan
-    await this.syncShoppingListWithPlan(
-      userId,
-      plan._id as mongoose.Types.ObjectId,
-      weeklyPlan
-    );
+    await this.shoppingService.syncFromPlan(plan._id as mongoose.Types.ObjectId);
 
     return {
       success: true,
