@@ -188,9 +188,17 @@ describe("deriveProfile", () => {
     expect(d.simplifySlots).toEqual(["dinner"]);
     expect(d.weekendNeedsOwnShape).toBe(true);
     expect(d.reduceLateEating).toBe(true);
-    expect(d.increaseVariety).toBe(true);
+    // 18 distinct dishes is a normal rotation, however often they repeat.
+    expect(d.increaseVariety).toBe(false);
     expect(d.emphasiseMacro).toBe("protein");
     expect(d.maxPrepMinutes).toBe(25);
+  });
+
+  it("asks for variety only when the rotation is genuinely narrow", () => {
+    const narrow = summary({
+      variety: { distinctMeals: 4, totalMeals: 65, repeatRate: 0.94, mostRepeated: [] },
+    });
+    expect(deriveProfile(narrow).planningDirectives.increaseVariety).toBe(true);
   });
 
   it("raises no directives at all when the data is too thin to act on", () => {

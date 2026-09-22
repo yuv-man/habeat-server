@@ -4,6 +4,7 @@ import { UserService } from "../../../src/user/user.service";
 import { User } from "../../../src/user/user.model";
 import { Meal } from "../../../src/meal/meal.model";
 import { BehaviorService } from "../../../src/behavior/behavior.service";
+import { RepertoireService } from "../../../src/repertoire/repertoire.service";
 import { NotFoundException } from "@nestjs/common";
 
 describe("UserService", () => {
@@ -64,6 +65,11 @@ describe("UserService", () => {
         {
           provide: BehaviorService,
           useValue: { seed: jest.fn().mockResolvedValue(undefined) },
+        },
+        // Hearting a meal also files it under the user's own meals.
+        {
+          provide: RepertoireService,
+          useValue: { setFavourite: jest.fn().mockResolvedValue(null) },
         },
       ],
     }).compile();

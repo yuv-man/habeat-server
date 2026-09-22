@@ -67,6 +67,15 @@ export const calculateMacros = (calories: number, path: string) => {
       carbPercent = 0.35;
       fatPercent = 0.35;
       break;
+    case "running":
+      // Endurance training runs on carbohydrate. The default split gave a
+      // 60 kg runner 2.25 g/kg protein and ~4 g/kg carbs — the wrong way round
+      // for someone building to a half marathon. This lands near 1.6–1.8 g/kg
+      // protein and 5 g/kg carbs at a typical training TDEE.
+      proteinPercent = 0.2;
+      carbPercent = 0.55;
+      fatPercent = 0.25;
+      break;
     default: // healthy, custom
       proteinPercent = 0.25;
       carbPercent = 0.45;

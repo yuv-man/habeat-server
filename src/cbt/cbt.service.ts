@@ -1,4 +1,6 @@
-import { Injectable, NotFoundException, Inject, forwardRef } from "@nestjs/common";
+import { Injectable, NotFoundException, Inject, forwardRef,
+  BadRequestException,
+} from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import mongoose from "mongoose";
@@ -806,6 +808,12 @@ export class CBTService {
     };
     for (const [key, value] of Object.entries(optional)) {
       if (value !== undefined) set[key] = value;
+    }
+
+    // Guarded here too: the DTO rejects a malformed id on the HTTP path, and
+    // any other caller gets a clear error rather than a BSON crash.
+    if (!mongoose.Types.ObjectId.isValid(dto.mealId)) {
+      throw new BadRequestException("mealId must be a valid meal id");
     }
 
     const key = {

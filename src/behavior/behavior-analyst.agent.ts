@@ -11,7 +11,7 @@
  */
 
 import { Injectable } from "@nestjs/common";
-import { callGeminiWithRateLimit } from "../utils/gemini-rate-limiter";
+import { ANALYSIS_MODELS, callGeminiWithFallback } from "../utils/gemini-models";
 import { loadKnowledge } from "../knowledge/loader";
 import logger from "../utils/logger";
 import { BehaviorSummary } from "./behavior-summary.types";
@@ -276,15 +276,17 @@ export class BehaviorAnalystAgent {
       .join("\n\n---\n\n");
 
     try {
-      const raw = await callGeminiWithRateLimit(
+      // Picked at runtime: a hard-coded model was retired upstream and this
+      // call failed silently for every user (utils/gemini-models.ts).
+      const raw = await callGeminiWithFallback(
         apiKey,
-        "gemini-2.0-flash",
+        ANALYSIS_MODELS,
         async (model) => {
           const result = await model.generateContent([{ text: prompt }]);
           if (!result?.response) throw new Error("Empty response");
           return result.response.text();
         },
-        { context: "BehaviorAnalyst", maxRetries: 2 },
+        { context: "BehaviorAnalyst" },
       );
 
       const parsed = parseJson(raw);

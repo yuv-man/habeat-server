@@ -396,7 +396,15 @@ export class BrainService {
         .findOne({ userId, patternId: score.patternId })
         .lean();
 
-      const detectionCount = (existing?.detectionCount ?? 0) + 1;
+      // A detection only counts as independent when the last one was a
+      // separate run over a later window — the nightly cadence. Two analyses
+      // minutes apart read the same data twice; counting both "confirmed" a
+      // pattern from one sighting.
+      const independent =
+        !existing?.lastDetectedAt ||
+        now.getTime() - new Date(existing.lastDetectedAt).getTime() >=
+          STATE_REFRESH_HOURS * 60 * 60 * 1000;
+      const detectionCount = (existing?.detectionCount ?? 0) + (independent ? 1 : 0);
       const baseline = existing?.baselineScore ?? score.score;
       const status = this.nextStatus(existing, score.score, detectionCount, baseline);
 
@@ -411,7 +419,9 @@ export class BrainService {
             status,
             detectionCount,
             baselineScore: baseline,
-            lastDetectedAt: now,
+            // Only moves on an independent detection, so the 20h spacing is
+            // measured from the last one that counted.
+            lastDetectedAt: independent ? now : existing?.lastDetectedAt ?? now,
             resolvedAt: null,
           },
           $setOnInsert: {

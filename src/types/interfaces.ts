@@ -396,6 +396,14 @@ export interface IPlan extends Document {
   language: string;
   generatedAt: Date;
   generationStatus: "generating" | "complete";
+  /** Mean absolute error per macro across the plan's days, as a share of
+   *  target (generator/macro-targets.ts). */
+  macroAccuracy?: {
+    protein: number;
+    carbs: number;
+    fat: number;
+    calories: number;
+  };
   createdAt: Date;
   updatedAt: Date;
 }

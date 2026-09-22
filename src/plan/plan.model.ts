@@ -138,6 +138,15 @@ const planSchema = new Schema<IPlan>(
       enum: ["generating", "complete", "failed"],
       default: "generating",
     },
+    // How close this plan lands to its targets: mean absolute error per macro
+    // across its days, as a share of target (generator/macro-targets.ts).
+    // Stored so accuracy is measurable over time rather than asserted.
+    macroAccuracy: {
+      protein: { type: Number, required: false },
+      carbs: { type: Number, required: false },
+      fat: { type: Number, required: false },
+      calories: { type: Number, required: false },
+    },
   },
   {
     timestamps: true,

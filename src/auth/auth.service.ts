@@ -115,7 +115,8 @@ export class AuthService {
   }
 
   async login(email: string, password: string) {
-    const user = await this.userModel.findOne({ email });
+    // The one read that needs the hash; the schema hides it everywhere else.
+    const user = await this.userModel.findOne({ email }).select("+password");
 
     if (
       user &&

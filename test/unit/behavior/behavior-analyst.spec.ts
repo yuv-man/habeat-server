@@ -282,11 +282,12 @@ describe("buildPlannerContext — the analysis reaches the plan", () => {
     expect(buildPlannerContext(analysed)).not.toContain("speculative");
   });
 
-  it("names reliable meals as a direction, not as dishes to repeat", () => {
+  it("keeps reliable meals in the plan as the same dish, tuned rather than replaced", () => {
     const context = buildPlannerContext(analysed)!;
 
     expect(context).toContain("chicken bowl");
-    expect(context).toContain("rather than repeating them exactly");
+    expect(context).toContain("include them in the plan as the same dish");
+    expect(context).not.toContain("rather than repeating them exactly");
   });
 
   it("still produces constraints when the analyst has not run", () => {

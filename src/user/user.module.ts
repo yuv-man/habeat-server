@@ -5,6 +5,7 @@ import { UserService } from "./user.service";
 import { User, UserSchema } from "./user.model";
 import { Meal, MealSchema } from "../meal/meal.model";
 import { BehaviorModule } from "../behavior/behavior.module";
+import { RepertoireModule } from "../repertoire/repertoire.module";
 
 @Module({
   imports: [
@@ -13,6 +14,8 @@ import { BehaviorModule } from "../behavior/behavior.module";
       { name: Meal.name, schema: MealSchema },
     ]),
     forwardRef(() => BehaviorModule),
+    // Hearting a meal adds it to the user's own meals.
+    forwardRef(() => RepertoireModule),
   ],
   controllers: [UserController],
   providers: [UserService],

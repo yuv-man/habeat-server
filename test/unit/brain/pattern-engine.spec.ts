@@ -235,6 +235,33 @@ describe("PatternEngine", () => {
       expect(p04!.evidence[0].description).toMatch(/6 nights/);
     });
 
+    it("sees late nights in someone who logs every meal", () => {
+      // Chloe: 14 days, breakfast, lunch, dinner and a snack most days, dinner
+      // after 21:00 on four stressful evenings. As a share of all her meals that
+      // was 8/46 and never fired; as a share of nights it is 4/14.
+      const days = Array.from({ length: 14 }, (_, d) => d);
+      const lateNights = new Set([1, 3, 8, 10]);
+      const events = days.flatMap((d) => [
+        event({ dayOffset: d, hour: 8 }),
+        event({ dayOffset: d, hour: 13 }),
+        event({ dayOffset: d, hour: lateNights.has(d) ? 22 : 19 }),
+        event({ dayOffset: d, hour: lateNights.has(d) ? 22 : 16, type: BehaviorEventType.SNACK_LOGGED }),
+      ]);
+      const p04 = engine.analyze(events, window(30, 14)).find((p) => p.patternId === "P04");
+
+      expect(p04).toBeDefined();
+      expect(p04!.evidence[1].description).toMatch(/4 of 14 days/);
+    });
+
+    it("stays quiet on the odd late dinner", () => {
+      const events = Array.from({ length: 14 }, (_, d) => [
+        event({ dayOffset: d, hour: 13 }),
+        event({ dayOffset: d, hour: d === 5 || d === 12 || d === 13 ? 22 : 19 }),
+      ]).flat();
+      // 3 late nights in 14 (a bit over one a week) is below the line.
+      expect(engine.analyze(events, window(30, 14)).find((p) => p.patternId === "P04")).toBeUndefined();
+    });
+
     it("needs more than a couple of late meals before it will claim anything", () => {
       const events = [
         event({ dayOffset: 0, hour: 22 }),
@@ -246,7 +273,26 @@ describe("PatternEngine", () => {
     });
   });
 
+  describe("minimum data", () => {
+    it("judges the minimum on days observed, not on the window's length", () => {
+      // Three days of heavy late eating inside a 30-day window: plenty of
+      // events, far too little life to call it a habit.
+      const events = [0, 1, 2].flatMap((d) => [event({ dayOffset: d, hour: 22 }), event({ dayOffset: d, hour: 23 })]);
+      expect(engine.analyze(events, window(30, 3)).find((p) => p.patternId === "P04")).toBeUndefined();
+    });
+  });
+
   describe("P08 · frequent takeaway", () => {
+    it("measures the rate over the days actually observed", () => {
+      // 6 takeaways in the 14 days someone has used the app is 3 a week, not
+      // 1.4 a week spread over a 30-day window they mostly weren't here for.
+      const events = Array.from({ length: 6 }, (_, i) =>
+        event({ dayOffset: i * 2, type: BehaviorEventType.TAKEAWAY_LOGGED }),
+      );
+      const p08 = engine.analyze(events, window(30, 14)).find((p) => p.patternId === "P08");
+      expect(p08).toBeDefined();
+    });
+
     it("fires on repeated takeaway across the window", () => {
       const events = Array.from({ length: 8 }, (_, i) =>
         event({ dayOffset: i, type: BehaviorEventType.TAKEAWAY_LOGGED }),

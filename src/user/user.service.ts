@@ -8,6 +8,7 @@ import mongoose from "mongoose";
 import { IUserData, IMeal } from "../types/interfaces";
 import { compressImage, isBase64Image } from "../utils/imageCompression";
 import { updateMealLearningProfile } from "../utils/meal-learning";
+import { RepertoireService } from "../repertoire/repertoire.service";
 import { BehaviorService } from "../behavior/behavior.service";
 
 @Injectable()
@@ -17,6 +18,8 @@ export class UserService {
     @InjectModel(Meal.name) private mealModel: Model<IMeal>,
     @Inject(forwardRef(() => BehaviorService))
     private behaviorService: BehaviorService,
+    @Inject(forwardRef(() => RepertoireService))
+    private repertoireService: RepertoireService,
   ) {}
 
   async findAll() {
@@ -201,6 +204,18 @@ export class UserService {
 
     (user as any).favoriteMeals = favoriteMeals;
     await user.save();
+
+    // One list: hearting a meal also makes it one of "my meals", which is what
+    // the planner builds the week around (docs/the-repertoire.md). Never fails
+    // the heart itself — the favourite is saved above either way.
+    await this.repertoireService
+      .setFavourite(userId, meal as any, isFavorite)
+      .catch((err) =>
+        logger.warn(
+          `[Favorites] Could not sync "${(meal as any)?.name}" to my meals: ${err?.message || err}`
+        )
+      );
+
     return {
       success: true,
       data: user,

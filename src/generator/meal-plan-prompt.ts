@@ -28,6 +28,7 @@ import {
   filterFoodPreferences,
   findMealViolations,
 } from "../utils/dietary-constraints";
+import { slotMacroTargets } from "./macro-targets";
 import logger from "../utils/logger";
 import {
   COOKING_LEVEL_SPECS,
@@ -426,6 +427,12 @@ export interface DaySpec {
 export interface PlannedMeal {
   slot: MealSlot;
   archetype: string;
+  /** Set when this meal is one of the person's own favourites (see
+   *  FAVOURITE_MAIN_SHARE). The favourite replaces the archetype brief. */
+  favourite?: string;
+  /** "own" is a dish they told us they cook, "liked" a food they enjoy. The
+   *  brief differs: cook theirs as they make it, treat a liking as a steer. */
+  favouriteKind?: "own" | "liked";
   protein: string;
   /**
    * Seasoning direction, and only for the two slots where it reads naturally.
@@ -434,6 +441,8 @@ export interface PlannedMeal {
    */
   flavour: string;
   calories: number;
+  /** What this meal should carry of the day's macros (macro-targets.ts). */
+  macros?: { protein: number; carbs: number; fat: number };
 }
 
 export interface PlannedDay extends DaySpec {
@@ -456,8 +465,14 @@ export const buildMenuSkeleton = (
   activeSlots: MealSlot[] = ["breakfast", "lunch", "dinner", "snack"],
   /** The diet the user chose (`user.path`). Rules starch-led forms in or out. */
   path?: string,
+  /** Dishes they cook and foods they enjoy, already filtered (see asFavourites). */
+  favourites: Favourite[] = [],
+  /** The day's macro targets, split across slots so a meal has a shape and not
+   *  just a calorie count. */
+  macros?: { protein: number; carbs: number; fat: number },
 ): PlannedDay[] => {
   const random = rng(hashSeed(seed));
+  const slotMacros = macros ? slotMacroTargets(macros, activeSlots) : null;
 
   // Independent cyclers per slot, so breakfast never inherits dinner's protein.
   // Build cyclers for all four slots regardless of activeSlots — the RNG
@@ -468,17 +483,23 @@ export const buildMenuSkeleton = (
     dinner: makeCycler(usableArchetypes("dinner", constraints, path), random),
     snack: makeCycler(usableArchetypes("snack", constraints, path), random),
   };
+  // Lunch and dinner draw from ONE rotation. With a cycler each, the two
+  // shuffles were independent and regularly landed on the same protein for
+  // both mains of a day (a real "turkey for lunch, turkey for dinner" week).
+  // Sharing the order means the same protein can't recur until the whole
+  // rotation has been served.
+  const mainsCycler = makeCycler(proteinsForSlot("lunch", constraints, dislikes), random);
   const proteinCyclers: Record<MealSlot, () => string> = {
     breakfast: makeCycler(proteinsForSlot("breakfast", constraints, dislikes), random),
-    lunch: makeCycler(proteinsForSlot("lunch", constraints, dislikes), random),
-    dinner: makeCycler(proteinsForSlot("dinner", constraints, dislikes), random),
+    lunch: mainsCycler,
+    dinner: mainsCycler,
     snack: makeCycler(proteinsForSlot("snack", constraints, dislikes), random),
   };
   const flavourCycler = makeCycler(FLAVOUR_PROFILES, random);
 
   const calorieShares = slotCalorieShares(activeSlots);
 
-  return days.map((day) => ({
+  const planned: PlannedDay[] = days.map((day) => ({
     ...day,
     meals: activeSlots.map((slot) => ({
       slot,
@@ -486,8 +507,150 @@ export const buildMenuSkeleton = (
       protein: proteinCyclers[slot](),
       flavour: slot === "lunch" || slot === "dinner" ? flavourCycler() : "",
       calories: Math.round(targetCalories * calorieShares[slot]),
+      ...(macros ? { macros: slotMacros![slot] } : {}),
     })),
   }));
+
+  return assignFavourites(planned, favourites, seed);
+};
+
+/**
+ * Share of lunches and dinners given over to the person's own favourites.
+ *
+ * Preferences used to reach the model only as one "loose inspiration, never a
+ * rule" line, while the outline — which the model is told to follow exactly —
+ * assigned every main from fixed rotations that never looked at them. A
+ * runner who said she loves Italian food, pasta and burrata got 3 Italian-
+ * leaning meals out of 36. The outline now reserves these slots for what the
+ * person actually likes (docs/the-repertoire.md: plans are built from the
+ * food people eat, not around it).
+ */
+export const FAVOURITE_MAIN_SHARE = 0.4;
+
+/**
+ * Mark ~FAVOURITE_MAIN_SHARE of the lunch/dinner slots as favourites, spread
+ * evenly and rotating through the list. Runs after the rotations have been
+ * drawn and consumes no randomness, so a user's outline without favourites is
+ * exactly what it was.
+ */
+export interface Favourite {
+  name: string;
+  kind: "own" | "liked";
+}
+
+/** Their own dishes first: a dish they cook beats a food they like the sound of. */
+export const asFavourites = (ownDishes: string[], liked: string[]): Favourite[] => [
+  ...ownDishes.map((name) => ({ name, kind: "own" as const })),
+  ...liked.map((name) => ({ name, kind: "liked" as const })),
+];
+
+const assignFavourites = (
+  days: PlannedDay[],
+  favourites: Favourite[],
+  seed: string,
+): PlannedDay[] => {
+  const seen = new Set<string>();
+  const list = favourites.filter((f) => {
+    const key = f?.name?.trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  if (!list.length) return days;
+
+  const every = 1 / FAVOURITE_MAIN_SHARE; // 2.5 → roughly every 2nd–3rd main
+  let next = hashSeed(`${seed}:favourites`) % list.length;
+  let credit = 0;
+
+  for (const day of days) {
+    for (const meal of day.meals) {
+      if (meal.slot !== "lunch" && meal.slot !== "dinner") continue;
+      credit += 1;
+      if (credit < every) continue;
+      credit -= every;
+      const chosen = list[next % list.length];
+      meal.favourite = chosen.name.trim();
+      meal.favouriteKind = chosen.kind;
+      next++;
+    }
+  }
+  return days;
+};
+
+/**
+ * The food preferences that may shape a plan: without terms the user was
+ * warned don't look like food, and without anything their hard dietary
+ * constraints forbid. Shared by the outline and the prompt so the two can
+ * never disagree about what the person likes.
+ */
+export const usablePreferences = (
+  userData: { foodPreferences?: string[]; unrecognisedTerms?: string[] },
+  constraints: DietaryConstraints,
+): { allowed: string[]; removed: string[] } => {
+  const unrecognised = new Set(
+    (userData.unrecognisedTerms || []).filter(Boolean).map((t) => t.trim().toLowerCase()),
+  );
+  const recognised = (userData.foodPreferences || [])
+    .filter(Boolean)
+    .filter((t) => !unrecognised.has(String(t).trim().toLowerCase()));
+  return filterFoodPreferences(recognised, constraints);
+};
+
+/**
+ * The skeleton for some days of a plan, cut from one skeleton of the whole
+ * span — from `weekStartKey` up to the last requested day.
+ *
+ * A plan is generated in more than one request (today first, the rest of the
+ * week in the background). Building a skeleton per request restarted every
+ * rotation from the same seed, so each request got the same outline: a user who
+ * signed up on Saturday got an identical Saturday and Sunday. Cutting every
+ * request from the same week-long skeleton keeps the rotation going across
+ * requests.
+ */
+export const buildMenuSkeletonForDays = (
+  days: DaySpec[],
+  weekStartKey: string,
+  constraints: DietaryConstraints,
+  targetCalories: number,
+  seed: string,
+  dislikes: string[] = [],
+  activeSlots: MealSlot[] = ["breakfast", "lunch", "dinner", "snack"],
+  path?: string,
+  favourites: Favourite[] = [],
+  macros?: { protein: number; carbs: number; fat: number },
+): PlannedDay[] => {
+  if (days.length === 0) return [];
+  const requested = new Map(days.map((d) => [d.dateStr, d]));
+  const last = [...requested.keys()].sort().pop()!;
+
+  const span: DaySpec[] = [];
+  const [y, m, d] = weekStartKey.split("-").map(Number);
+  for (let cursor = new Date(y, m - 1, d); ; cursor.setDate(cursor.getDate() + 1)) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+    if (key > last) break;
+    span.push(
+      requested.get(key) ?? {
+        dateStr: key,
+        dayName: cursor.toLocaleDateString("en-US", { weekday: "long" }).toLowerCase(),
+        hasWorkout: false,
+      },
+    );
+    if (span.length > 21) break; // a malformed start key must not loop forever
+  }
+  // A requested day before the week start (shouldn't happen) still gets one.
+  for (const day of days) if (!span.some((s) => s.dateStr === day.dateStr)) span.push(day);
+
+  return buildMenuSkeleton(
+    span,
+    constraints,
+    targetCalories,
+    seed,
+    dislikes,
+    activeSlots,
+    path,
+    favourites,
+    macros,
+  ).filter((day) => requested.has(day.dateStr));
 };
 
 // ─── Prompt assembly ────────────────────────────────────────────────────────
@@ -520,6 +683,7 @@ const ingredientRules = `INGREDIENT FORMAT — each entry is a single string "na
 const nutritionRules = `NUTRITION — this is checked:
 - protein, carbs and fat are grams for the whole meal, computed from the ingredient amounts above.
 - calories must equal protein*4 + carbs*4 + fat*9, rounded to the nearest whole number.
+- Each meal in the outline carries its own protein/carb/fat target. Hit the shape as well as the calories: the day only adds up if every meal does.
 - Aim within about 10% of each meal's calorie target. Do not force an exact match — a real dish rarely lands on a round number.`;
 
 export interface WeeklyPromptInput {
@@ -540,6 +704,9 @@ export interface WeeklyPromptInput {
   constraints: DietaryConstraints;
   targetCalories: number;
   macros: { protein: number; carbs: number; fat: number };
+  /** Dishes the user cooks; code places them, so the model must not repeat
+   *  them or write a near-variant into a neighbouring slot. */
+  ownDishes?: string[];
   /** Dish names the user has had recently — never repeat these. */
   recentMeals?: string[];
   /** Free-text style note from the user's goals or a plan template. */
@@ -564,12 +731,23 @@ export interface WeeklyPromptInput {
 
 const renderDay = (day: PlannedDay): string => {
   const lines = day.meals.map((m) => {
-    const bits = [
-      `form: ${m.archetype}`,
-      `main protein: ${m.protein}`,
-      m.flavour ? `season towards: ${m.flavour}` : null,
-      `~${m.calories} kcal`,
-    ].filter(Boolean);
+    const bits = m.favourite
+      ? [
+          m.favouriteKind === "own"
+            ? `A DISH THEY ALREADY COOK — plan "${m.favourite}" the way they make it. Do not rename it or turn it into a different dish.`
+            : `ONE OF THEIR FAVOURITES — make a proper "${m.favourite}" dish, as it is really made`,
+          m.macros
+            ? `~${m.calories} kcal · protein ${m.macros.protein}g, carbs ${m.macros.carbs}g, fat ${m.macros.fat}g`
+            : `~${m.calories} kcal`,
+        ]
+      : [
+          `form: ${m.archetype}`,
+          `main protein: ${m.protein}`,
+          m.flavour ? `season towards: ${m.flavour}` : null,
+          m.macros
+            ? `~${m.calories} kcal · protein ${m.macros.protein}g, carbs ${m.macros.carbs}g, fat ${m.macros.fat}g`
+            : `~${m.calories} kcal`,
+        ].filter(Boolean);
     return `    ${m.slot.padEnd(9)} → ${bits.join(" | ")}`;
   });
   return `  ${day.dateStr} (${day.dayName})${day.hasWorkout ? " — training day, this day's meals should skew higher protein" : " — rest day"}\n${lines.join("\n")}`;
@@ -582,7 +760,7 @@ const renderDay = (day: PlannedDay): string => {
 export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   const {
     userData, skeleton, constraints, targetCalories, macros,
-    recentMeals = [], styleNote, moodContext, behaviourContext, repairNote,
+    recentMeals = [], ownDishes = [], styleNote, moodContext, behaviourContext, repairNote,
     maxPrepMinutes, language = "en", fastingContext,
   } = input;
 
@@ -624,10 +802,7 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   // would otherwise be described to the model as someone who enjoys steak, in
   // the same prompt that forbids meat — and the model resolves that
   // contradiction by cooking the steak.
-  const { allowed: prefs, removed: droppedPrefs } = filterFoodPreferences(
-    keepRecognised((userData.foodPreferences || []).filter(Boolean)),
-    constraints,
-  );
+  const { allowed: prefs, removed: droppedPrefs } = usablePreferences(userData, constraints);
   if (droppedPrefs.length) {
     logger.warn(
       `[MealGen] Dropped food preferences that conflict with dietary restrictions: ${droppedPrefs.join(", ")}`,
@@ -654,7 +829,7 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
       // dinner taste, and letting it reach breakfast is how it turns up next to
       // the morning oats.
       prefs.length
-        ? `ENJOYS (loose inspiration for LUNCH and DINNER only, never a rule, and never applied to breakfast or snacks): ${prefs.join(", ")}`
+        ? `ENJOYS: ${prefs.join(", ")}. Meals marked as favourites in the outline are built on these; elsewhere they are loose inspiration for lunch and dinner only, never breakfast or snacks.`
         : null,
       styleNote ? `STYLE NOTE: ${styleNote.slice(0, 300)}` : null,
       moodContext ? `WELLNESS CONTEXT: ${moodContext}` : null,
@@ -673,9 +848,18 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
     );
   }
 
+  if (ownDishes.length) {
+    sections.push(
+      `THE PERSON'S OWN DISHES — some meals of this week are already filled with these, by us. Do not plan them yourself and do not write a close variant of one:\n${ownDishes
+        .slice(0, 20)
+        .map((d) => `- ${d}`)
+        .join("\n")}`,
+    );
+  }
+
   if (recentMeals.length) {
     sections.push(
-      `ALREADY EATEN RECENTLY — do not reuse these dishes or close variants of them:\n${recentMeals
+      `RECENTLY PLANNED AND NOT EATEN — do not reuse these dishes or close variants of them:\n${recentMeals
         .slice(0, 40)
         .map((m) => `- ${m}`)
         .join("\n")}`,
@@ -699,7 +883,10 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   ].filter(Boolean).join(",");
 
   sections.push(
-    `VARIETY — every one of the ${skeleton.length * activeSlotSet.size} dishes must be different. Do not reuse a dish name, and do not serve the same protein-and-starch combination twice in the week.`,
+    // Not "every dish different": a week of all-new dishes is a week nobody
+    // follows. Repetition (same breakfast, alternating snacks, leftovers) is
+    // applied in code afterwards — familiar-week.ts — so it is not asked here.
+    `KEEP IT FAMILIAR — this person has to shop for and cook this week. Reuse ingredients across the week so the shopping list stays short (the same greens, grain and dairy several times is good). Ordinary home cooking beats novelty; do not invent an unusual dish just to be different.`,
   );
 
   sections.push(

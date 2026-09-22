@@ -85,6 +85,42 @@ describe("runChecks", () => {
     expect(c.basis).toBeLessThan(c.minBasis);
   });
 
+  describe("low-variety", () => {
+    const variety = (distinctMeals: number, totalMeals: number) =>
+      checkById(
+        runChecks(
+          summary({
+            variety: {
+              distinctMeals,
+              totalMeals,
+              repeatRate: totalMeals ? (totalMeals - distinctMeals) / totalMeals : null,
+              mostRepeated: [],
+            },
+          })
+        ),
+        "low-variety"
+      )!;
+
+    it("does not fire on a normal rotation, however often it repeats", () => {
+      // 20 dishes over 90 meals is a 78% repeat rate — and a healthy, settled
+      // week. The old repeat-rate check fired here and pushed plans toward
+      // novelty (docs/the-repertoire.md).
+      expect(variety(20, 90).fired).toBe(false);
+      expect(variety(8, 60).fired).toBe(false);
+    });
+
+    it("fires on a rotation narrower than the repertoire minimum", () => {
+      const c = variety(5, 40);
+      expect(c.fired).toBe(true);
+      expect(c.value).toBe(5);
+      expect(c.evidence).toContain("5 distinct dishes across 40 logged meals");
+    });
+
+    it("holds when too few meals are logged for the rotation to have come round", () => {
+      expect(variety(5, 12).fired).toBe(false);
+    });
+  });
+
   it("never fires on an unmeasurable quantity", () => {
     const blank = runChecks(
       summary({
@@ -161,8 +197,16 @@ describe("verifyCheck", () => {
   });
 
   it("reads the right direction for a check that fires above its threshold", () => {
-    const above: CheckResult = { ...before, id: "low-variety", direction: "above", value: 0.8, threshold: 0.5 };
+    const above: CheckResult = { ...before, id: "late-eating-frequent", direction: "above", value: 0.8, threshold: 0.5 };
     expect(verifyCheck(above, { ...above, value: 0.55 }).outcome).toBe("eased");
     expect(verifyCheck(above, { ...above, value: 0.82 }).outcome).toBe("holds");
+  });
+
+  it("will not compare across a change in what the check measures", () => {
+    // A profile saved before low-variety became a distinct-dish count holds a
+    // repeat rate. Comparing 0.72 against 5 dishes would be noise.
+    const oldForm: CheckResult = { ...before, id: "low-variety", direction: "above", value: 0.72, threshold: 0.5 };
+    const newForm: CheckResult = { ...before, id: "low-variety", direction: "below", value: 5, threshold: 8 };
+    expect(verifyCheck(oldForm, newForm).outcome).toBe("unverifiable");
   });
 });

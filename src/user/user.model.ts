@@ -197,7 +197,10 @@ const sensoryProfileSchema = new Schema(
 const userSchemaDefinition = {
   name: { type: String, required: false },
   email: { type: String, required: false },
-  password: { type: String, required: false }, // Add password field for OAuth users
+  // Never loaded unless a query asks for it with .select("+password") — only
+  // login does. Without this every user read (including .lean() ones, which
+  // skip toJSON) shipped the bcrypt hash to the client.
+  password: { type: String, required: false, select: false },
   phone: { type: String, required: false },
   profilePicture: { type: String, required: false },
   age: { type: Number, required: false },
@@ -345,6 +348,14 @@ export const UserSchema = new Schema(userSchemaDefinition, {
   versionKey: false,
   strict: true, // Prevent arbitrary data injection - only allow defined fields
   collection: "users",
+  // A document that already holds the hash (one just created, or loaded with
+  // +password for login) must still never serialise it into a response.
+  toJSON: {
+    transform: (_doc, ret: Record<string, unknown>) => {
+      delete ret.password;
+      return ret;
+    },
+  },
 });
 
 // Apply the same pre-save hook and methods to the exported schema

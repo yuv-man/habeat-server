@@ -7,6 +7,7 @@ import {
   IsBoolean,
   IsEnum,
   IsIn,
+  IsMongoId,
   Min,
   Max,
   ValidateNested,
@@ -439,8 +440,10 @@ export class MoodStateDto {
 }
 
 export class LinkMoodToMealDto {
-  @ApiProperty()
-  @IsString()
+  @ApiProperty({ description: "The meal's id, as it appears in the plan or the day's progress" })
+  // Not just a string: an id that is not one reached `new ObjectId(...)` in the
+  // service and came back as a 500. A malformed id is the caller's mistake.
+  @IsMongoId({ message: "mealId must be a valid meal id" })
   mealId: string;
 
   @ApiProperty()

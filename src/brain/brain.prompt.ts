@@ -60,7 +60,9 @@ export const renderPlannerContext = (state: BrainState): string | null => {
     if (directives.weekendNeedsOwnShape) {
       notes.push("the weekend needs its own shape");
     }
-    if (directives.increaseVariety) notes.push("increase variety");
+    if (directives.increaseVariety) {
+      notes.push("add one or two new dishes alongside the usual ones");
+    }
     if (directives.reduceLateEating) notes.push("pull the last meal earlier");
     if (directives.emphasiseMacro) {
       notes.push(`emphasise ${directives.emphasiseMacro}`);

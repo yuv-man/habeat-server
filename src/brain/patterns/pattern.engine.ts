@@ -207,11 +207,16 @@ export class PatternEngine {
     );
     if (lateMeals.length < 3) return null;
 
-    const frequency = lateMeals.length / meals.length;
+    // Scored on NIGHTS, not on the share of all meals. As a share of meals,
+    // every breakfast and lunch someone logs dilutes their late dinners: a
+    // user eating at 22:00 on every stressful workday (4 nights in 14) scored
+    // 0.26 and was never told, and eating late every single night barely
+    // reached the threshold. The diligent logger was the one the Brain missed.
+    const lateNights = new Set(lateMeals.map((e) => e.dateKey)).size;
+    const timedDays = new Set(meals.map((e) => e.dateKey)).size;
+    const frequency = lateNights / Math.max(timedDays, 1);
     const score = Math.min(1, frequency * 1.5);
     if (score < REPORT_THRESHOLD) return null;
-
-    const lateNights = new Set(lateMeals.map((e) => e.dateKey)).size;
 
     return {
       patternId: "P04",
@@ -225,7 +230,7 @@ export class PatternEngine {
           value: lateMeals.length,
         },
         {
-          description: `Late-night eating represented ${Math.round(frequency * 100)}% of meals with a recorded time.`,
+          description: `Late eating on ${lateNights} of ${timedDays} days with a recorded meal time (${Math.round(frequency * 100)}%).`,
           value: frequency,
         },
       ],
@@ -244,7 +249,10 @@ export class PatternEngine {
     );
     if (takeaway.length < 3) return null;
 
-    const weeks = Math.max(window.days / 7, 1);
+    // Per week of days the user was actually observed — the window is 30 days
+    // however long they have used the app, and dividing by it halved the rate
+    // of someone two weeks in.
+    const weeks = Math.max(window.observedDays / 7, 1);
     const weeklyFrequency = takeaway.length / weeks;
 
     // Seven takeaways a week is the ceiling: at that point it is not a pattern
@@ -273,6 +281,9 @@ export class PatternEngine {
   private hasEnoughDays(patternId: string, window: PatternWindow): boolean {
     const definition = patternById(patternId);
     if (!definition) return false;
-    return window.days >= definition.minimumDataDays;
+    // Days actually observed, not the window's length: the window is always
+    // 30 days, so checking it let every detector run on two days of data —
+    // the thin-data claim this guard exists to prevent.
+    return window.observedDays >= definition.minimumDataDays;
   }
 }

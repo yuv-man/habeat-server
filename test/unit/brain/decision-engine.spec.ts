@@ -78,6 +78,30 @@ describe("DecisionEngine", () => {
     expect(state.decision.patternId).toBe("P04");
   });
 
+  it("does not act on a pattern seen only once", () => {
+    // One sighting is as likely a bad week as a habit. This used to commit to
+    // it anyway, because only RESOLVED was filtered out.
+    const state = engine.decide({
+      ...base,
+      patterns: [pattern({ patternId: "P04", status: PatternStatus.DISCOVERED })],
+    });
+
+    expect(state.decision.patternId).toBeNull();
+    expect(state.decision.rationale).toMatch(/Watching P04 \(Late-night eating\) — seen once/);
+  });
+
+  it("acts on the confirmed pattern even when a stronger one is only discovered", () => {
+    const state = engine.decide({
+      ...base,
+      patterns: [
+        pattern({ patternId: "P08", name: "Frequent takeaway", score: 0.95, status: PatternStatus.DISCOVERED }),
+        pattern({ patternId: "P04", score: 0.5, status: PatternStatus.CONFIRMED }),
+      ],
+    });
+
+    expect(state.decision.patternId).toBe("P04");
+  });
+
   it("abandons a pattern once it has resolved", () => {
     const state = engine.decide({
       ...base,

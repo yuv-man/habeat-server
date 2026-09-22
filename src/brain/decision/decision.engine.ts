@@ -66,7 +66,7 @@ export class DecisionEngine {
 
     const decision = target
       ? this.buildDecision(target, input)
-      : this.noDecision(confidence, patterns.length);
+      : this.noDecision(confidence, patterns);
 
     return {
       userId,
@@ -87,8 +87,14 @@ export class DecisionEngine {
     patterns: BrainPatternView[],
     currentPatternId?: string | null,
   ): BrainPatternView | null {
+    // Not RESOLVED, and not DISCOVERED either: a pattern seen on one run is as
+    // likely a bad week as a habit, and the Brain's own rule is that it is not
+    // acted on until a second, independent run confirms it. This filter used
+    // to let a first sighting drive the plan straight away.
     const actionable = patterns.filter(
-      (p) => p.status !== PatternStatus.RESOLVED,
+      (p) =>
+        p.status !== PatternStatus.RESOLVED &&
+        p.status !== PatternStatus.DISCOVERED,
     );
     if (actionable.length === 0) return null;
 
@@ -181,8 +187,9 @@ export class DecisionEngine {
 
   private noDecision(
     confidence: BrainConfidence,
-    patternCount: number,
+    patterns: BrainPatternView[],
   ): BrainDecision {
+    const watching = patterns.filter((p) => p.status === PatternStatus.DISCOVERED);
     return {
       patternId: null,
       patternName: null,
@@ -197,9 +204,11 @@ export class DecisionEngine {
       stageIndex: null,
       stageCount: STAGE_LADDER.length,
       rationale:
-        patternCount === 0
+        patterns.length === 0
           ? `No pattern met its detection threshold (confidence: ${confidence}). The Brain has nothing to claim yet.`
-          : "Every detected pattern is resolved. Nothing to work on.",
+          : watching.length
+            ? `Watching ${watching.map((p) => `${p.patternId} (${p.name})`).join(", ")} — seen once, waiting for a second run to confirm before acting.`
+            : "Every detected pattern is resolved. Nothing to work on.",
     };
   }
 

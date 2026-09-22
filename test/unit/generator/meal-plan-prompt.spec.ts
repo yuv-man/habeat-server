@@ -1,6 +1,10 @@
 import {
   buildMenuSkeleton,
+  buildMenuSkeletonForDays,
   buildWeeklyPlanPrompt,
+  FAVOURITE_MAIN_SHARE,
+  usablePreferences,
+  asFavourites,
   planSeed,
   SLOT_CALORIE_SHARE,
   DaySpec,
@@ -20,6 +24,122 @@ const DAYS: DaySpec[] = [
 const none = resolveDietaryConstraints({});
 const vegan = resolveDietaryConstraints({ dietaryRestrictions: ["Vegan"] });
 const glutenFree = resolveDietaryConstraints({ dietaryRestrictions: ["Gluten-free"] });
+
+describe("buildMenuSkeleton — one plan, several requests", () => {
+  const seed = planSeed("user-1", "2026-08-08");
+  const sat = DAYS[5];
+  const sun = DAYS[6];
+  const key = (d: any) => d.meals.map((m: any) => `${m.slot}:${m.protein}:${m.archetype}`).join("|");
+
+  it("gives separate requests of the same plan different outlines", () => {
+    // Phase 1 (today) and Phase 2 (the rest) are separate requests. Built per
+    // request, both started the rotation from scratch and a Saturday sign-up got
+    // an identical Saturday and Sunday.
+    const [phase1] = buildMenuSkeletonForDays([sat], "2026-08-08", none, 2000, seed);
+    const [phase2] = buildMenuSkeletonForDays([sun], "2026-08-08", none, 2000, seed);
+    expect(key(phase2)).not.toEqual(key(phase1));
+  });
+
+  it("slices exactly what one request for the whole span would build", () => {
+    const whole = buildMenuSkeleton([sat, sun], none, 2000, seed);
+    const [phase2] = buildMenuSkeletonForDays([sun], "2026-08-08", none, 2000, seed);
+    expect(key(phase2)).toEqual(key(whole[1]));
+    expect(phase2.hasWorkout).toBe(sun.hasWorkout);
+  });
+
+  it("returns only the requested days", () => {
+    const out = buildMenuSkeletonForDays([DAYS[2], DAYS[4]], "2026-08-03", none, 2000, seed);
+    expect(out.map((d) => d.dateStr)).toEqual(["2026-08-05", "2026-08-07"]);
+  });
+
+  it("never serves the same main protein at lunch and dinner on one day", () => {
+    for (const s of ["a", "b", "c", "d", "e"]) {
+      for (const day of buildMenuSkeleton(DAYS, none, 2000, s)) {
+        const lunch = day.meals.find((m) => m.slot === "lunch")!.protein;
+        const dinner = day.meals.find((m) => m.slot === "dinner")!.protein;
+        expect(dinner).not.toEqual(lunch);
+      }
+    }
+  });
+});
+
+describe("favourites in the outline", () => {
+  const CHLOE = asFavourites([], ["Pasta", "Salad", "Italian", "Burrata", "Tomato salad", "Artichoke with olive oil"]);
+  const mains = (week: any[]) =>
+    week.flatMap((d) => d.meals.filter((m: any) => m.slot === "lunch" || m.slot === "dinner"));
+
+  it("gives about 40% of lunches and dinners to the person's favourites", () => {
+    const week = buildMenuSkeleton(DAYS, none, 2000, "seed", [], undefined, undefined, CHLOE);
+    const fav = mains(week).filter((m: any) => m.favourite);
+    expect(fav.length).toBe(Math.floor(14 * FAVOURITE_MAIN_SHARE)); // 5 of 14
+    expect(new Set(fav.map((m: any) => m.favourite)).size).toBe(5); // rotates, no repeats yet
+  });
+
+  it("never touches breakfast or snacks", () => {
+    const week = buildMenuSkeleton(DAYS, none, 2000, "seed", [], undefined, undefined, CHLOE);
+    const others = week.flatMap((d) => d.meals.filter((m: any) => m.slot === "breakfast" || m.slot === "snack"));
+    expect(others.some((m: any) => m.favourite)).toBe(false);
+  });
+
+  it("leaves an outline without favourites exactly as it was", () => {
+    const a = buildMenuSkeleton(DAYS, none, 2000, "seed");
+    const b = buildMenuSkeleton(DAYS, none, 2000, "seed", [], undefined, undefined, []);
+    expect(b).toEqual(a);
+  });
+
+  it("keeps rotating across separate requests of one plan", () => {
+    const seed = planSeed("u", "2026-08-03");
+    const whole = buildMenuSkeleton(DAYS, none, 2000, seed, [], undefined, undefined, CHLOE);
+    const tail = buildMenuSkeletonForDays(DAYS.slice(4), "2026-08-03", none, 2000, seed, [], undefined, undefined, CHLOE);
+    expect(tail).toEqual(whole.slice(4));
+  });
+
+  it("tells the model to cook the favourite as it is really made", () => {
+    const skeleton = buildMenuSkeleton(DAYS, none, 2000, "seed", [], undefined, undefined, asFavourites([], ["Burrata"]));
+    const prompt = buildWeeklyPlanPrompt({
+      userData: { age: 28, gender: "female", height: 165, weight: 60, path: "running", foodPreferences: ["Burrata"] },
+      constraints: none,
+      targetCalories: 2158,
+      macros: { protein: 108, carbs: 297, fat: 60 },
+      skeleton,
+    });
+    expect(prompt).toContain('ONE OF THEIR FAVOURITES — make a proper "Burrata" dish');
+    expect(prompt).toContain("Meals marked as favourites in the outline are built on these");
+  });
+
+  it("plans a dish the user cooks as their own, ahead of a food they merely like", () => {
+    const favourites = asFavourites(["Mum's chicken soup"], ["Pasta"]);
+    const week = buildMenuSkeleton(DAYS, none, 2000, "seed", [], undefined, undefined, favourites);
+    const marked = mains(week).filter((m: any) => m.favourite);
+
+    expect(marked[0]).toMatchObject({ favourite: "Mum's chicken soup", favouriteKind: "own" });
+    expect(marked[1]).toMatchObject({ favourite: "Pasta", favouriteKind: "liked" });
+
+    const prompt = buildWeeklyPlanPrompt({
+      userData: { age: 28, gender: "female", height: 165, weight: 60, path: "running" },
+      constraints: none,
+      targetCalories: 2000,
+      macros: { protein: 100, carbs: 275, fat: 56 },
+      skeleton: week,
+    });
+    expect(prompt).toContain('A DISH THEY ALREADY COOK — plan "Mum\'s chicken soup" the way they make it');
+  });
+
+  it("never plans the same favourite twice before the rest have had a turn", () => {
+    const week = buildMenuSkeleton(DAYS, none, 2000, "seed", [], undefined, undefined, asFavourites(["Soup", "soup "], ["Pasta"]));
+    const names = mains(week).filter((m: any) => m.favourite).map((m: any) => m.favourite);
+    expect(new Set(names.slice(0, 2)).size).toBe(2); // duplicates folded away
+  });
+
+  it("drops preferences the person's diet forbids, and ones flagged as not food", () => {
+    const prefs = usablePreferences(
+      { foodPreferences: ["Steak", "Pasta", "white socks"], unrecognisedTerms: ["White socks"] },
+      vegan,
+    );
+    expect(prefs.allowed).toEqual(["Pasta"]);
+    expect(prefs.removed).toEqual(["Steak"]);
+  });
+});
 
 describe("buildMenuSkeleton", () => {
   it("plans four slots for every day", () => {
@@ -271,7 +391,7 @@ describe("buildWeeklyPlanPrompt", () => {
   it("omits optional sections when nothing is supplied", () => {
     const skeleton = buildMenuSkeleton(DAYS, none, 2000, "seed");
     const prompt = buildWeeklyPlanPrompt({ ...base, skeleton });
-    expect(prompt).not.toContain("ALREADY EATEN RECENTLY");
+    expect(prompt).not.toContain("RECENTLY PLANNED AND NOT EATEN");
     expect(prompt).not.toContain("STYLE NOTE");
     expect(prompt).not.toContain("CORRECTION REQUIRED");
     expect(prompt).not.toContain("COACH'S BRIEF ON THIS USER");

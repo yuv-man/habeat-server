@@ -82,6 +82,15 @@ describe("calculateMacros", () => {
     );
   });
 
+  it("fuels a runner with carbohydrate, not the default split", () => {
+    // A 28-year-old 60 kg runner training ~4x/week: TDEE ≈ 2158.
+    const running = calculateMacros(2158, "running");
+    expect(running.carbs / 60).toBeGreaterThanOrEqual(4.8);
+    expect(running.protein / 60).toBeGreaterThanOrEqual(1.6);
+    expect(running.protein / 60).toBeLessThanOrEqual(2.0);
+    expect(running.carbs).toBeGreaterThan(calculateMacros(2158, "healthy").carbs);
+  });
+
   it("keeps keto carbs minimal", () => {
     const keto = calculateMacros(2000, "keto");
     expect(keto.carbs).toBeLessThan(calculateMacros(2000, "healthy").carbs / 5);

@@ -16,6 +16,7 @@ import { StreamingGeneratorService } from "./streaming/streaming.service";
 import { GeneratorGateway } from "./streaming/generator.gateway";
 import { UserModule } from "../user/user.module";
 import { BrainModule } from "../brain/brain.module";
+import { RepertoireModule } from "../repertoire/repertoire.module";
 
 @Module({
   imports: [
@@ -37,6 +38,8 @@ import { BrainModule } from "../brain/brain.module";
     // The weekly planner reads the behavioural profile so next week's plan is
     // shaped by how the user actually ate, not only by what they asked for.
     BrainModule,
+    // The dishes the user cooks; the plan is built around them.
+    RepertoireModule,
   ],
   controllers: [GeneratorController],
   providers: [

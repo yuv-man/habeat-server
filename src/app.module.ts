@@ -27,6 +27,7 @@ import { BrainModule } from "./brain/brain.module";
 import { AnalyticsModule } from "./analytics/analytics.module";
 import { FoodTermsModule } from "./food-terms/food-terms.module";
 import { AiAgentModule } from "./ai-agent/ai-agent.module";
+import { RepertoireModule } from "./repertoire/repertoire.module";
 import logger from "./utils/logger";
 
 @Module({
@@ -106,6 +107,7 @@ import logger from "./utils/logger";
     AnalyticsModule,
     FoodTermsModule,
     AiAgentModule,
+    RepertoireModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: UserThrottlerGuard },

@@ -51,6 +51,9 @@ const SLOTS: MealSlot[] = ["breakfast", "lunch", "dinner", "snacks"];
 /** Minimum observations before any check may fire. */
 export const MIN_BASIS = 3;
 
+/** Fewer distinct dishes than this, over enough meals, is a narrow rotation. */
+export const LOW_VARIETY_DISTINCT_FLOOR = 8;
+
 const check = (
   id: string,
   area: CheckArea,
@@ -183,16 +186,26 @@ export const runChecks = (summary: BehaviorSummary): CheckResult[] => {
   );
 
   // ── variety ──────────────────────────────────────────────────────────────
+  // Repeating dishes is not the problem — a real person cooks a rotation of
+  // 20-odd dishes, so a high repeat rate is what a settled week looks like, and
+  // flagging it pushed plans toward novelty the user never asked for (see
+  // docs/the-repertoire.md). What is worth acting on is a rotation too narrow
+  // to eat well from. The floor matches the repertoire's own minimum, and the
+  // basis is high enough that a short window can't make a normal rotation look
+  // narrow just because it hasn't come round yet.
   results.push(
     check(
       "low-variety",
       "variety",
-      "the same few dishes come round repeatedly",
-      { value: summary.variety.repeatRate, basis: summary.variety.totalMeals },
-      0.5,
-      "above",
+      "the rotation of dishes is very narrow",
+      {
+        value: summary.variety.totalMeals > 0 ? summary.variety.distinctMeals : null,
+        basis: summary.variety.totalMeals,
+      },
+      LOW_VARIETY_DISTINCT_FLOOR,
+      "below",
       `${summary.variety.distinctMeals} distinct dishes across ${summary.variety.totalMeals} logged meals`,
-      10,
+      20,
     ),
   );
 
@@ -375,7 +388,13 @@ export const verifyCheck = (
   before: CheckResult,
   after: CheckResult | undefined,
 ): CheckVerification => {
-  if (!after || after.value === null || before.value === null) {
+  // A check whose definition changed between runs (low-variety moved from a
+  // repeat rate to a distinct-dish count) measures a different quantity now;
+  // comparing the two numbers would be meaningless.
+  const redefined =
+    !!after && (after.direction !== before.direction || after.threshold !== before.threshold);
+
+  if (!after || redefined || after.value === null || before.value === null) {
     return {
       id: before.id,
       outcome: "unverifiable",

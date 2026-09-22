@@ -1091,76 +1091,33 @@ const parseIngredients = (
   return parsed;
 };
 
-// Helper function to clean meal data
 /**
- * Validate and correct meal macros based on calories
- * Ensures calories = (protein×4) + (carbs×4) + (fat×9)
+ * Make a meal's calories agree with its macros: calories = 4p + 4c + 9f.
+ *
+ * The macros are the evidence — the prompt has the model compute them from the
+ * ingredient amounts — so they are kept and the calorie figure follows them.
+ *
+ * This used to also pull every meal's macros 70% of the way toward per-slot
+ * targets and recompute calories from the result. Those slot targets split the
+ * day's carbs 50/40/35/50% across breakfast/lunch/dinner/snack (175% of the
+ * day) and fat to 115%, so every plan came out ~30% over its calorie target
+ * with near-identical numbers on every meal — and the nutrition no longer
+ * matched the ingredients listed. Hitting the target is now done upstream by
+ * portion-scaling ingredients and macros together (generator/calorie-balance.ts).
  */
-export const validateAndCorrectMealMacros = (
-  meal: IAIMealData,
-  targetCalories?: number,
-  targetMacros?: { protein: number; carbs: number; fat: number }
-): IAIMealData => {
+export const validateAndCorrectMealMacros = (meal: IAIMealData): IAIMealData => {
   if (!meal || !meal.macros) return meal;
 
-  let { protein, carbs, fat } = meal.macros;
-  let calories = meal.calories || 0;
-
-  // Calculate actual calories from macros
-  const calculatedCalories = protein * 4 + carbs * 4 + fat * 9;
-
-  // If calories don't match macros, adjust macros proportionally
-  if (Math.abs(calculatedCalories - calories) > 10) {
-    // Recalculate macros to match calories
-    const totalMacroCalories = calculatedCalories || calories;
-    if (totalMacroCalories > 0) {
-      const proteinRatio = (protein * 4) / totalMacroCalories;
-      const carbsRatio = (carbs * 4) / totalMacroCalories;
-      const fatRatio = (fat * 9) / totalMacroCalories;
-
-      calories = targetCalories || calories || calculatedCalories;
-      protein = Math.round((calories * proteinRatio) / 4);
-      carbs = Math.round((calories * carbsRatio) / 4);
-      fat = Math.round((calories * fatRatio) / 9);
-    }
-  }
-
-  // If target macros provided, adjust to be closer to targets
-  if (targetMacros && targetCalories) {
-    const tolerance = 0.15; // 15% tolerance
-    const proteinDiff =
-      Math.abs(protein - targetMacros.protein) / targetMacros.protein;
-    const carbsDiff = Math.abs(carbs - targetMacros.carbs) / targetMacros.carbs;
-    const fatDiff = Math.abs(fat - targetMacros.fat) / targetMacros.fat;
-
-    // If macros are too far from target, adjust proportionally
-    if (
-      proteinDiff > tolerance ||
-      carbsDiff > tolerance ||
-      fatDiff > tolerance
-    ) {
-      const adjustment = 0.7; // 70% towards target, 30% keep current
-      protein = Math.round(
-        protein * (1 - adjustment) + targetMacros.protein * adjustment
-      );
-      carbs = Math.round(
-        carbs * (1 - adjustment) + targetMacros.carbs * adjustment
-      );
-      fat = Math.round(fat * (1 - adjustment) + targetMacros.fat * adjustment);
-
-      // Recalculate calories from adjusted macros
-      calories = protein * 4 + carbs * 4 + fat * 9;
-    }
-  }
+  const protein = Math.max(0, Math.round(Number(meal.macros.protein) || 0));
+  const carbs = Math.max(0, Math.round(Number(meal.macros.carbs) || 0));
+  const fat = Math.max(0, Math.round(Number(meal.macros.fat) || 0));
+  const fromMacros = protein * 4 + carbs * 4 + fat * 9;
 
   return {
     ...meal,
-    calories: Math.round(calories),
-    macros: {
-      protein: Math.max(0, Math.round(protein)),
-      carbs: Math.max(0, Math.round(carbs)),
-      fat: Math.max(0, Math.round(fat)),
-    },
+    // No macros at all: keep whatever calorie figure there was.
+    calories: fromMacros > 0 ? fromMacros : Math.round(meal.calories || 0),
+    macros: { protein, carbs, fat },
   };
 };
 

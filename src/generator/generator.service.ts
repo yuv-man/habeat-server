@@ -28,6 +28,14 @@ import {
   IDailyProgress,
 } from "../types/interfaces";
 import { IShoppingList } from "../shopping/shopping-list.model";
+import { resolvePlanTargets } from "./generate.service";
+import { RepertoireService } from "../repertoire/repertoire.service";
+import { balancePlanMacros, planMacroAccuracy } from "./macro-targets";
+import { DEFAULT_TUNE_CEILING, tuneCeilingForStage } from "../brain/behavior/behavior.types";
+import { applyOwnDishes } from "./own-dishes";
+import { IRepertoireDish } from "../repertoire/repertoire-dish.schema";
+import { applyFamiliarWeek } from "./familiar-week";
+import { recentMealsToExclude } from "./recent-meals";
 import {
   calculateBMR,
   calculateTDEE,
@@ -67,7 +75,8 @@ export class GeneratorService {
     @InjectModel(MoodEntry.name) private moodModel: Model<IMoodEntry>,
     private usdaNutritionService: UsdaNutritionService,
     private brainService: BrainService,
-    private shoppingService: ShoppingService
+    private shoppingService: ShoppingService,
+    private repertoireService: RepertoireService
   ) {}
 
   /**
@@ -326,10 +335,30 @@ export class GeneratorService {
     //
     // Never blocks: a plan still generates when the Brain is cold or the
     // window is too thin to claim anything.
-    const [behaviourContext, behaviourMaxPrep] = await Promise.all([
+    const [behaviourContext, behaviourMaxPrep, ownDishes, tuneCeiling] = await Promise.all([
       this.brainService.buildPlannerContext(userId).catch(() => null),
       this.brainService.effectiveMaxPrepMinutes(userId).catch(() => null),
+      // The dishes this person actually cooks. Never blocks a plan: an empty
+      // list just means the week is built the way it always was.
+      this.repertoireService.plannableDishes(userId).catch(() => []),
+      // How far this user is ready to have their own food changed. Their
+      // dishes are never swapped out — they are served as a better version of
+      // themselves, and only as far as the Brain's stage supports.
+      this.brainService
+        .getState(userId)
+        .then((state) => tuneCeilingForStage(state?.activeBehavior?.stage))
+        .catch(() => DEFAULT_TUNE_CEILING),
     ]);
+    const ownDishNames = ownDishes.map((d) => d.name).filter(Boolean);
+    // Any dish still without a tuned version gets one in the background, so
+    // the next plan can serve a better version of it.
+    void this.repertoireService.tunePending(userId).catch(() => undefined);
+
+    if (ownDishNames.length) {
+      logger.info(
+        `[generateWeeklyMealPlan] Building around ${ownDishNames.length} of the user's own dishes`
+      );
+    }
     if (behaviourContext) {
       logger.info(
         `[generateWeeklyMealPlan] Brain context applied (${behaviourContext.split("\n").length} directives)`
@@ -337,10 +366,15 @@ export class GeneratorService {
     }
 
     // Pre-calculate user metrics (shared by both phases)
-    const bmr = calculateBMR(userData.weight, userData.height, userData.age, userData.gender);
-    const tdee = calculateTDEE(bmr, userData.workoutFrequency);
-    const targetCalories = calculateTargetCalories(tdee, userData.path);
-    const macros = calculateMacros(targetCalories, userData.path);
+    // One resolver for the plan document and for generation. They used to
+    // differ: the stored target ignored the user's active goals while the
+    // meals were generated with them, so a runner training for a half
+    // marathon saw a 2158 kcal goal against ~2800 kcal of food every day.
+    const { bmr, tdee, targetCalories, macros } = resolvePlanTargets(
+      userData,
+      activeGoals,
+      planTemplate,
+    );
     const idealWeightData = calculateIdealWeight(userData.height, userData.gender);
 
     let userIdObjectId: mongoose.Types.ObjectId;
@@ -378,7 +412,8 @@ export class GeneratorService {
       moodContext,
       previousMeals,
       behaviourContext,
-      behaviourMaxPrep
+      behaviourMaxPrep,
+      ownDishNames
     );
 
     if (!mealPlan?.weeklyPlan || Object.keys(mealPlan.weeklyPlan).length === 0) {
@@ -402,7 +437,11 @@ export class GeneratorService {
     await this.progressModel.deleteOne({ userId: userIdObjectId, dateKey: todayKey });
 
     const remainingDates = this.getWeekRemainingDates(today);
-    const hasRemainingDays = remainingDates.length > 0 && !useMock;
+    // A plan started late in the week would otherwise be a one- or two-day
+    // "week" — the first thing a weekend sign-up sees. Next week is added too.
+    const followingWeekDates = this.getFollowingWeekDates(today, remainingDates);
+    const hasRemainingDays =
+      (remainingDates.length > 0 || followingWeekDates.length > 0) && !useMock;
 
     const plan = await this.planModel.create({
       userId: userIdObjectId,
@@ -433,26 +472,32 @@ export class GeneratorService {
     );
 
     // ── PHASE 2: Generate the rest of the week (background) ─────────────────
+    // Phase 3 (short weeks only): next Monday–Sunday, as its own request. It
+    // can't share Phase 2's request: days are matched to dates by weekday
+    // name, and a nine-day request has two Saturdays.
     if (hasRemainingDays) {
       // Fire-and-forget — do not await, do not block the response
       setImmediate(() => {
-        this.generateAndAppendRemainingDays(
+        this.generateRestOfPlan(
           userId,
           userIdObjectId,
           userData,
           today,
           remainingDates,
+          followingWeekDates,
           language,
           activeGoals,
           planTemplate,
           targetCalories,
           macros,
           moodContext,
-          // Exclude both the old plan and the day we just generated, so
-          // Tuesday's dinner cannot come back as Monday's.
-          [...previousMeals, ...this.mealNamesFrom(todayResult.weeklyPlanObject)],
+          // Only last plan's uneaten dishes. Repeating this week's dishes is
+          // fine — the familiar week (familiar-week.ts) does it on purpose.
+          previousMeals,
           behaviourContext,
-          behaviourMaxPrep
+          behaviourMaxPrep,
+          ownDishes,
+          tuneCeiling
         ).catch(async (err) => {
           logger.error(
             `[Phase2] Background generation failed for user ${userId}: ${err?.message || err}`
@@ -491,6 +536,79 @@ export class GeneratorService {
     };
   }
 
+  /** A first plan shorter than this (today included) also gets next week. */
+  static readonly MIN_FIRST_PLAN_DAYS = 3;
+
+  /**
+   * Next Monday–Sunday when the rest of this week is too short to be a plan
+   * (a Saturday or Sunday sign-up), otherwise nothing.
+   */
+  private getFollowingWeekDates(today: Date, remainingDates: Date[]): Date[] {
+    if (1 + remainingDates.length >= GeneratorService.MIN_FIRST_PLAN_DAYS) return [];
+    const monday = new Date(today);
+    monday.setHours(0, 0, 0, 0);
+    monday.setDate(monday.getDate() + remainingDates.length + 1);
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      return d;
+    });
+  }
+
+  /**
+   * Phase 2, then Phase 3 when there is one. Sequential, so only the last
+   * request marks the plan complete — a client polling on "generating" keeps
+   * waiting until every day has arrived — and each phase's familiar-week pass
+   * sees every day generated before it.
+   */
+  private async generateRestOfPlan(
+    userId: string,
+    userIdObjectId: mongoose.Types.ObjectId,
+    userData: IUserData,
+    today: Date,
+    remainingDates: Date[],
+    followingWeekDates: Date[],
+    language: string,
+    goals: IGoal[],
+    planTemplate: string | undefined,
+    targetCalories: number,
+    macros: { protein: number; carbs: number; fat: number },
+    moodContext?: string | null,
+    recentMeals: string[] = [],
+    behaviourContext?: string | null,
+    behaviourMaxPrep?: number | null,
+    ownDishes: IRepertoireDish[] = [],
+    tuneCeiling: 0 | 1 | 2 | 3 = DEFAULT_TUNE_CEILING
+  ): Promise<void> {
+    const chunks = [
+      { weekStart: today, dates: remainingDates },
+      { weekStart: followingWeekDates[0], dates: followingWeekDates },
+    ].filter((c) => c.dates.length > 0);
+
+    for (let i = 0; i < chunks.length; i++) {
+      await this.generateAndAppendRemainingDays(
+        userId,
+        userIdObjectId,
+        userData,
+        chunks[i].weekStart,
+        chunks[i].dates,
+        language,
+        goals,
+        planTemplate,
+        targetCalories,
+        macros,
+        moodContext,
+        // Next week may repeat this week's dishes: familiarity is the point.
+        recentMeals,
+        behaviourContext,
+        behaviourMaxPrep,
+        i === chunks.length - 1,
+        ownDishes,
+        tuneCeiling
+      );
+    }
+  }
+
   /**
    * Returns the remaining dates of the current Mon–Sun week after today.
    * Today is excluded; if today is Sunday (day 0) the array is empty.
@@ -508,9 +626,10 @@ export class GeneratorService {
   }
 
   /**
-   * Dish names the user has seen recently, so the next plan can be told not to
-   * repeat them. Read from the plan currently on record — it is deleted partway
-   * through generation, so this must be called before that happens.
+   * Dish names from the plan currently on record that the next plan should not
+   * repeat — only the ones the user didn't eat at home (see recent-meals.ts).
+   * Read from the plan and its days' progress, both of which are deleted
+   * partway through generation, so this must be called before that happens.
    */
   private async getRecentMealNames(
     userIdObjectId: mongoose.Types.ObjectId,
@@ -524,39 +643,14 @@ export class GeneratorService {
 
     if (!previous?.weeklyPlan) return [];
 
-    const names = new Set<string>();
-    for (const day of Object.values(previous.weeklyPlan as Record<string, any>)) {
-      const meals = day?.meals ?? day ?? {};
-      for (const meal of [
-        meals.breakfast,
-        meals.lunch,
-        meals.dinner,
-        ...(Array.isArray(meals.snacks) ? meals.snacks : []),
-      ]) {
-        const name = typeof meal?.name === "string" ? meal.name.trim() : "";
-        if (name) names.add(name);
-      }
-    }
+    const weeklyPlan = previous.weeklyPlan as Record<string, any>;
+    const progressDays = await this.progressModel
+      .find({ userId: userIdObjectId, dateKey: { $in: Object.keys(weeklyPlan) } })
+      .select("meals")
+      .lean()
+      .exec();
 
-    return [...names].slice(0, limit);
-  }
-
-  /** Meal names inside an already-generated plan object, for Phase 2 exclusion. */
-  private mealNamesFrom(weeklyPlanObject: Record<string, any>): string[] {
-    const names = new Set<string>();
-    for (const day of Object.values(weeklyPlanObject || {})) {
-      const meals = (day as any)?.meals ?? day ?? {};
-      for (const meal of [
-        meals.breakfast,
-        meals.lunch,
-        meals.dinner,
-        ...(Array.isArray(meals.snacks) ? meals.snacks : []),
-      ]) {
-        const name = typeof meal?.name === "string" ? meal.name.trim() : "";
-        if (name) names.add(name);
-      }
-    }
-    return [...names];
+    return recentMealsToExclude(weeklyPlan, progressDays as any[], limit);
   }
 
   /**
@@ -577,7 +671,11 @@ export class GeneratorService {
     moodContext?: string | null,
     recentMeals: string[] = [],
     behaviourContext?: string | null,
-    behaviourMaxPrep?: number | null
+    behaviourMaxPrep?: number | null,
+    /** Only the last background request may mark the plan complete. */
+    markComplete = true,
+    ownDishes: IRepertoireDish[] = [],
+    tuneCeiling: 0 | 1 | 2 | 3 = DEFAULT_TUNE_CEILING
   ): Promise<void> {
     logger.info(
       `[Phase2] Generating ${remainingDates.length} remaining days for user ${userId}: ` +
@@ -596,11 +694,13 @@ export class GeneratorService {
       moodContext,
       recentMeals,
       behaviourContext,
-      behaviourMaxPrep
+      behaviourMaxPrep,
+      ownDishes.map((d) => d.name).filter(Boolean)
     );
 
     if (!mealPlan?.weeklyPlan || Object.keys(mealPlan.weeklyPlan).length === 0) {
       logger.warn(`[Phase2] AI returned empty plan — remaining days not added.`);
+      if (markComplete) await this.markGenerationComplete(userIdObjectId);
       return;
     }
 
@@ -610,11 +710,12 @@ export class GeneratorService {
 
     if (Object.keys(weeklyPlanObject).length === 0) {
       logger.warn(`[Phase2] processAIPlanDays returned empty object.`);
+      if (markComplete) await this.markGenerationComplete(userIdObjectId);
       return;
     }
 
     // Merge remaining days into the existing plan using dot-notation $set
-    const setPayload: Record<string, any> = { generationStatus: "complete" };
+    const setPayload: Record<string, any> = markComplete ? { generationStatus: "complete" } : {};
     for (const [dateKey, dayPlan] of Object.entries(weeklyPlanObject)) {
       setPayload[`weeklyPlan.${dateKey}`] = dayPlan;
     }
@@ -624,8 +725,103 @@ export class GeneratorService {
       { $set: setPayload }
     );
 
+    await this.applyOwnDishesToPlan(userIdObjectId, ownDishes, targetCalories, tuneCeiling, macros);
+    await this.applyFamiliarWeekToPlan(userIdObjectId);
+    // Last: the week's dishes are settled, so what is left is the mix.
+    await this.balanceMacrosInPlan(userIdObjectId, macros, targetCalories);
+
     logger.info(
-      `[Phase2] Added ${Object.keys(weeklyPlanObject).length} days to plan for user ${userId}. Generation complete.`
+      `[Phase2] Added ${Object.keys(weeklyPlanObject).length} days to plan for user ${userId}.` +
+        (markComplete ? " Generation complete." : " More to come.")
+    );
+  }
+
+  /**
+   * Repeat on purpose across the whole stored plan: one weekday breakfast, two
+   * alternating snacks, dinners that come back as lunch (familiar-week.ts).
+   * Runs on the stored plan so anchors from earlier phases count.
+   */
+  /**
+   * Put the user's own dishes into the week (own-dishes.ts). Code places them
+   * rather than the model, which drifts off a named dish. Runs on the stored
+   * plan after each phase, and before the familiar-week pass so repeats and
+   * leftovers can build on a dish the user actually cooks.
+   */
+  private async applyOwnDishesToPlan(
+    userIdObjectId: mongoose.Types.ObjectId,
+    dishes: IRepertoireDish[],
+    targetCalories: number,
+    tuneCeiling: 0 | 1 | 2 | 3,
+    macros: { protein: number; carbs: number; fat: number }
+  ): Promise<void> {
+    if (!dishes.length) return;
+    const plan = await this.planModel.findOne({ userId: userIdObjectId }).lean().exec();
+    if (!plan?.weeklyPlan) return;
+
+    const { weeklyPlan, stats } = applyOwnDishes(
+      plan.weeklyPlan as Record<string, any>,
+      dishes as any[],
+      targetCalories,
+      undefined,
+      tuneCeiling,
+      { calories: targetCalories, ...macros }
+    );
+    if (!stats.placed) return;
+
+    await this.planModel.updateOne({ _id: (plan as any)._id }, { $set: { weeklyPlan } });
+    logger.info(
+      `[OwnDishes] Placed ${stats.placed} meal(s) the user cooks: ${stats.dishes.join(", ")}` +
+        (stats.tuned.length
+          ? ` | tuned (max level ${tuneCeiling}): ` +
+            stats.tuned.map((t) => `"${t.dish}" L${t.level} — ${t.changes.join("; ")}`).join(" · ")
+          : ` | none tuned (ceiling ${tuneCeiling})`)
+    );
+  }
+
+  /**
+   * Put each day's macro mix right (macro-targets.ts). Runs after the dishes
+   * are settled: it trades portions between meals, so it must see the week the
+   * user will actually get. The accuracy it achieves is stored on the plan.
+   */
+  private async balanceMacrosInPlan(
+    userIdObjectId: mongoose.Types.ObjectId,
+    macros: { protein: number; carbs: number; fat: number },
+    targetCalories: number
+  ): Promise<void> {
+    const plan = await this.planModel.findOne({ userId: userIdObjectId }).lean().exec();
+    if (!plan?.weeklyPlan) return;
+
+    const before = planMacroAccuracy(plan.weeklyPlan as Record<string, any>, macros, targetCalories);
+    const { weeklyPlan, nudges } = balancePlanMacros(plan.weeklyPlan as Record<string, any>, macros);
+    const after = planMacroAccuracy(weeklyPlan, macros, targetCalories);
+
+    await this.planModel.updateOne(
+      { _id: (plan as any)._id },
+      { $set: { weeklyPlan, macroAccuracy: after } }
+    );
+
+    const pct = (a: typeof after) =>
+      `P${Math.round(a.protein * 100)}% C${Math.round(a.carbs * 100)}% F${Math.round(a.fat * 100)}% kcal${Math.round(a.calories * 100)}%`;
+    logger.info(
+      `[Macros] ${nudges.length} portion trade(s); average error ${pct(before)} → ${pct(after)}`
+    );
+  }
+
+  private async applyFamiliarWeekToPlan(userIdObjectId: mongoose.Types.ObjectId): Promise<void> {
+    const plan = await this.planModel.findOne({ userId: userIdObjectId }).lean().exec();
+    if (!plan?.weeklyPlan) return;
+    const { weeklyPlan, stats } = applyFamiliarWeek(plan.weeklyPlan as Record<string, any>);
+    if (!stats.breakfastRepeats && !stats.snackRepeats && !stats.leftoverLunches) return;
+    await this.planModel.updateOne({ _id: (plan as any)._id }, { $set: { weeklyPlan } });
+    logger.info(
+      `[FamiliarWeek] ${stats.breakfastRepeats} breakfast repeats, ${stats.snackRepeats} snack repeats, ${stats.leftoverLunches} leftover lunches`
+    );
+  }
+
+  private async markGenerationComplete(userIdObjectId: mongoose.Types.ObjectId): Promise<void> {
+    await this.planModel.updateOne(
+      { userId: userIdObjectId },
+      { $set: { generationStatus: "complete" } }
     );
   }
 
@@ -650,10 +846,6 @@ export class GeneratorService {
     const dinnerTarget   = Math.round(targetCalories * 0.3);
     const snackTarget    = Math.round(targetCalories * 0.1);
 
-    const breakfastMacros = { protein: Math.round(macros.protein * 0.2), carbs: Math.round(macros.carbs * 0.5), fat: Math.round(macros.fat * 0.3) };
-    const lunchMacros    = { protein: Math.round(macros.protein * 0.3), carbs: Math.round(macros.carbs * 0.4), fat: Math.round(macros.fat * 0.3) };
-    const dinnerMacros   = { protein: Math.round(macros.protein * 0.35), carbs: Math.round(macros.carbs * 0.35), fat: Math.round(macros.fat * 0.3) };
-    const snackMacros    = { protein: Math.round(macros.protein * 0.15), carbs: Math.round(macros.carbs * 0.5), fat: Math.round(macros.fat * 0.25) };
 
     // Pre-fetch matching meals once (4 queries total, not one per meal)
     const [breakfastMatches, lunchMatches, dinnerMatches, snackMatches] =
@@ -737,19 +929,19 @@ export class GeneratorService {
       meal: IMeal | undefined,
       category: "breakfast" | "lunch" | "dinner" | "snack"
     ): IMeal | null => {
-      let targetCal: number;
-      let targetMacros: { protein: number; carbs: number; fat: number };
       let availableMatches: IMeal[];
 
       switch (category) {
-        case "breakfast": targetCal = breakfastTarget; targetMacros = breakfastMacros; availableMatches = breakfastMatches; break;
-        case "lunch":     targetCal = lunchTarget;    targetMacros = lunchMacros;    availableMatches = lunchMatches;    break;
-        case "dinner":    targetCal = dinnerTarget;   targetMacros = dinnerMacros;   availableMatches = dinnerMatches;   break;
-        case "snack":     targetCal = snackTarget;    targetMacros = snackMacros;    availableMatches = snackMatches;    break;
+        case "breakfast": availableMatches = breakfastMatches; break;
+        case "lunch":     availableMatches = lunchMatches;    break;
+        case "dinner":    availableMatches = dinnerMatches;   break;
+        case "snack":     availableMatches = snackMatches;    break;
       }
 
       if (meal?.name) {
-        const validated = validateAndCorrectMealMacros(meal as any, targetCal, targetMacros);
+        // Reconcile calories with macros only — portions were already fitted to
+        // the slot targets when the plan was generated (calorie-balance.ts).
+        const validated = validateAndCorrectMealMacros(meal as any);
         const converted = convertMeal(validated as IMeal);
         if (converted) {
           usedMealIds.add(converted._id);

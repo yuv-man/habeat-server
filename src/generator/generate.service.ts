@@ -41,11 +41,17 @@ import {
 } from "../utils/dietary-constraints";
 import {
   buildMenuSkeleton,
+  buildMenuSkeletonForDays,
   buildWeeklyPlanPrompt,
+  usablePreferences,
+  asFavourites,
+  MealSlot,
   planSeed,
   MEAL_PLAN_SYSTEM_INSTRUCTION,
   computeActiveSlots,
 } from "./meal-plan-prompt";
+import { weeklyWorkoutDays } from "../utils/workout-schedule";
+import { rebalanceDayCalories } from "./calorie-balance";
 import { COOKING_LEVEL_SPECS, CookingLevel } from "../constants/cookingLevel";
 
 // Helper function to extract error message
@@ -430,6 +436,23 @@ export const DIETARY_VIOLATION_ERROR = "DIETARY_CONSTRAINT_VIOLATION";
  * `regenerateDays` returns fresh day objects for the given dates, or null when
  * the provider cannot retry (in which case the violating days are dropped).
  */
+/** Portion-scale off-target meals (see calorie-balance.ts) and log what moved. */
+const applyCalorieBalance = (
+  days: any[],
+  targetCalories: number,
+  activeSlots: MealSlot[],
+  context: string,
+): any[] => {
+  const { days: balanced, adjustments } = rebalanceDayCalories(days, targetCalories, activeSlots);
+  if (adjustments.length) {
+    logger.info(
+      `[${context}] Portion-scaled ${adjustments.length} meal(s) onto target: ` +
+        adjustments.map((a) => `${a.slot} "${a.name}" ${a.from}→${a.to} (target ${a.target})`).join("; "),
+    );
+  }
+  return balanced;
+};
+
 const enforceDietaryConstraints = async (
   days: any[],
   constraints: DietaryConstraints,
@@ -649,6 +672,8 @@ const generateMealPlanWithGemini = async (
   // plan must still generate when the behaviour pipeline has nothing to say.
   behaviourContext?: string,
   behaviourMaxPrepMinutes?: number | null,
+  /** Dishes the user told us they cook (repertoire) — planned as their own. */
+  ownDishes: string[] = [],
 ): Promise<MealPlanResponse> => {
   const models = await getAvailableGeminiModelsCached(apiKey);
 
@@ -702,28 +727,18 @@ const generateMealPlanWithGemini = async (
     ? datesOverride
     : fullWeekDates;
 
-  // Pre-calculate targets once
+  // Pre-calculate targets once — the same resolver the stored plan uses.
+  const { targetCalories, macros } = resolvePlanTargets(userData, goals, planTemplate);
   const goalAdjustments = planTemplate
     ? getGoalBasedAdjustments([])
     : getGoalBasedAdjustments(goals);
-  const bmr = calculateBMR(
-    userData.weight,
-    userData.height,
-    userData.age,
-    userData.gender,
-  );
-  const tdee = calculateTDEE(
-    bmr,
-    goalAdjustments.workoutFrequency ?? userData.workoutFrequency,
-  );
-  const targetCalories = Math.max(
-    1200,
-    calculateTargetCalories(tdee, userData.path) +
-      goalAdjustments.calorieAdjustment,
-  );
-  const macros = calculateMacros(targetCalories, userData.path);
   const workoutDayNums = new Set(workoutDays);
   const constraints = resolveDietaryConstraints(userData);
+  // The outline reserves a share of its mains for foods this person likes.
+  // Dishes they actually cook are not briefed here: the model drifted off them
+  // (nine asked for, none returned), so own-dishes.ts places those in code and
+  // the prompt only tells the model to keep clear of them.
+  const favourites = asFavourites([], usablePreferences(userData as any, constraints).allowed);
 
   if (constraints.hasConstraints) {
     logger.info(
@@ -801,14 +816,19 @@ const generateMealPlanWithGemini = async (
 
     // Code fixes the shape of every meal (form, protein, method, flavour) and
     // the model only cooks it. See meal-plan-prompt.ts for why.
-    const skeleton = buildMenuSkeleton(
+    // Cut from the whole week's skeleton, so the rotation carries on across
+    // requests instead of restarting (Phase 1 and Phase 2 are separate calls).
+    const skeleton = buildMenuSkeletonForDays(
       batchDaysData,
+      getLocalDateKey(weekStartDate),
       constraints,
       targetCalories,
       planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate)),
       userData.dislikes,
       activeSlots,
       userData.path,
+      favourites,
+      macros,
     );
 
     const multiDayPrompt = buildWeeklyPlanPrompt({
@@ -818,6 +838,7 @@ const generateMealPlanWithGemini = async (
       targetCalories,
       macros,
       recentMeals,
+      ownDishes,
       styleNote: goalContextStr,
       moodContext,
       behaviourContext,
@@ -858,19 +879,7 @@ const generateMealPlanWithGemini = async (
         // Same skeleton, one day wide — a fallback day must not fall back to
         // weaker prompting, or the retry quietly reintroduces the problems the
         // rewrite fixed.
-        const daySkeleton = buildMenuSkeleton(
-          [dayData],
-          constraints,
-          targetCalories,
-          planSeed(
-            String((userData as any)._id ?? "anon"),
-            getLocalDateKey(weekStartDate),
-            dayData.dateStr,
-          ),
-          userData.dislikes,
-          activeSlots,
-          userData.path,
-        );
+        const daySkeleton = skeleton.filter((d) => d.dateStr === dayData.dateStr);
 
         const singleDayPrompt = buildWeeklyPlanPrompt({
           userData,
@@ -879,6 +888,7 @@ const generateMealPlanWithGemini = async (
           targetCalories,
           macros,
           recentMeals,
+          ownDishes,
           styleNote: goalContextStr,
           moodContext,
           behaviourContext,
@@ -939,6 +949,8 @@ const generateMealPlanWithGemini = async (
         userData.dislikes,
         activeSlots,
         userData.path,
+        favourites,
+        macros,
       );
 
       const repairPrompt = buildWeeklyPlanPrompt({
@@ -948,6 +960,7 @@ const generateMealPlanWithGemini = async (
         targetCalories,
         macros,
         recentMeals,
+        ownDishes,
         styleNote: goalContextStr,
         moodContext,
         behaviourContext,
@@ -974,6 +987,8 @@ const generateMealPlanWithGemini = async (
       }
     },
   );
+
+  weeklyPlanArray = applyCalorieBalance(weeklyPlanArray, targetCalories, activeSlots, "Gemini");
 
   const parsedResponse = { weeklyPlan: weeklyPlanArray };
 
@@ -1085,6 +1100,8 @@ const generateMealPlanWithOpenRouter = async (
   recentMeals: string[] = [],
   behaviourContext?: string,
   behaviourMaxPrepMinutes?: number | null,
+  /** Dishes the user told us they cook (repertoire) — planned as their own. */
+  ownDishes: string[] = [],
 ): Promise<MealPlanResponse> => {
   logger.info("[OpenRouter] Starting generation...");
 
@@ -1098,15 +1115,15 @@ const generateMealPlanWithOpenRouter = async (
   const goalAdjustments = planTemplate
     ? getGoalBasedAdjustments([])
     : getGoalBasedAdjustments(goals);
-  const bmr = calculateBMR(userData.weight, userData.height, userData.age, userData.gender);
-  const tdee = calculateTDEE(bmr, goalAdjustments.workoutFrequency ?? userData.workoutFrequency);
-  const targetCalories = Math.max(
-    1200,
-    calculateTargetCalories(tdee, userData.path) + goalAdjustments.calorieAdjustment,
-  );
-  const macros = calculateMacros(targetCalories, userData.path);
+  // Same resolver as the Gemini path and the stored plan.
+  const { targetCalories, macros } = resolvePlanTargets(userData, goals, planTemplate);
   const workoutDayNums = new Set(workoutDays);
   const constraints = resolveDietaryConstraints(userData);
+  // The outline reserves a share of its mains for foods this person likes.
+  // Dishes they actually cook are not briefed here: the model drifted off them
+  // (nine asked for, none returned), so own-dishes.ts places those in code and
+  // the prompt only tells the model to keep clear of them.
+  const favourites = asFavourites([], usablePreferences(userData as any, constraints).allowed);
   const goalContextStr = planTemplate
     ? PLAN_TEMPLATE_STYLES[planTemplate] || ""
     : goalAdjustments.goalDescription || "";
@@ -1237,19 +1254,24 @@ const generateMealPlanWithOpenRouter = async (
       dateStr: d.dateStr, dayName: d.dayName, dayIndex: d.dayIndex, hasWorkout: d.hasWorkout,
     }));
 
-    const skeleton = buildMenuSkeleton(
+    // Cut from the whole week's skeleton, so the rotation carries on across
+    // requests instead of restarting (Phase 1 and Phase 2 are separate calls).
+    const skeleton = buildMenuSkeletonForDays(
       batchDaysData,
+      getLocalDateKey(weekStartDate),
       constraints,
       targetCalories,
       planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate)),
       userData.dislikes,
       activeSlots,
       userData.path,
+      favourites,
+      macros,
     );
 
     const prompt = buildWeeklyPlanPrompt({
       userData, skeleton, constraints, targetCalories, macros,
-      recentMeals, styleNote: goalContextStr, moodContext, behaviourContext,
+      recentMeals, ownDishes, styleNote: goalContextStr, moodContext, behaviourContext,
       ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
       language, fastingContext,
     });
@@ -1291,11 +1313,13 @@ const generateMealPlanWithOpenRouter = async (
         userData.dislikes,
         activeSlots,
         userData.path,
+        favourites,
+        macros,
       );
 
       const repairPrompt = buildWeeklyPlanPrompt({
         userData, skeleton: repairSkeleton, constraints, targetCalories, macros,
-        recentMeals, styleNote: goalContextStr, moodContext, behaviourContext,
+        recentMeals, ownDishes, styleNote: goalContextStr, moodContext, behaviourContext,
         ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
         repairNote, language, fastingContext,
       });
@@ -1309,7 +1333,9 @@ const generateMealPlanWithOpenRouter = async (
     },
   );
 
-  const parsedResponse = { weeklyPlan: verifiedDays };
+  const parsedResponse = {
+    weeklyPlan: applyCalorieBalance(verifiedDays, targetCalories, activeSlots, "OpenRouter"),
+  };
   const transformedPlan = await transformWeeklyPlan(
     parsedResponse, dayToName, nameToDay, datesToGenerate,
     datesToGenerate.map(d => d.getDay()), workoutDays,
@@ -1335,6 +1361,8 @@ const generateMealPlanWithAI = async (
   // too little history for anything to be claimed about how they eat.
   behaviourContext?: string | null,
   behaviourMaxPrepMinutes?: number | null,
+  /** Dishes the user told us they cook (repertoire) — planned as their own. */
+  ownDishes: string[] = [],
 ): Promise<MealPlanResponse> => {
   try {
     // Local-dev escape hatch: with no AI keys, opt into the canned mock plan by
@@ -1374,7 +1402,7 @@ const generateMealPlanWithAI = async (
         return await generateMealPlanWithGemini(
           userData, weekStartDate, planType, language, geminiKey,
           goals, planTemplate, datesOverride, moodContext ?? undefined, recentMeals,
-          behaviourContext ?? undefined, behaviourMaxPrepMinutes,
+          behaviourContext ?? undefined, behaviourMaxPrepMinutes, ownDishes,
         );
       } catch (geminiError: unknown) {
         logger.warn(`[AI] Gemini failed: ${getErrorMessage(geminiError)}. Trying OpenRouter...`);
@@ -1394,7 +1422,7 @@ const generateMealPlanWithAI = async (
         return await generateMealPlanWithOpenRouter(
           userData, weekStartDate, planType, language, openRouterKey,
           goals, planTemplate, datesOverride, moodContext ?? undefined, recentMeals,
-          behaviourContext ?? undefined, behaviourMaxPrepMinutes,
+          behaviourContext ?? undefined, behaviourMaxPrepMinutes, ownDishes,
         );
       } catch (openRouterError: unknown) {
         logger.warn(`[AI] OpenRouter failed: ${getErrorMessage(openRouterError)}`);
@@ -1615,6 +1643,44 @@ Rules:
 // path (Gemini and OpenRouter both call this purely for dayToName/nameToDay/
 // dates/activeDays/workoutDays — actual prompts are built separately by
 // buildDayPrompt/buildMultiDayPrompt).
+/**
+ * The calorie and macro targets a plan is built to.
+ *
+ * Exported because the plan document and the generation prompt must agree: the
+ * stored plan used the user's profile alone (2158 kcal for one real user) while
+ * generation added the active goals' adjustments (~2800), so every day of the
+ * plan read as 700 kcal over the target shown on the user's own dashboard.
+ */
+export const resolvePlanTargets = (
+  userData: IUserData,
+  goals: IGoal[] = [],
+  planTemplate?: string,
+): {
+  bmr: number;
+  tdee: number;
+  targetCalories: number;
+  macros: { protein: number; carbs: number; fat: number };
+  workoutFrequency: number | undefined;
+} => {
+  const goalAdjustments = planTemplate
+    ? getGoalBasedAdjustments([])
+    : getGoalBasedAdjustments(goals);
+  const bmr = calculateBMR(userData.weight, userData.height, userData.age, userData.gender);
+  const workoutFrequency = goalAdjustments.workoutFrequency ?? userData.workoutFrequency;
+  const tdee = calculateTDEE(bmr, workoutFrequency);
+  const targetCalories = Math.max(
+    1200,
+    calculateTargetCalories(tdee, userData.path) + goalAdjustments.calorieAdjustment,
+  );
+  return {
+    bmr,
+    tdee,
+    targetCalories,
+    macros: calculateMacros(targetCalories, userData.path),
+    workoutFrequency,
+  };
+};
+
 const buildPrompt = (
   userData: IUserData,
   goals: IGoal[] = [],
@@ -1692,16 +1758,9 @@ const buildPrompt = (
     userData.workoutFrequency ??
     defaultWorkoutsPerWeek;
 
-  const daysLeft = daysToGenerate.length;
-  const workoutsToInclude = Math.min(totalWorkoutsPerWeek, daysLeft);
-
-  // Calculate specific INDICES for workouts to distribute them evenly
-  const workoutIndices = Array.from({ length: workoutsToInclude }, (_, i) =>
-    Math.floor((i * daysLeft) / workoutsToInclude),
-  );
-
-  // Map indices to actual Day Numbers
-  const workoutDays = workoutIndices.map((i) => daysToGenerate[i]);
+  // A fixed weekly pattern, not "spread over the days left this week" — that
+  // put every session of a Saturday-made plan on weekends (workout-schedule.ts).
+  const workoutDays = weeklyWorkoutDays(totalWorkoutsPerWeek);
 
   // activeDays represents all days that will have meal plans
   const activeDays = daysToGenerate;

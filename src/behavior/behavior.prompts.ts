@@ -42,7 +42,7 @@ Recurring patterns such as:
 - Frequently skipping meals, or skipping one particular meal
 - Repeatedly eating very late
 - Repeatedly choosing meals that conflict with the user's stated goal
-- Very low variety in meals
+- A very narrow rotation of dishes (repeating a normal rotation of familiar dishes is healthy, not a problem)
 - Frequent replacement of planned meals
 - Repeated high-calorie or low-nutrition choices alongside particular feelings or situations
 - Eating patterns associated with low energy or poor reported wellbeing
@@ -360,7 +360,9 @@ export const buildPlannerContext = (profile: PlannerProfileView | null): string 
   }
 
   if (d.increaseVariety) {
-    lines.push(`Recent weeks repeated the same few dishes — widen the range.`);
+    lines.push(
+      `The user rotates through very few dishes. Keep the ones they eat, and add one or two new dishes alongside them — do not replace the rotation.`,
+    );
   }
 
   if (d.emphasiseMacro) {
@@ -398,11 +400,13 @@ export const buildPlannerContext = (profile: PlannerProfileView | null): string 
     );
   }
 
-  // Meals this user actually cooks twice. Not a licence to repeat them, but the
-  // shape of a dish that survives contact with their week.
+  // Meals this user actually eats again and again. These are the strongest
+  // adherence signal we have: plan them as they are, and improve them by
+  // portion and composition rather than steering away from them
+  // (docs/the-repertoire.md §2).
   if (profile.preferences?.favoriteMeals?.length) {
     lines.push(
-      `Reliably made more than once, so build in this direction rather than repeating them exactly: ${profile.preferences.favoriteMeals.slice(0, 5).join(", ")}.`,
+      `Dishes this user reliably eats — include them in the plan as the same dish, adjusting portion or adding a side where the targets need it, rather than replacing them: ${profile.preferences.favoriteMeals.slice(0, 5).join(", ")}.`,
     );
   }
 
