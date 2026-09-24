@@ -211,6 +211,10 @@ export interface IMeal {
   category: "breakfast" | "lunch" | "dinner" | "snack";
   prepTime: number;
   usageCount?: number;
+  /** When a user-added snack was eaten, 24h HH:mm. Planned meals use the slot time. */
+  time?: string;
+  /** Nutrition is a fallback estimate — the model was unavailable when logged. */
+  nutritionEstimated?: boolean;
 }
 
 /** Where the food actually came from, as the user reported it. */
@@ -410,6 +414,8 @@ export interface IPlan extends Document {
 
 export interface IRecipe extends Document {
   mealId: string; // Reference to the meal this recipe is for
+  /** The dish's name + ingredient names, hashed; shared across users' meals (recipe-signature.ts). */
+  signature?: string;
   mealName: string; // Reference to the meal this recipe is for
   /** Plain English reference name for the same dish, used by the client to match meal images when `mealName` is localized (e.g. Hebrew). Falls back to `mealName` when generated in English. */
   mealNameEn?: string;

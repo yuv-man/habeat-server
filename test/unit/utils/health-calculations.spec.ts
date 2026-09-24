@@ -91,6 +91,29 @@ describe("calculateMacros", () => {
     expect(running.carbs).toBeGreaterThan(calculateMacros(2158, "healthy").carbs);
   });
 
+  it("doses protein against weight at BMI 25, not total weight", () => {
+    // 28y, 101 kg, 178 cm, lose-weight, 4x/week: 2,812 kcal gave 246 g
+    // protein — 2.4 g per kg of a body that is largely fat.
+    const macros = calculateMacros(2812, "lose-weight", { weight: 101, height: 178 });
+    expect(macros.protein).toBe(Math.round(2.2 * 25 * 1.78 * 1.78));
+    // The calories it frees go to carbs; the day's total is unchanged.
+    const kcal = macros.protein * 4 + macros.carbs * 4 + macros.fat * 9;
+    expect(Math.abs(kcal - 2812)).toBeLessThanOrEqual(10);
+    expect(macros.carbs).toBeGreaterThan(calculateMacros(2812, "lose-weight").carbs);
+  });
+
+  it("leaves protein alone when it is already within range", () => {
+    expect(calculateMacros(2000, "healthy", { weight: 75, height: 180 })).toEqual(
+      calculateMacros(2000, "healthy"),
+    );
+  });
+
+  it("moves capped protein into fat on keto", () => {
+    const keto = calculateMacros(3200, "keto", { weight: 110, height: 175 });
+    expect(keto.carbs).toBe(calculateMacros(3200, "keto").carbs);
+    expect(keto.fat).toBeGreaterThan(calculateMacros(3200, "keto").fat);
+  });
+
   it("keeps keto carbs minimal", () => {
     const keto = calculateMacros(2000, "keto");
     expect(keto.carbs).toBeLessThan(calculateMacros(2000, "healthy").carbs / 5);

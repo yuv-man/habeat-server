@@ -39,6 +39,10 @@ import {
 } from "../types/interfaces";
 import crypto from "crypto";
 
+/** Why a meal was skipped, as the user put it. Mirrors the client's MissReason. */
+export type MissReason = "time-pressure" | "stress" | "tiredness" | "not-hungry";
+export const MISS_REASONS: MissReason[] = ["time-pressure", "stress", "tiredness", "not-hungry"];
+
 @Injectable()
 export class ProgressService {
   constructor(
@@ -89,7 +93,7 @@ export class ProgressService {
       );
       const tdee = calculateTDEE(bmr, userData.workoutFrequency);
       const targetCalories = calculateTargetCalories(tdee, userData.path);
-      const macros = calculateMacros(targetCalories, userData.path);
+      const macros = calculateMacros(targetCalories, userData.path, userData);
 
       logger.info(
         `[getMacroGoalsFromPlan] Calculated macros from userData: protein=${macros.protein}, carbs=${macros.carbs}, fat=${macros.fat}`
@@ -171,9 +175,35 @@ export class ProgressService {
     return `${year}-${month}-${day}`;
   }
 
+  /**
+   * What the progress snapshot keeps from the plan meal itself, over the
+   * shared library record it is matched to: which of the user's dishes it is,
+   * its side, and which plan meal it came from. For their own dishes and any
+   * meal with a side, also the plan's nutrition — the library record matched
+   * by name and ±50 kcal is a different plate (no side, someone else's recipe).
+   */
+  private withPlanFields(snapshot: any, mealData: any): any {
+    if (!snapshot) return snapshot;
+    const out: any = { ...snapshot, planMealId: mealData._id ? String(mealData._id) : undefined };
+    for (const key of ["fromRepertoire", "insteadOf", "tuneLevel", "side", "sideChosen"]) {
+      if (mealData[key] !== undefined) out[key] = mealData[key];
+    }
+    if (mealData.fromRepertoire || mealData.side) {
+      out.name = mealData.name;
+      out.calories = mealData.calories;
+      out.macros = mealData.macros;
+      out.ingredients = mealData.ingredients;
+    }
+    return out;
+  }
+
   // Helper to create or find a meal in the database (prevents duplicates)
   private async ensureMealInDB(mealData: any): Promise<any> {
     if (!mealData || !mealData.name) return null;
+    return this.withPlanFields(await this.findOrCreateLibraryMeal(mealData), mealData);
+  }
+
+  private async findOrCreateLibraryMeal(mealData: any): Promise<any> {
 
     // Calculate signature for deduplication
     const signature = this.calculateMealSignature(mealData);
@@ -528,6 +558,8 @@ export class ProgressService {
     // Toggle done status
     const wasDone = meal.done;
     meal.done = !wasDone;
+    // Eating it after all overrides an earlier "skipped".
+    if (meal.done) meal.skipped = undefined;
     // Stamp when it happened, so the meal can later be paired with the mood
     // logged around it. Cleared on un-tick — a meal that didn't happen has no
     // time, and a stale one would pull the wrong mood into the pairing.
@@ -678,6 +710,51 @@ export class ProgressService {
           : null,
       },
     };
+  }
+
+  /**
+   * Record that a planned meal was skipped — or undo that.
+   *
+   * Busy people skip lunch; until now the only honest answer the app accepted
+   * was "ate it" or "ate something else", so a skipped meal just sat there
+   * looking forgotten. Skipping a meal that was ticked as eaten un-ticks it
+   * first, so its calories come back off the day.
+   */
+  async setMealSkipped(
+    userId: string,
+    mealId: string,
+    mealType: "breakfast" | "lunch" | "dinner" | "snacks",
+    skipped: boolean,
+    reason?: MissReason
+  ) {
+    const todayDateKey = this.getLocalDateKey(new Date());
+    const progress = await this.progressModel.findOne({
+      userId,
+      dateKey: todayDateKey,
+    });
+    if (!progress) {
+      throw new NotFoundException("Progress not found for today");
+    }
+
+    const meals = (progress as any).meals;
+    const meal =
+      mealType === "snacks"
+        ? meals.snacks.find((m: any) => m._id.toString() === mealId)
+        : meals[mealType];
+    if (!meal || (mealType !== "snacks" && meal._id.toString() !== mealId)) {
+      throw new NotFoundException("Meal not found");
+    }
+
+    if (skipped && meal.done) {
+      await this.markMealCompleted(userId, mealId, mealType);
+      return this.setMealSkipped(userId, mealId, mealType, skipped, reason);
+    }
+
+    meal.skipped = skipped || undefined;
+    meal.skipReason = skipped && reason ? reason : undefined;
+    await progress.save();
+
+    return { success: true, data: { progress } };
   }
 
   /**

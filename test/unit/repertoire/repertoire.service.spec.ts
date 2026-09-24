@@ -242,9 +242,68 @@ describe("RepertoireService", () => {
         user: { path: "lose-weight" },
         proposal: { usual: null, tunes: [], dropped: [{ level: 0, reason: "no usable baseline" }] },
       });
+      await service.tune(USER_ID, DISH_ID);
+      // Only the attempt is recorded — the tunes the user has are left alone.
+      const $set = (dishModel.findOneAndUpdate.mock.calls[0] as any[])[1].$set;
+      expect(Object.keys($set).sort()).toEqual(["tuneAttemptedAt", "tuneAttemptedForPath"]);
+      expect($set.tuneAttemptedForPath).toBe("lose-weight");
+    });
+
+    it("does not pay again for a dish that could not be improved on this path", async () => {
+      const { service, tuner } = await build({
+        dish: capturedDish({ tuneAttemptedForPath: "lose-weight", tuneAttemptedAt: new Date() }),
+        user: { path: "lose-weight" },
+        proposal: { usual: null, tunes: [proposedTune(1)], dropped: [] },
+      });
       const r = await service.tune(USER_ID, DISH_ID);
-      expect(dishModel.findOneAndUpdate).not.toHaveBeenCalled();
-      expect(r.dish.tunes).toHaveLength(1);
+      expect(r.generated).toBe(false);
+      expect(tuner.tune).not.toHaveBeenCalled();
+    });
+
+    it("tries again when the path changes, or when forced", async () => {
+      const attempted = { tuneAttemptedForPath: "lose-weight", tuneAttemptedAt: new Date() };
+      const changed = await build({
+        dish: capturedDish(attempted),
+        user: { path: "gain-muscle" },
+        proposal: { usual: null, tunes: [proposedTune(1)], dropped: [] },
+      });
+      await changed.service.tune(USER_ID, DISH_ID);
+      expect(changed.tuner.tune).toHaveBeenCalled();
+
+      const forced = await build({
+        dish: capturedDish(attempted),
+        user: { path: "lose-weight" },
+        proposal: { usual: null, tunes: [proposedTune(1)], dropped: [] },
+      });
+      await forced.service.tune(USER_ID, DISH_ID, true);
+      expect(forced.tuner.tune).toHaveBeenCalled();
+    });
+
+    it("does not tune dishes for a free user", async () => {
+      const { service, dishModel, tuner } = await build({ user: { path: "lose-weight", subscriptionTier: "free" } });
+      expect(await service.tunePending(USER_ID)).toBe(0);
+      expect(dishModel.find).not.toHaveBeenCalled();
+      expect(tuner.tune).not.toHaveBeenCalled();
+    });
+
+    it("runs one tuning pass per user at a time", async () => {
+      const { service, dishModel } = await build({ user: { path: "lose-weight", subscriptionTier: "plus" }, dishes: [] });
+      await Promise.all([service.tunePending(USER_ID), service.tunePending(USER_ID)]);
+      // The second call found a run in progress and left it to finish.
+      expect(dishModel.find).toHaveBeenCalledTimes(1);
+      // ...and once it has, the next plan can tune again.
+      await service.tunePending(USER_ID);
+      expect(dishModel.find).toHaveBeenCalledTimes(2);
+    });
+
+    it("leaves dishes already tried on this path out of the pending list", async () => {
+      const { service, dishModel } = await build({ user: { path: "lose-weight", subscriptionTier: "plus" }, dishes: [] });
+      await service.tunePending(USER_ID);
+      const filter = (dishModel.find.mock.calls[0] as any[])[0];
+      expect(filter.$and[1].$or).toEqual([
+        { tuneAttemptedAt: null },
+        { tuneAttemptedForPath: { $ne: "lose-weight" } },
+      ]);
     });
 
     it("reports the model being unavailable", async () => {
@@ -300,6 +359,48 @@ describe("RepertoireService", () => {
         "rhythm.leftoversFriendly": true,
       });
       expect(resolver.resolve).toHaveBeenCalled();
+    });
+
+    it("reuses another user's resolution of the same dish instead of calling the model", async () => {
+      const { service, dishModel, resolver } = await build({ user: {} });
+      const elsewhere = {
+        usual: {
+          ingredients: [{ name: "chicken", amount: "200 g" }, { name: "carrot", amount: "80 g" }],
+          nutritionPerServing: { calories: 420, protein: 38, carbs: 20, fat: 18 },
+          prepMinutes: 40,
+          nutritionConfidence: "estimated",
+        },
+        slots: ["lunch", "dinner"],
+        rhythm: { leftoversFriendly: true },
+      };
+      dishModel.findOne
+        .mockImplementationOnce(() => chain(null)) // not in this user's list yet
+        .mockImplementationOnce(() => chain(elsewhere)); // someone else has it
+      await service.addDish(USER_ID, { name: "Chicken soup" });
+
+      expect(resolver.resolve).not.toHaveBeenCalled();
+      const $set = (dishModel.findOneAndUpdate.mock.calls[0] as any[])[1].$set;
+      expect($set["usual.nutritionPerServing"]).toEqual(elsewhere.usual.nutritionPerServing);
+      expect($set.status).toBe("active");
+    });
+
+    it("checks a shared dish against this user's own restrictions", async () => {
+      const { service, dishModel } = await build({ user: { dietaryRestrictions: ["vegetarian"] } });
+      dishModel.findOne
+        .mockImplementationOnce(() => chain(null))
+        .mockImplementationOnce(() =>
+          chain({
+            usual: {
+              ingredients: [{ name: "chicken", amount: "200 g" }, { name: "carrot", amount: "80 g" }],
+              nutritionPerServing: { calories: 420, protein: 38, carbs: 20, fat: 18 },
+              nutritionConfidence: "estimated",
+            },
+          }),
+        );
+      await service.addDish(USER_ID, { name: "Chicken soup" });
+      const $set = (dishModel.findOneAndUpdate.mock.calls[0] as any[])[1].$set;
+      // Fine for whoever resolved it; not for a vegetarian.
+      expect($set.status).toBe("paused");
     });
 
     it("keeps a dish it could not work out, but never plans it", async () => {

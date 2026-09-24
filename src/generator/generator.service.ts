@@ -1,10 +1,15 @@
 import {
   Injectable,
   BadRequestException,
+  ForbiddenException,
   NotFoundException,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
+import { getEffectiveSubscriptionTier, hasFeatureAccess } from "../enums/enumSubscription";
+import { FREE_PLAN_LIMIT_MESSAGE, freePlanAllowed } from "./plan-limits";
+import { MealLibraryService } from "./meal-library.service";
+import { computeActiveSlots } from "./meal-plan-prompt";
 import { Plan } from "../plan/plan.model";
 import { User } from "../user/user.model";
 import { Goal } from "../goals/goal.model";
@@ -32,7 +37,7 @@ import { resolvePlanTargets } from "./generate.service";
 import { RepertoireService } from "../repertoire/repertoire.service";
 import { balancePlanMacros, planMacroAccuracy } from "./macro-targets";
 import { DEFAULT_TUNE_CEILING, tuneCeilingForStage } from "../brain/behavior/behavior.types";
-import { applyOwnDishes } from "./own-dishes";
+import { applyOwnDishes, balanceAroundOwnDishes } from "./own-dishes";
 import { IRepertoireDish } from "../repertoire/repertoire-dish.schema";
 import { applyFamiliarWeek } from "./familiar-week";
 import { recentMealsToExclude } from "./recent-meals";
@@ -76,8 +81,25 @@ export class GeneratorService {
     private usdaNutritionService: UsdaNutritionService,
     private brainService: BrainService,
     private shoppingService: ShoppingService,
-    private repertoireService: RepertoireService
+    private repertoireService: RepertoireService,
+    private mealLibrary: MealLibraryService
   ) {}
+
+  /** Library meals this user could be served — see meal-library.service.ts. */
+  private async librarySupplyFor(userData: IUserData, recentMeals: string[]) {
+    try {
+      const slots = computeActiveSlots({
+        fastingHours: userData.fastingHours,
+        fastingStartTime: userData.fastingStartTime,
+        mealsPerDay: (userData as any).mealsPerDay,
+      });
+      return await this.mealLibrary.supplyFor(userData as any, slots, recentMeals);
+    } catch (err) {
+      // No library means the model writes every meal, as it used to.
+      logger.warn(`[MealLibrary] Could not load the library: ${(err as Error)?.message ?? err}`);
+      return undefined;
+    }
+  }
 
   /**
    * Find existing meals from database that match criteria
@@ -298,6 +320,18 @@ export class GeneratorService {
       throw new NotFoundException("User not found");
     }
 
+    const tier = getEffectiveSubscriptionTier((userData as any).subscriptionTier, (userData as any).role);
+    if (!hasFeatureAccess(tier, "unlimitedPlanGeneration")) {
+      const current = await this.planModel
+        .findOne({ userId: new mongoose.Types.ObjectId(userId) })
+        .select("createdAt generationStatus")
+        .lean()
+        .exec();
+      if (!freePlanAllowed(current as any)) {
+        throw new ForbiddenException(FREE_PLAN_LIMIT_MESSAGE);
+      }
+    }
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -413,7 +447,8 @@ export class GeneratorService {
       previousMeals,
       behaviourContext,
       behaviourMaxPrep,
-      ownDishNames
+      ownDishNames,
+      await this.librarySupplyFor(userData, previousMeals)
     );
 
     if (!mealPlan?.weeklyPlan || Object.keys(mealPlan.weeklyPlan).length === 0) {
@@ -695,7 +730,8 @@ export class GeneratorService {
       recentMeals,
       behaviourContext,
       behaviourMaxPrep,
-      ownDishes.map((d) => d.name).filter(Boolean)
+      ownDishes.map((d) => d.name).filter(Boolean),
+      await this.librarySupplyFor(userData, recentMeals)
     );
 
     if (!mealPlan?.weeklyPlan || Object.keys(mealPlan.weeklyPlan).length === 0) {
@@ -725,7 +761,11 @@ export class GeneratorService {
       { $set: setPayload }
     );
 
-    await this.applyOwnDishesToPlan(userIdObjectId, ownDishes, targetCalories, tuneCeiling, macros);
+    await this.applyOwnDishesToPlan(userIdObjectId, ownDishes, targetCalories, tuneCeiling, macros, [
+      ...(userData.allergies ?? []),
+      ...(userData.dislikes ?? []),
+      ...(userData.dietaryRestrictions ?? []),
+    ]);
     await this.applyFamiliarWeekToPlan(userIdObjectId);
     // Last: the week's dishes are settled, so what is left is the mix.
     await this.balanceMacrosInPlan(userIdObjectId, macros, targetCalories);
@@ -752,7 +792,8 @@ export class GeneratorService {
     dishes: IRepertoireDish[],
     targetCalories: number,
     tuneCeiling: 0 | 1 | 2 | 3,
-    macros: { protein: number; carbs: number; fat: number }
+    macros: { protein: number; carbs: number; fat: number },
+    avoid: string[] = []
   ): Promise<void> {
     if (!dishes.length) return;
     const plan = await this.planModel.findOne({ userId: userIdObjectId }).lean().exec();
@@ -764,7 +805,8 @@ export class GeneratorService {
       targetCalories,
       undefined,
       tuneCeiling,
-      { calories: targetCalories, ...macros }
+      { calories: targetCalories, ...macros },
+      avoid
     );
     if (!stats.placed) return;
 
@@ -791,8 +833,11 @@ export class GeneratorService {
     const plan = await this.planModel.findOne({ userId: userIdObjectId }).lean().exec();
     if (!plan?.weeklyPlan) return;
 
-    const before = planMacroAccuracy(plan.weeklyPlan as Record<string, any>, macros, targetCalories);
-    const { weeklyPlan, nudges } = balancePlanMacros(plan.weeklyPlan as Record<string, any>, macros);
+    // Their own dishes come at their own portion; first the rest of each day
+    // makes room for them, then the mix is corrected around them.
+    const around = balanceAroundOwnDishes(plan.weeklyPlan as Record<string, any>, targetCalories);
+    const before = planMacroAccuracy(around.weeklyPlan, macros, targetCalories);
+    const { weeklyPlan, nudges } = balancePlanMacros(around.weeklyPlan, macros);
     const after = planMacroAccuracy(weeklyPlan, macros, targetCalories);
 
     await this.planModel.updateOne(
@@ -803,7 +848,7 @@ export class GeneratorService {
     const pct = (a: typeof after) =>
       `P${Math.round(a.protein * 100)}% C${Math.round(a.carbs * 100)}% F${Math.round(a.fat * 100)}% kcal${Math.round(a.calories * 100)}%`;
     logger.info(
-      `[Macros] ${nudges.length} portion trade(s); average error ${pct(before)} → ${pct(after)}`
+      `[Macros] ${around.days} day(s) rebalanced around own dishes; ${nudges.length} portion trade(s); average error ${pct(before)} → ${pct(after)}`
     );
   }
 

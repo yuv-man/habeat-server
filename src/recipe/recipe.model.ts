@@ -21,6 +21,13 @@ const recipeSchema = new Schema<IRecipe>(
       required: true,
       index: true,
     },
+    // The dish itself — name and ingredient names — so a recipe written for one
+    // user's meal is reused for every other meal of the same dish, instead of
+    // paying for it again under each new meal id (see recipe-signature.ts).
+    signature: {
+      type: String,
+      index: true,
+    },
     description: {
       type: String,
       trim: true,

@@ -228,7 +228,11 @@ export const projectBehaviorEvents = (
       // time-of-day detector can build a claim on a placeholder.
       timestampIsExact: false,
       dateKey: miss.date,
-      context: contextFrom(null, { planned: true }),
+      context: contextFrom(null, {
+        planned: true,
+        ...(miss.explicit ? { explicitSkip: true } : {}),
+        ...(miss.reason ? { skipReason: miss.reason } : {}),
+      }),
       source: "daily_progress",
       fingerprint: `skip:${miss.date}:${miss.mealType}`,
     });

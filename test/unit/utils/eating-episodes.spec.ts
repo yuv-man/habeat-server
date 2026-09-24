@@ -71,14 +71,26 @@ describe("extractSkippedMeals", () => {
   it("counts planned meals that were never logged", () => {
     const skipped = extractSkippedMeals(docs, "2026-09-03");
     expect(skipped).toEqual([
-      { date: "2026-09-01", mealType: "breakfast" },
-      { date: "2026-09-02", mealType: "breakfast" },
+      { date: "2026-09-01", mealType: "breakfast", explicit: false },
+      { date: "2026-09-02", mealType: "breakfast", explicit: false },
     ]);
   });
 
   it("does not call today's untouched meals skipped — the day isn't over", () => {
     const skipped = extractSkippedMeals(docs, "2026-09-02");
-    expect(skipped).toEqual([{ date: "2026-09-01", mealType: "breakfast" }]);
+    expect(skipped).toEqual([{ date: "2026-09-01", mealType: "breakfast", explicit: false }]);
+  });
+
+  it("counts a meal the user said they skipped today, with the reason", () => {
+    const today = [
+      progressDoc("2026-09-03", {
+        lunch: { _id: "l3", name: "Wrap", done: false, skipped: true, skipReason: "time-pressure" },
+        dinner: { _id: "d3", name: "Stew", done: false },
+      }),
+    ];
+    expect(extractSkippedMeals(today, "2026-09-03")).toEqual([
+      { date: "2026-09-03", mealType: "lunch", explicit: true, reason: "time-pressure" },
+    ]);
   });
 });
 

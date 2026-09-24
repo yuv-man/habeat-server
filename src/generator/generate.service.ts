@@ -1,4 +1,5 @@
 import { GenerativeModel } from "@google/generative-ai";
+import { fromOpenRouterUsage, recordLlmUsage } from "../utils/llm-usage";
 import axios from "axios";
 import logger from "../utils/logger";
 import {
@@ -49,7 +50,17 @@ import {
   planSeed,
   MEAL_PLAN_SYSTEM_INSTRUCTION,
   computeActiveSlots,
+  PlannedDay,
 } from "./meal-plan-prompt";
+import { familiarWeekFills } from "./familiar-week";
+import {
+  injectLibraryMeals,
+  LibraryMeal,
+  outlineForModel,
+  pickLibraryMeals,
+  slotKey,
+} from "./library-picks";
+import { prepCeilingFor } from "../constants/cookingLevel";
 import { weeklyWorkoutDays } from "../utils/workout-schedule";
 import { rebalanceDayCalories } from "./calorie-balance";
 import { COOKING_LEVEL_SPECS, CookingLevel } from "../constants/cookingLevel";
@@ -657,6 +668,68 @@ const generateSingleDayPlan = async (
 };
 
 // Gemini generation — batched multi-day calls for free tier efficiency
+/** Library meals the generator may use instead of writing them (library-picks.ts). */
+export interface LibrarySupply {
+  candidates: LibraryMeal[];
+  /** Dishes not to serve this week: recently planned, swapped away. */
+  avoidNames?: string[];
+  share?: number;
+}
+
+/**
+ * Split one request's outline into what code fills and what the model writes.
+ *
+ * Code fills the slots familiar-week.ts will overwrite anyway (repeated
+ * breakfasts and snacks, leftover lunches) and, when a library is supplied,
+ * a share of the rest with library meals. Only what is left is sent to the
+ * model — before this, about 60% of the meals written each week were paid
+ * for and then replaced.
+ */
+const splitOutline = (
+  skeleton: PlannedDay[],
+  planKeys: string[],
+  activeSlots: MealSlot[],
+  library: LibrarySupply | undefined,
+  ctx: {
+    constraints: ReturnType<typeof resolveDietaryConstraints>;
+    userData: IUserData;
+    language: string;
+    maxPrepMinutes?: number | null;
+    seed: string;
+    ownDishes?: string[];
+  },
+): { promptSkeleton: PlannedDay[]; picks: Map<string, LibraryMeal>; repeats: number } => {
+  const repeatFills = familiarWeekFills(planKeys, activeSlots);
+  const inBatch = new Set(skeleton.flatMap((d) => d.meals.map((m) => slotKey(d.dateStr, m.slot))));
+  const repeats = [...repeatFills].filter((k) => inBatch.has(k));
+  const afterRepeats = outlineForModel(skeleton, new Set(repeats));
+
+  // Library meals are stored in English; a plan in another language is written
+  // by the model so every name reads in the user's language.
+  const picks =
+    library && ctx.language.toLowerCase() === "en"
+      ? pickLibraryMeals({
+          skeleton: afterRepeats,
+          candidates: library.candidates,
+          constraints: ctx.constraints,
+          dislikes: (ctx.userData as any).dislikes ?? [],
+          avoidNames: library.avoidNames ?? [],
+          ownDishes: ctx.ownDishes,
+          path: ctx.userData.path,
+          maxPrepMinutes:
+            Math.min(
+              prepCeilingFor((ctx.userData as any).cookingLevel) ?? 45,
+              ctx.maxPrepMinutes ?? Number.POSITIVE_INFINITY,
+            ) || undefined,
+          share: library.share,
+          seed: ctx.seed,
+        })
+      : new Map<string, LibraryMeal>();
+
+  const filled = new Set([...repeats, ...picks.keys()]);
+  return { promptSkeleton: outlineForModel(skeleton, filled), picks, repeats: repeats.length };
+};
+
 const generateMealPlanWithGemini = async (
   userData: IUserData,
   weekStartDate: Date,
@@ -674,6 +747,7 @@ const generateMealPlanWithGemini = async (
   behaviourMaxPrepMinutes?: number | null,
   /** Dishes the user told us they cook (repertoire) — planned as their own. */
   ownDishes: string[] = [],
+  library?: LibrarySupply,
 ): Promise<MealPlanResponse> => {
   const models = await getAvailableGeminiModelsCached(apiKey);
 
@@ -705,7 +779,7 @@ const generateMealPlanWithGemini = async (
     "gemini-3.6-flash",
     "gemini-3-flash-preview",
     "gemini-2.5-flash",
-    "gemini-3.5-flash",
+    // gemini-3.5-flash left out: the priciest Flash, never worth a fallback.
     "gemini-2.5-flash-lite", // last resort: weakest, but better than no plan
   ];
   const candidateModels = MODEL_PRIORITY.filter((m) => models.includes(m));
@@ -799,6 +873,9 @@ const generateMealPlanWithGemini = async (
 
   const startTime = Date.now();
   const allDayResults: any[] = [];
+  const planKeys = fullWeekDates.map((d) => getLocalDateKey(d));
+  const allPicks = new Map<string, LibraryMeal>();
+  const dayNames = new Map(allDaysData.map((d) => [d.dateStr, d.dayName]));
 
   // Process each batch sequentially (rate limiter handles throttling between batches)
   for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
@@ -831,9 +908,24 @@ const generateMealPlanWithGemini = async (
       macros,
     );
 
+    const { promptSkeleton, picks, repeats } = splitOutline(skeleton, planKeys, activeSlots, library, {
+      constraints,
+      userData,
+      language,
+      maxPrepMinutes: behaviourMaxPrepMinutes,
+      seed: planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate), "library"),
+      ownDishes,
+    });
+    for (const [k, v] of picks) allPicks.set(k, v);
+    const slotCount = skeleton.reduce((n, d) => n + d.meals.length, 0);
+    logger.info(
+      `[Gemini] Batch ${batchIdx + 1}: ${slotCount} slots — ${repeats} filled by repeats/leftovers, ${picks.size} from the library, ${slotCount - repeats - picks.size} for the model`,
+    );
+    if (!promptSkeleton.length) continue; // nothing left for the model to write
+
     const multiDayPrompt = buildWeeklyPlanPrompt({
       userData,
-      skeleton,
+      skeleton: promptSkeleton,
       constraints,
       targetCalories,
       macros,
@@ -879,7 +971,8 @@ const generateMealPlanWithGemini = async (
         // Same skeleton, one day wide — a fallback day must not fall back to
         // weaker prompting, or the retry quietly reintroduces the problems the
         // rewrite fixed.
-        const daySkeleton = skeleton.filter((d) => d.dateStr === dayData.dateStr);
+        const daySkeleton = promptSkeleton.filter((d) => d.dateStr === dayData.dateStr);
+        if (!daySkeleton.length) continue;
 
         const singleDayPrompt = buildWeeklyPlanPrompt({
           userData,
@@ -917,6 +1010,7 @@ const generateMealPlanWithGemini = async (
   }
 
   const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
+  injectLibraryMeals(allDayResults, allPicks, dayNames);
   let weeklyPlanArray = allDayResults.filter((d) => d !== null);
 
   if (weeklyPlanArray.length === 0) {
@@ -1029,7 +1123,6 @@ const generateMealPlanWithGemini = async (
  * rate-limited (~50 requests/day on an uncredited account).
  */
 const OPEN_ROUTER_PAID_MODELS = [
-  "google/gemini-3.5-flash", // measured best on the eval personas
   "google/gemini-3-flash-preview",
   "deepseek/deepseek-v3.2", // non-Google, in case Google itself is degraded
 ];
@@ -1102,6 +1195,7 @@ const generateMealPlanWithOpenRouter = async (
   behaviourMaxPrepMinutes?: number | null,
   /** Dishes the user told us they cook (repertoire) — planned as their own. */
   ownDishes: string[] = [],
+  library?: LibrarySupply,
 ): Promise<MealPlanResponse> => {
   logger.info("[OpenRouter] Starting generation...");
 
@@ -1165,6 +1259,9 @@ const generateMealPlanWithOpenRouter = async (
   }
 
   const allDayResults: any[] = [];
+  const planKeys = fullWeekDates.map((d) => getLocalDateKey(d));
+  const allPicks = new Map<string, LibraryMeal>();
+  const dayNames = new Map(allDaysData.map((d) => [d.dateStr, d.dayName]));
 
   // Single prompt → first model that returns parseable days wins. Paid models
   // are tried first and skipped wholesale once the account is known to be out
@@ -1222,6 +1319,9 @@ const generateMealPlanWithOpenRouter = async (
           payload = JSON.parse(payload.slice(start));
         }
 
+        const usage = fromOpenRouterUsage(model, `OpenRouter ${label}`, payload?.usage);
+        if (usage) recordLlmUsage(usage);
+
         const text: string = payload?.choices?.[0]?.message?.content;
         if (!text) throw new Error("Empty response from OpenRouter");
 
@@ -1269,8 +1369,19 @@ const generateMealPlanWithOpenRouter = async (
       macros,
     );
 
+    const { promptSkeleton, picks } = splitOutline(skeleton, planKeys, activeSlots, library, {
+      constraints,
+      userData,
+      language,
+      maxPrepMinutes: behaviourMaxPrepMinutes,
+      seed: planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate), "library"),
+      ownDishes,
+    });
+    for (const [k, v] of picks) allPicks.set(k, v);
+    if (!promptSkeleton.length) continue;
+
     const prompt = buildWeeklyPlanPrompt({
-      userData, skeleton, constraints, targetCalories, macros,
+      userData, skeleton: promptSkeleton, constraints, targetCalories, macros,
       recentMeals, ownDishes, styleNote: goalContextStr, moodContext, behaviourContext,
       ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
       language, fastingContext,
@@ -1289,6 +1400,7 @@ const generateMealPlanWithOpenRouter = async (
     }
   }
 
+  injectLibraryMeals(allDayResults, allPicks, dayNames);
   if (allDayResults.length === 0) {
     throw new Error("OpenRouter: all models failed to produce any days");
   }
@@ -1363,6 +1475,7 @@ const generateMealPlanWithAI = async (
   behaviourMaxPrepMinutes?: number | null,
   /** Dishes the user told us they cook (repertoire) — planned as their own. */
   ownDishes: string[] = [],
+  library?: LibrarySupply,
 ): Promise<MealPlanResponse> => {
   try {
     // Local-dev escape hatch: with no AI keys, opt into the canned mock plan by
@@ -1402,7 +1515,7 @@ const generateMealPlanWithAI = async (
         return await generateMealPlanWithGemini(
           userData, weekStartDate, planType, language, geminiKey,
           goals, planTemplate, datesOverride, moodContext ?? undefined, recentMeals,
-          behaviourContext ?? undefined, behaviourMaxPrepMinutes, ownDishes,
+          behaviourContext ?? undefined, behaviourMaxPrepMinutes, ownDishes, library,
         );
       } catch (geminiError: unknown) {
         logger.warn(`[AI] Gemini failed: ${getErrorMessage(geminiError)}. Trying OpenRouter...`);
@@ -1422,7 +1535,7 @@ const generateMealPlanWithAI = async (
         return await generateMealPlanWithOpenRouter(
           userData, weekStartDate, planType, language, openRouterKey,
           goals, planTemplate, datesOverride, moodContext ?? undefined, recentMeals,
-          behaviourContext ?? undefined, behaviourMaxPrepMinutes, ownDishes,
+          behaviourContext ?? undefined, behaviourMaxPrepMinutes, ownDishes, library,
         );
       } catch (openRouterError: unknown) {
         logger.warn(`[AI] OpenRouter failed: ${getErrorMessage(openRouterError)}`);
@@ -1676,7 +1789,7 @@ export const resolvePlanTargets = (
     bmr,
     tdee,
     targetCalories,
-    macros: calculateMacros(targetCalories, userData.path),
+    macros: calculateMacros(targetCalories, userData.path, userData),
     workoutFrequency,
   };
 };

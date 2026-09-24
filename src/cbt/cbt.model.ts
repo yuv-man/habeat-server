@@ -270,6 +270,10 @@ const moodEntrySchema = new Schema(
       type: {
         easedBy: [{ type: String, enum: EATING_FACILITATORS }],
         hinderedBy: [{ type: String, enum: EATING_TRIGGERS }],
+        /** When the user finished with the question (Done or Skip). Answers
+         *  can arrive without it — a skipped meal's reason is merged in — so
+         *  this, not the answers, is what says the question is closed. */
+        closedAt: { type: Date },
       },
       // Without this the subdocument is created on every mood entry, and
       // "has a reflection" stops being a meaningful thing to query for.

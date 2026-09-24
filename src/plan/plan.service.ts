@@ -54,7 +54,10 @@ import {
 } from "../utils/healthCalculations";
 import { PATH_WATER_INTAKE, PATH_WORKOUTS_GOAL } from "../enums/enumPaths";
 import { UsdaNutritionService } from "../utils/usda-nutrition.service";
+import { estimateSnackFallback } from "./snack-fallback";
 import { updateMealLearningProfile } from "../utils/meal-learning";
+import { computeActiveSlots, slotCalorieShares } from "../generator/meal-plan-prompt";
+import { changeSide, SideChoiceError, sideChoicesFor } from "../generator/own-dishes";
 
 @Injectable()
 export class PlanService {
@@ -603,6 +606,124 @@ export class PlanService {
     };
   }
 
+  /**
+   * Everything the side picker needs for a lunch or dinner: the plan, the
+   * day, the meal and the calories its slot should carry.
+   */
+  private async loadOwnDishSlot(userId: string, date: string, mealType: string) {
+    if (mealType !== "lunch" && mealType !== "dinner") {
+      throw new BadRequestException("Only lunch and dinner have a side");
+    }
+    const [plan, user] = await Promise.all([
+      this.planModel.findOne({ userId }).lean().exec(),
+      this.userModel.findById(userId).select("mealsPerDay fastingHours fastingStartTime").lean().exec(),
+    ]);
+    if (!plan) throw new NotFoundException("Plan not found");
+
+    const dateKey = this.getDateKey(date, plan);
+    const day = ((plan as any).weeklyPlan ?? {})[dateKey];
+    const meal = day?.meals?.[mealType];
+    if (!meal) throw new NotFoundException("Meal not found in plan");
+
+    const targetCalories = Number((plan as any).userMetrics?.targetCalories) || 0;
+    const shares = slotCalorieShares(
+      computeActiveSlots({
+        fastingHours: (user as any)?.fastingHours,
+        fastingStartTime: (user as any)?.fastingStartTime,
+        mealsPerDay: (user as any)?.mealsPerDay,
+      }),
+    );
+    const slotCalories = Math.round(targetCalories * (shares[mealType] ?? 0));
+    const u = (plan as any).userData ?? {};
+    const avoid: string[] = [
+      ...(u.allergies ?? []),
+      ...(u.dislikes ?? []),
+      ...(u.dietaryRestrictions ?? []),
+    ];
+    return { plan, dateKey, day, meal, slotCalories, targetCalories, avoid };
+  }
+
+  /** The sides that suit a lunch or dinner, and the one it has now. */
+  async getSideOptions(userId: string, date: string, mealType: string) {
+    const { meal, slotCalories, avoid } = await this.loadOwnDishSlot(userId, date, mealType);
+    return { success: true, data: sideChoicesFor(meal, slotCalories, avoid) };
+  }
+
+  /**
+   * Put the side the user picked (or none) next to a lunch or dinner. The
+   * dish stays as it is; the rest of the day's meals make room.
+   */
+  async setSide(userId: string, date: string, mealType: string, optionId: string | null) {
+    const { plan, dateKey, day, slotCalories, targetCalories, avoid } =
+      await this.loadOwnDishSlot(userId, date, mealType);
+    try {
+      changeSide(day, mealType as "lunch" | "dinner", optionId, slotCalories, targetCalories, avoid);
+    } catch (err) {
+      if (err instanceof SideChoiceError) throw new BadRequestException(err.message);
+      throw err;
+    }
+
+    const updated = await this.planModel
+      .findOneAndUpdate(
+        { _id: (plan as any)._id },
+        { $set: { [`weeklyPlan.${dateKey}`]: day } },
+        { new: true },
+      )
+      .lean()
+      .exec();
+    await this.syncProgressMeals(userId, dateKey, day);
+    return { success: true, data: { plan: updated } };
+  }
+
+  /**
+   * The daily tracker reads the day's progress record, not the plan. After a
+   * change that touches several meals of a day (a side, and the rebalance
+   * around it), copy the plan's meals into it — only the ones not yet eaten,
+   * and only where it is still the same meal, so nothing the user logged moves.
+   */
+  private async syncProgressMeals(userId: string, dateKey: string, day: any): Promise<void> {
+    const progress = await this.progressModel.findOne({ userId, dateKey });
+    if (!progress) return;
+    const meals = (progress as any).meals ?? {};
+
+    const fresh = (planned: any, logged: any) => {
+      if (!planned || !logged || logged.done) return logged;
+      const plain = typeof logged.toObject === "function" ? logged.toObject() : logged;
+      // Snapshots are matched to a library record, so their _id is not the
+      // plan meal's; planMealId is. Older snapshots have neither link.
+      const samePlanMeal =
+        String(plain.planMealId ?? plain._id) === String(planned._id) ||
+        (!plain.planMealId && plain.name === planned.name);
+      if (!samePlanMeal) return logged;
+      const { _id, side, sideChosen, ...rest } = planned;
+      return {
+        ...plain,
+        ...rest,
+        planMealId: String(_id),
+        side: side ?? undefined,
+        ...(sideChosen ? { sideChosen } : {}),
+        done: false,
+      };
+    };
+
+    for (const slot of ["breakfast", "lunch", "dinner"] as const) {
+      meals[slot] = fresh(day?.meals?.[slot], meals[slot]);
+    }
+    if (Array.isArray(meals.snacks) && Array.isArray(day?.meals?.snacks)) {
+      meals.snacks = meals.snacks.map((logged: any) =>
+        fresh(
+          day.meals.snacks.find(
+            (s: any) => String(s?._id) === String(logged?.planMealId ?? logged?._id),
+          ),
+          logged,
+        ),
+      );
+    }
+    (progress as any).meals = meals;
+    progress.markModified("meals");
+    await progress.save();
+  }
+
   // Helper to collect all ingredients from a plan's weeklyPlan
   // Helper to convert day name or date string to date key (YYYY-MM-DD)
   private getDateKey(dayOrDate: string, plan?: any): string {
@@ -673,7 +794,7 @@ export class PlanService {
     const tdee = calculateTDEE(bmr, userData.workoutFrequency);
     const targetCalories = calculateTargetCalories(tdee, userData.path);
     const idealWeight = calculateIdealWeight(userData.height, userData.gender);
-    const macros = calculateMacros(targetCalories, userData.path);
+    const macros = calculateMacros(targetCalories, userData.path, userData);
 
     const userMetrics = {
       bmr,
@@ -1468,7 +1589,8 @@ export class PlanService {
     ownerUserId: string,
     planId: string,
     date: string,
-    snackName: string
+    snackName: string,
+    time?: string
   ) {
     const plan = await this.planModel.findById(planId);
     if (plan && String((plan as any).userId) !== String(ownerUserId)) {
@@ -1523,34 +1645,61 @@ export class PlanService {
         prepTime: existingSnack.prepTime || 0,
       };
     } else {
-      // Generate new snack via AI
-      const snackData = await aiService.generateSnack(
-        snackName,
-        dietaryRestrictions,
-        language,
-        allergies
-      );
+      // Generate new snack via AI. If the model is down or out of quota the
+      // snack is still logged, with estimated nutrition (snack-fallback.ts).
+      let snackData: Pick<IMeal, "calories" | "macros" | "ingredients"> | null = null;
+      try {
+        snackData = await aiService.generateSnack(
+          snackName,
+          dietaryRestrictions,
+          language,
+          allergies
+        );
+      } catch (error: any) {
+        logger.warn(
+          `[addSnack] Model failed for "${snackName}", estimating instead: ${error?.message || error}`
+        );
+      }
+
+      const estimate = snackData
+        ? null
+        : await estimateSnackFallback(snackName, (name, amount) =>
+            this.usdaNutritionService.getIngredientNutrition(name, amount)
+          );
+      const nutrition = snackData ?? estimate!;
 
       snack = {
         _id: new mongoose.Types.ObjectId().toString(),
         name: snackName,
         category: "snack",
-        calories: snackData.calories,
+        calories: nutrition.calories,
         macros: {
-          protein: snackData.macros?.protein || 0,
-          carbs: snackData.macros?.carbs || 0,
-          fat: snackData.macros?.fat || 0,
+          protein: nutrition.macros?.protein || 0,
+          carbs: nutrition.macros?.carbs || 0,
+          fat: nutrition.macros?.fat || 0,
         },
-        ingredients: snackData.ingredients || [],
+        ingredients: nutrition.ingredients || [],
         prepTime: 0,
       };
 
-      // Save the new snack to database for future use
-      await this.mealModel.create({
-        ...snack,
-        _id: new mongoose.Types.ObjectId(snack._id),
-      });
+      if (estimate) {
+        snack.nutritionEstimated = true;
+        logger.info(
+          `[addSnack] "${snackName}" logged with ${estimate.source} estimate (${estimate.calories} kcal)`
+        );
+      } else {
+        // Save the new snack to database for future use. Estimates are kept
+        // out: a guess must not become the answer for everyone logging it.
+        await this.mealModel.create({
+          ...snack,
+          _id: new mongoose.Types.ObjectId(snack._id),
+        });
+      }
     }
+
+    // The time they ate it, not the default snack slot — a 22:30 chocolate
+    // shown at 3pm hides exactly the late-evening pattern worth noticing.
+    if (time) snack.time = time;
 
     dayPlan.meals.snacks.push(snack);
 

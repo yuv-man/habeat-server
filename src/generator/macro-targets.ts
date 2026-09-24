@@ -33,6 +33,16 @@ const MIN_SCALE = 0.7;
 const MAX_SCALE = 1.3;
 /** Corrections per day; each one trades one macro pair. */
 const MAX_PASSES = 3;
+/**
+ * A dish the user cooks (own-dishes.ts) is not traded at all when served as
+ * they make it, and only a little when it is a healthier swap. The full ±30%
+ * shrank one person's burger, steak and skewers by 30% because their fat ran
+ * high, and the day's calories went into a 1,170 kcal grain bowl instead.
+ */
+const OWN_DISH_MIN_SCALE = 0.9;
+const OWN_DISH_MAX_SCALE = 1.1;
+/** A trade may not grow a meal past its slot's share of the day by more than this. */
+export const MAX_MEAL_OVER_SLOT = 0.2;
 
 export interface MacroSet {
   protein: number;
@@ -55,6 +65,39 @@ export const slotMacroTargets = (
     };
   }
   return out;
+};
+
+/** Each meal of the day with its slot's calorie share (snacks split theirs). */
+const slotSharesOf = (day: any): Map<any, number> => {
+  const m = day?.meals ?? {};
+  const snacks = (Array.isArray(m.snacks) ? m.snacks : []).filter(
+    (x: any) => x && typeof x.calories === "number",
+  );
+  const present: [MealSlot, any[]][] = [
+    ["breakfast", [m.breakfast]],
+    ["lunch", [m.lunch]],
+    ["dinner", [m.dinner]],
+    ["snack", snacks],
+  ];
+  const eaten = present.filter(([, meals]) => meals.some((x) => x && typeof x.calories === "number"));
+  const shares = slotCalorieShares(eaten.map(([slot]) => slot));
+  const out = new Map<any, number>();
+  for (const [slot, meals] of eaten) {
+    const real = meals.filter((x) => x && typeof x.calories === "number");
+    for (const meal of real) out.set(meal, shares[slot] / real.length);
+  }
+  return out;
+};
+
+const factorsFor = (meal: any): number[] => {
+  // A side's numbers must stay the ones it was attached with, so the picker
+  // can take it off again — whoever's dish it is next to.
+  if (meal?.side) return [1];
+  if (!meal?.fromRepertoire) return FACTORS;
+  // As they make it — or carrying a side, whose numbers must stay the ones it
+  // was attached with so the picker can take it off again.
+  if (!meal.tuneLevel || meal.side) return [1];
+  return FACTORS.filter((f) => f >= OWN_DISH_MIN_SCALE && f <= OWN_DISH_MAX_SCALE);
 };
 
 const mealsOf = (day: any): any[] => {
@@ -148,14 +191,25 @@ export const nudgeDayMacros = (day: any, target: MacroSet): MacroNudge[] => {
 
     const dayCalories = caloriesOf(meals);
     const movable = meals.filter((m) => !locked.has(m));
+    const shares = slotSharesOf(day);
+    // Growing a meal past its slot is how a lunch reached 1,170 kcal on a
+    // weight-loss day; a meal already over may still shrink.
+    const fits = (meal: any, factor: number): boolean => {
+      if (factor <= 1) return true;
+      const share = shares.get(meal);
+      if (!share) return true;
+      return (Number(meal.calories) || 0) * factor <= dayCalories * share * (1 + MAX_MEAL_OVER_SLOT);
+    };
 
     let best: { a: any; b: any; fa: number; fb: number; score: number } | null = null;
     for (const a of movable) {
       for (const b of movable) {
         if (a === b) continue;
-        for (const fa of FACTORS) {
-          for (const fb of FACTORS) {
+        for (const fa of factorsFor(a)) {
+          if (!fits(a, fa)) continue;
+          for (const fb of factorsFor(b)) {
             if (fa === 1 && fb === 1) continue;
+            if (!fits(b, fb)) continue;
             const after = totalsWith(meals, a, fa, b, fb);
             const calories =
               dayCalories +

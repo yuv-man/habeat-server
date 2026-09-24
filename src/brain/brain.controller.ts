@@ -25,15 +25,17 @@ export class BrainController {
   @ApiResponse({ status: 200, description: "State returned" })
   async getState(@Request() req: any) {
     const userId = req.user._id.toString();
-    const [state, patterns, focus] = await Promise.all([
+    const [state, patterns, focus, progress] = await Promise.all([
       this.brainService.getState(userId),
       this.brainService.getPatterns(userId),
       // The composed, user-facing view. `state` and `patterns` are the raw
       // records behind it; a screen should render `focus` and leave the rest
       // to debugging.
       this.brainService.getUserFacingState(userId),
+      // How every confirmed pattern is moving, with things to try.
+      this.brainService.getPatternProgress(userId),
     ]);
-    return { success: true, data: { focus, state, patterns } };
+    return { success: true, data: { focus, state, patterns, progress } };
   }
 
   @Post("analyze")

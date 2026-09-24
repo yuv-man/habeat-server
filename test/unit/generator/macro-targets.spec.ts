@@ -118,6 +118,66 @@ describe("nudgeDayMacros", () => {
     expect(nudgeDayMacros({ meals: { lunch: meal("only", 40, 50, 30) } }, TARGET)).toEqual([]);
     expect(nudgeDayMacros({}, TARGET)).toEqual([]);
   });
+
+  /**
+   * Tamir's Sunday: 2,803 kcal target, protein 174 g. His own shishlik was cut
+   * 30% for its fat and a grain bowl grew to 1,170 kcal to make up the day.
+   */
+  const ownDishDay = () => ({
+    date: "2026-09-27",
+    meals: {
+      breakfast: meal("Eggs and Toast", 40, 60, 30),
+      lunch: meal("Turkey Grain Bowl", 60, 110, 18),
+      dinner: { ...meal("Chicken shishlik skewers", 80, 20, 45), fromRepertoire: "dish-1" },
+      snacks: [meal("Greek Yogurt Bowl", 20, 30, 8)],
+    },
+  });
+  const OWN_TARGET = { protein: 174, carbs: 281, fat: 109 };
+  const dayCalories = (d: any) =>
+    [d.meals.breakfast, d.meals.lunch, d.meals.dinner, ...d.meals.snacks].reduce(
+      (s: number, m: any) => s + m.calories,
+      0,
+    );
+
+  it("never resizes a dish the user cooks, served as they make it", () => {
+    const day = ownDishDay();
+    const before = day.meals.dinner.calories;
+    nudgeDayMacros(day, OWN_TARGET);
+    expect(day.meals.dinner.calories).toBe(before);
+  });
+
+  it("keeps a healthier swap within 10% of its size", () => {
+    const day = ownDishDay();
+    (day.meals.dinner as any).tuneLevel = 1;
+    const before = day.meals.dinner.calories;
+    nudgeDayMacros(day, OWN_TARGET);
+    const ratio = day.meals.dinner.calories / before;
+    // Rounding in scaleMeal can land a hair outside the factor.
+    expect(ratio).toBeGreaterThanOrEqual(0.88);
+    expect(ratio).toBeLessThanOrEqual(1.12);
+  });
+
+  it("never grows a meal more than 20% past its slot's share of the day", () => {
+    const day = ownDishDay();
+    const total = dayCalories(day);
+    const shares = { breakfast: 0.25, lunch: 0.35 };
+    const before = { breakfast: day.meals.breakfast.calories, lunch: day.meals.lunch.calories };
+    nudgeDayMacros(day, OWN_TARGET);
+    for (const slot of ["breakfast", "lunch"] as const) {
+      const after = day.meals[slot].calories;
+      if (after > before[slot]) {
+        expect(after).toBeLessThanOrEqual(Math.ceil(total * shares[slot] * 1.2) + 5);
+      }
+    }
+  });
+
+  it("does not grow a meal that is already over its slot", () => {
+    const day = fattyDay();
+    // The snack is 347 kcal against a 280 kcal slot.
+    const snack = day.meals.snacks[0].calories;
+    nudgeDayMacros(day, TARGET);
+    expect(day.meals.snacks[0].calories).toBeLessThanOrEqual(snack);
+  });
 });
 
 describe("plan level", () => {

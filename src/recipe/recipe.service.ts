@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
+import { recipeSignature } from "./recipe-signature";
 import { InjectModel } from "@nestjs/mongoose";
 import mongoose, { Model } from "mongoose";
 import { Recipe } from "./recipe.model";
@@ -117,9 +118,29 @@ export class RecipeService {
       if (!meal) {
         throw new NotFoundException("Meal not found");
       }
+
+      // Someone already has this dish's recipe: reuse it under this meal's id
+      // rather than paying the model to write it again.
+      const signature = recipeSignature(meal as any);
+      const shared = await this.recipeModel.findOne({ signature, language }).lean().exec();
+      if (shared) {
+        const { _id, mealId: _otherMeal, createdAt, updatedAt, ...copy } = shared as any;
+        recipe = await this.recipeModel.create({
+          ...copy,
+          mealId,
+          usageCount: 1,
+          lastUsed: new Date(),
+        });
+        logger.info(`[Recipe] Reused the recipe for "${meal.name}" (signature ${signature.slice(0, 8)})`);
+        return { success: true, data: recipe };
+      }
+
       const user = await this.userModel.findById(userId).lean().exec();
+      // A side served next to their own dish is part of the plate: name it so
+      // the recipe says how to make it too. Its ingredients are already listed.
+      const side = (meal as any).side?.name;
       const recipeDetails: IRecipe = await aiService.generateRecipeDetails(
-        meal.name,
+        side ? `${meal.name}, served with ${side}` : meal.name,
         meal.category,
         meal.calories,
         meal.ingredients,
@@ -130,6 +151,7 @@ export class RecipeService {
       );
       recipe = await this.recipeModel.create({
         mealId: mealId,
+        signature,
         mealName: meal.name,
         mealNameEn: meal.nameEn || meal.name,
         category: meal.category,

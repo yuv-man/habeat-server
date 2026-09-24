@@ -50,4 +50,66 @@ export const PATTERN_EMOJI: Record<string, string> = {
   P02: "🔄",
   P04: "🌙",
   P08: "🛵",
+  P09: "🥪",
+};
+
+/**
+ * One pattern, as it has moved since the Brain first saw it.
+ *
+ * Deliberately qualitative. Scores are the Brain's internal strength reading,
+ * and "43% → 21%" invites someone to optimise a number rather than notice
+ * their week. `trendLabel` says what changed; `evidence` is the checkable
+ * sentence behind it.
+ */
+export interface PatternProgress {
+  patternId: string;
+  name: string;
+  emoji: string;
+  trend: "improving" | "steady" | "resolved";
+  trendLabel: string;
+  /** Whether this is the one the Brain is actively working on. */
+  isFocus: boolean;
+  evidence: string | null;
+  tips: string[];
+  since: Date | null;
+}
+
+export const TREND_LABELS: Record<PatternProgress["trend"], string> = {
+  improving: "Happening less than when we started",
+  steady: "About the same as when we started",
+  resolved: "Hasn't shown up lately",
+};
+
+/**
+ * Small, concrete things to try, per pattern. Written to the tone rules the
+ * rest of this file keeps: no "you failed to", no calorie maths, nothing that
+ * reads as a restriction. Each is something a busy person could do tomorrow.
+ */
+export const PATTERN_TIPS: Record<string, string[]> = {
+  P01: [
+    "Pick one meal to protect every day — even a small one counts.",
+    "Keep a 'nothing in the fridge' meal ready: eggs on toast, or yogurt and granola.",
+    "Set a gentle reminder at the time your meals usually slip.",
+  ],
+  P02: [
+    "Missed a meal? The next one is a normal one — no making up for it.",
+    "Keep one 5-minute restart meal in the house for the days that go sideways.",
+    "A small snack counts as getting back on track.",
+  ],
+  P04: [
+    "Plan the evening treat instead of fighting it — a couple of squares of dark chocolate with tea, on a plate rather than from the pack.",
+    "Make dinner a little more filling, with some protein and something warm.",
+    "Give the kitchen a closing time: tea, brushing your teeth, or wiping the counter.",
+  ],
+  P08: [
+    "Keep two 10-minute meals you can make from the freezer and cupboard.",
+    "Order when you've decided to, not when you're starving — have a snack first.",
+    "Cook double on a quieter night and freeze half.",
+  ],
+  P09: [
+    "Block 15 minutes for lunch in your calendar — treat it like a meeting.",
+    "Make one extra portion at dinner; it's tomorrow's lunch.",
+    "Keep a no-prep lunch at work: a wrap, hummus, nuts and fruit.",
+    "If lunch really can't happen, have a proper snack at 3–4pm so the evening starts calmer.",
+  ],
 };

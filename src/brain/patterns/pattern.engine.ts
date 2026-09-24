@@ -40,6 +40,7 @@ export class PatternEngine {
       this.detectAllOrNothingDays(events, window),
       this.detectLateNightEating(events, window),
       this.detectFrequentTakeaway(events, window),
+      this.detectSkippedLunch(events, window),
     ].filter((p): p is PatternScore => p !== null);
   }
 
@@ -274,6 +275,98 @@ export class PatternEngine {
           value: weeklyFrequency,
         },
       ],
+    };
+  }
+
+  /**
+   * P09 — lunch is the meal that keeps disappearing.
+   *
+   * P01 says a day fell short; this says *which* meal, and that is what makes
+   * it actionable — "you skip meals" has no answer, "lunch goes on busy days"
+   * has several (a desk lunch, yesterday's dinner, a calendar block). When the
+   * user told us why, the evidence says so; when a late snack followed, it says
+   * that too, because the skipped lunch is so often the front half of the
+   * 22:00 kitchen visit.
+   */
+  private detectSkippedLunch(
+    events: IBehaviorEvent[],
+    window: PatternWindow,
+  ): PatternScore | null {
+    if (!this.hasEnoughDays("P09", window)) return null;
+
+    const lunchByDay = new Map<string, "logged" | "skipped">();
+    const skipEvents = new Map<string, IBehaviorEvent>();
+
+    for (const e of events) {
+      if (e.mealType !== "lunch" || !e.dateKey) continue;
+      if (
+        e.type === BehaviorEventType.MEAL_LOGGED ||
+        e.type === BehaviorEventType.PLAN_MEAL_COMPLETED
+      ) {
+        // A lunch logged anywhere in the day beats a skip record for it.
+        lunchByDay.set(e.dateKey, "logged");
+        skipEvents.delete(e.dateKey);
+      } else if (
+        e.type === BehaviorEventType.MEAL_SKIPPED &&
+        lunchByDay.get(e.dateKey) !== "logged"
+      ) {
+        lunchByDay.set(e.dateKey, "skipped");
+        skipEvents.set(e.dateKey, e);
+      }
+    }
+
+    const lunchDays = lunchByDay.size;
+    const skippedDays = [...lunchByDay.values()].filter((s) => s === "skipped").length;
+    if (lunchDays < 5 || skippedDays < 3) return null;
+
+    const frequency = skippedDays / lunchDays;
+    const score = Math.min(1, frequency * 1.3);
+    if (score < REPORT_THRESHOLD) return null;
+
+    const busy = [...skipEvents.values()].filter(
+      (e) => e.context?.skipReason === "time-pressure",
+    ).length;
+
+    // Late eating on a skipped-lunch day. Exact timestamps only — this is a
+    // claim about the clock.
+    const lateDays = new Set(
+      events
+        .filter(
+          (e) =>
+            (e.type === BehaviorEventType.MEAL_LOGGED ||
+              e.type === BehaviorEventType.SNACK_LOGGED ||
+              e.type === BehaviorEventType.PLAN_MEAL_COMPLETED) &&
+            e.timestampIsExact &&
+            e.timestamp.getHours() >= LATE_NIGHT_HOUR &&
+            skipEvents.has(e.dateKey),
+        )
+        .map((e) => e.dateKey),
+    ).size;
+
+    const evidence = [
+      {
+        description: `Lunch was skipped on ${skippedDays} of ${lunchDays} days it was planned.`,
+        value: frequency,
+      },
+    ];
+    if (busy > 0) {
+      evidence.push({
+        description: `${busy} of those ${busy === 1 ? "was" : "were"} because you were too busy.`,
+        value: busy,
+      });
+    }
+    if (lateDays > 0) {
+      evidence.push({
+        description: `On ${lateDays} of those days, something was eaten after ${LATE_NIGHT_HOUR}:00.`,
+        value: lateDays,
+      });
+    }
+
+    return {
+      patternId: "P09",
+      score,
+      confidence: Math.min(1, lunchDays / 7),
+      evidence,
     };
   }
 

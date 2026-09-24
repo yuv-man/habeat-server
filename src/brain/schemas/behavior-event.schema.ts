@@ -43,6 +43,10 @@ export interface IBehaviorEventContext {
   stress?: number;
   location?: string;
   social?: boolean;
+  /** MEAL_SKIPPED only: the user said so, rather than the slot being left untouched. */
+  explicitSkip?: boolean;
+  /** MEAL_SKIPPED only: why, when they said ("time-pressure", "stress", …). */
+  skipReason?: string;
 }
 
 export interface IBehaviorEvent {
@@ -81,6 +85,8 @@ const contextSchema = new Schema<IBehaviorEventContext>(
     stress: Number,
     location: String,
     social: Boolean,
+    explicitSkip: Boolean,
+    skipReason: String,
   },
   { _id: false },
 );

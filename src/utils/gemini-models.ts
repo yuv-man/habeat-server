@@ -19,12 +19,26 @@ import {
 } from "./gemini-rate-limiter";
 import logger from "./logger";
 
-/** Reasoning over a person's data: quality first, speed second. */
+/** Reasoning over a person's data: quality first, speed second. Gemini 3.5
+ *  Flash is left out on purpose — at $1.50/$9.00 per million tokens it cost
+ *  2–2.4x the model it stood in for whenever 3.6 Flash had a bad minute. */
 export const ANALYSIS_MODELS = [
   "gemini-3.6-flash",
-  "gemini-3.5-flash",
   "gemini-2.5-flash",
   "gemini-3.1-flash-lite",
+  "gemini-2.5-flash-lite",
+];
+
+/**
+ * Small, structured jobs: a dish's nutrition, its healthier versions, the
+ * weekly behaviour read. They return a JSON object checked in code, and ran on
+ * thinking models whose reasoning was two thirds of all LLM spend (measured
+ * September 2026). The Flash-Lite models do not think by default and cost a
+ * fraction; a failed check is caught by the validation either way.
+ */
+export const STRUCTURED_MODELS = [
+  "gemini-3.1-flash-lite",
+  "gemini-3.5-flash-lite",
   "gemini-2.5-flash-lite",
 ];
 

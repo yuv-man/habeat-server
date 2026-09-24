@@ -66,6 +66,9 @@ interface ProgressMealSnapshot {
   completedAt?: Date | string | null;
   calories?: number;
   source?: "cooked" | "ordered" | "eaten-out";
+  /** The user said they skipped it — a fact, not an inference. */
+  skipped?: boolean;
+  skipReason?: string;
 }
 
 interface ProgressDoc {
@@ -143,27 +146,47 @@ export const extractLoggedMeals = (progressDocs: ProgressDoc[]): LoggedMeal[] =>
   return meals.sort((a, b) => a.at.getTime() - b.at.getTime());
 };
 
-/** Slots that were on the plan for a past day and never got ticked off. Used
- *  to describe skipping as a pattern, which is as much a food pattern as
- *  eating is. */
+export interface SkippedMeal {
+  date: string;
+  mealType: MealSlot;
+  /** True when the user said so; false when inferred from an untouched slot. */
+  explicit: boolean;
+  /** Their reason, when they gave one. */
+  reason?: string;
+}
+
+/** Slots that were on the plan and didn't happen. Used to describe skipping as
+ *  a pattern, which is as much a food pattern as eating is.
+ *
+ *  Past days: any planned slot never ticked off. Today: only slots the user
+ *  explicitly marked skipped — the day is still running, so an untouched lunch
+ *  at 9am is not a skip, but "I skipped it" at 3pm is. */
 export const extractSkippedMeals = (
   progressDocs: ProgressDoc[],
-  /** Today's key — the current day is still in progress, so its untouched
-   *  meals are not skips. */
+  /** Today's key — the current day is still in progress. */
   todayKey: string,
-): { date: string; mealType: MealSlot }[] => {
-  const skipped: { date: string; mealType: MealSlot }[] = [];
+): SkippedMeal[] => {
+  const skipped: SkippedMeal[] = [];
 
   for (const doc of progressDocs) {
     const dateKey = doc.dateKey;
-    if (!dateKey || dateKey >= todayKey) continue;
+    if (!dateKey || dateKey > todayKey) continue;
+    const isToday = dateKey === todayKey;
 
     (["breakfast", "lunch", "dinner"] as const).forEach((slot) => {
       const snapshot = doc.meals?.[slot];
       // Only a meal that was actually planned can be skipped.
-      if (snapshot?.name && snapshot.done !== true) {
-        skipped.push({ date: dateKey, mealType: slot });
-      }
+      if (!snapshot?.name || snapshot.done === true) return;
+
+      const explicit = snapshot.skipped === true;
+      if (isToday && !explicit) return;
+
+      skipped.push({
+        date: dateKey,
+        mealType: slot,
+        explicit,
+        ...(explicit && snapshot.skipReason ? { reason: snapshot.skipReason } : {}),
+      });
     });
   }
 

@@ -1,4 +1,4 @@
-import { applyFamiliarWeek } from "../../../src/generator/familiar-week";
+import { applyFamiliarWeek, familiarWeekFills } from "../../../src/generator/familiar-week";
 
 const meal = (name: string, calories = 500, extra: any = {}) => ({
   _id: name,
@@ -87,5 +87,57 @@ describe("applyFamiliarWeek", () => {
     const p = plan();
     delete p["2026-09-21"].meals.dinner;
     expect(applyFamiliarWeek(p).weeklyPlan["2026-09-22"].meals.lunch.name).toBe("L22");
+  });
+
+  it("never serves leftovers over a dish the user cooks", () => {
+    // Tamir's Thursday schnitzel vanished under Wednesday's soup this way.
+    const p = plan();
+    p["2026-09-24"].meals.lunch = meal("Chicken schnitzel", 574, { fromRepertoire: "dish-1" });
+    const { weeklyPlan } = applyFamiliarWeek(p);
+    expect(weeklyPlan["2026-09-24"].meals.lunch.name).toBe("Chicken schnitzel");
+    expect(weeklyPlan["2026-09-23"].meals.dinner.makesLeftovers).toBeUndefined();
+  });
+
+  it("keeps their own dish at their portion when it comes back as leftovers", () => {
+    const p = plan();
+    p["2026-09-21"].meals.dinner = meal("Chicken schnitzel", 574, { fromRepertoire: "dish-1" });
+    const lunch = applyFamiliarWeek(p).weeklyPlan["2026-09-22"].meals.lunch;
+    expect(lunch.name).toBe("Chicken schnitzel");
+    expect(lunch.calories).toBe(574);
+    expect(lunch.ingredients[0][1]).toBe("100 g");
+  });
+
+  it("fills repeat slots that were never written", () => {
+    // The generator leaves these out of the prompt; this is what fills them.
+    const p = plan();
+    delete p["2026-09-23"].meals.breakfast;
+    p["2026-09-24"].meals.snacks = [];
+    delete p["2026-09-22"].meals.lunch;
+    const { weeklyPlan } = applyFamiliarWeek(p);
+    expect(weeklyPlan["2026-09-23"].meals.breakfast.repeatOf).toBe("2026-09-21");
+    expect(weeklyPlan["2026-09-24"].meals.snacks[0].repeatOf).toBeDefined();
+    expect(weeklyPlan["2026-09-22"].meals.lunch.leftoverOf).toBe("2026-09-21");
+  });
+});
+
+describe("familiarWeekFills", () => {
+  // Sat 19 → Sun 27 Sep 2026
+  const keys = Array.from({ length: 9 }, (_, i) => `2026-09-${19 + i}`);
+
+  it("names every slot applyFamiliarWeek would overwrite", () => {
+    const fills = familiarWeekFills(keys);
+    const p = plan();
+    applyFamiliarWeek(p);
+    for (const k of keys) {
+      const m = p[k].meals;
+      expect(fills.has(`${k}|breakfast`)).toBe(!!m.breakfast.repeatOf);
+      expect(fills.has(`${k}|snack`)).toBe(!!m.snacks[0].repeatOf);
+      expect(fills.has(`${k}|lunch`)).toBe(!!m.lunch.leftoverOf);
+    }
+  });
+
+  it("leaves out slots the user does not eat", () => {
+    const fills = familiarWeekFills(keys, ["lunch", "dinner"]);
+    expect([...fills].every((f) => f.endsWith("|lunch"))).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import {
   IsEnum,
   IsIn,
   IsMongoId,
+  IsDateString,
   Min,
   Max,
   ValidateNested,
@@ -40,6 +41,11 @@ export class DailyReflectionDto {
   @IsArray()
   @IsEnum(EATING_TRIGGERS, { each: true })
   hinderedBy?: EatingTrigger[];
+
+  @ApiPropertyOptional({ description: "When the user finished with the question (ISO date)" })
+  @IsOptional()
+  @IsDateString()
+  closedAt?: string;
 }
 
 // Mood DTOs

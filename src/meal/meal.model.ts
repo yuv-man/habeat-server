@@ -36,6 +36,11 @@ const mealSchema = new Schema(
       generatedAt: Date,
     },
 
+    // Worked out in code from the meal itself (meal-labels.ts): which diets it
+    // fits, its main proteins, macro shape. What lets a plan take this meal
+    // from the library instead of paying the model to write a new one.
+    labels: { type: mongoose.Schema.Types.Mixed, default: undefined },
+
     // Usage and learning
     analytics: {
       timesGenerated: { type: Number, default: 0 },
@@ -61,5 +66,6 @@ mealSchema.index({ "analytics.signature": 1 });
 
 // Index for AI-generated meals lookup
 mealSchema.index({ aiGenerated: 1 });
+mealSchema.index({ category: 1, "labels.version": 1, calories: 1 });
 
 export const MealSchema = mealSchema;

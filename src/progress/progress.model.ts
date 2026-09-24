@@ -19,7 +19,22 @@ const mealSnapshotSchema = new Schema(
       required: true,
     },
     prepTime: { type: Number, required: true },
+    // HH:mm the user said they ate a snack they added themselves.
+    time: { type: String, required: false },
+    // Calories/macros are a fallback estimate (model unavailable at logging).
+    nutritionEstimated: { type: Boolean, required: false },
     done: { type: Boolean, required: true, default: false },
+    // The user said they didn't eat this meal at all ("no time for lunch").
+    // Distinct from not-yet-done: an untouched meal is unknown, a skipped one
+    // is a fact about their day.
+    skipped: { type: Boolean, required: false },
+    // Why, when the user said: the Brain reads "too busy" very differently
+    // from "wasn't hungry".
+    skipReason: {
+      type: String,
+      enum: ["time-pressure", "stress", "tiredness", "not-hungry"],
+      required: false,
+    },
     // When the meal was actually ticked off. `done` alone says a meal happened
     // but not when, which is exactly what the emotional-eating join needs in
     // order to pair a meal with the mood logged around it.
@@ -41,6 +56,29 @@ const mealSnapshotSchema = new Schema(
       type: String,
       enum: ["cooked", "ordered", "eaten-out"],
       required: false,
+    },
+    // Copied from the plan meal. The snapshot schema is strict, so without
+    // these the daily tracker lost the side on a meal (and whose dish it
+    // was) while still counting the side's calories.
+    // The plan meal this snapshot was made from. `_id` is the shared library
+    // record it was matched to, so this is how a later change to the plan
+    // finds its way here.
+    planMealId: { type: String, required: false },
+    fromRepertoire: { type: String, required: false },
+    insteadOf: { type: String, required: false },
+    tuneLevel: { type: Number, required: false },
+    sideChosen: { type: Boolean, required: false },
+    side: {
+      type: {
+        id: String,
+        name: String,
+        calories: Number,
+        macros: { protein: Number, carbs: Number, fat: Number },
+        ingredients: [[String]],
+      },
+      required: false,
+      default: undefined,
+      _id: false,
     },
     _id: { type: Schema.Types.ObjectId, ref: "Meal", required: true },
   },

@@ -7,6 +7,7 @@ import {
   Min,
   IsArray,
   ValidateNested,
+  Matches,
 } from "class-validator";
 import { Type } from "class-transformer";
 
@@ -38,4 +39,13 @@ export class AddSnackDto {
   @IsNotEmpty()
   @IsString()
   name: string;
+
+  @ApiProperty({
+    example: "22:30",
+    required: false,
+    description: "When it was eaten, 24h HH:mm local time",
+  })
+  @IsOptional()
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, { message: "time must be HH:mm" })
+  time?: string;
 }

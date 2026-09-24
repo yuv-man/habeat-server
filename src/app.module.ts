@@ -28,6 +28,7 @@ import { AnalyticsModule } from "./analytics/analytics.module";
 import { FoodTermsModule } from "./food-terms/food-terms.module";
 import { AiAgentModule } from "./ai-agent/ai-agent.module";
 import { RepertoireModule } from "./repertoire/repertoire.module";
+import { LlmUsageModule } from "./llm-usage/llm-usage.module";
 import logger from "./utils/logger";
 
 @Module({
@@ -108,6 +109,7 @@ import logger from "./utils/logger";
     FoodTermsModule,
     AiAgentModule,
     RepertoireModule,
+    LlmUsageModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: UserThrottlerGuard },

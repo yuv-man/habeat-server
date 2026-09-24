@@ -40,7 +40,27 @@ export const calculateIdealWeight = (
   };
 };
 
-export const calculateMacros = (calories: number, path: string) => {
+/** Upper end of the evidence-based range for training in a deficit. */
+export const MAX_PROTEIN_G_PER_KG = 2.2;
+const REFERENCE_BMI = 25;
+
+/**
+ * The body weight protein is dosed against. Above BMI 25 the extra kilograms are
+ * mostly fat, which needs no protein: a 101 kg, 178 cm man was given 246 g
+ * (2.4 g/kg of total weight) because the split is a share of calories and his
+ * calories are high. Dosing against his weight at BMI 25 gives ~174 g.
+ */
+export const proteinReferenceWeight = (weight: number, height: number): number => {
+  const heightInMeters = height / 100;
+  const atReferenceBmi = REFERENCE_BMI * heightInMeters * heightInMeters;
+  return Math.min(weight, atReferenceBmi);
+};
+
+export const calculateMacros = (
+  calories: number,
+  path: string,
+  body?: { weight?: number; height?: number }
+) => {
   let proteinPercent, carbPercent, fatPercent;
 
   // PATH_ADJUSTMENTS and PATH_WORKOUTS_GOAL both accept the hyphenated aliases,
@@ -82,10 +102,26 @@ export const calculateMacros = (calories: number, path: string) => {
       fatPercent = 0.3;
   }
 
+  let protein = (calories * proteinPercent) / 4; // 4 cal/g protein
+  let carbs = (calories * carbPercent) / 4; // 4 cal/g carbs
+  let fat = (calories * fatPercent) / 9; // 9 cal/g fat
+
+  if (body?.weight && body?.height) {
+    const cap = MAX_PROTEIN_G_PER_KG * proteinReferenceWeight(body.weight, body.height);
+    if (protein > cap) {
+      // The day's calories stay put. Freed energy goes to carbs, which fuel
+      // training, except on keto, where it has to go to fat.
+      const freedKcal = (protein - cap) * 4;
+      protein = cap;
+      if (path === "keto") fat += freedKcal / 9;
+      else carbs += freedKcal / 4;
+    }
+  }
+
   return {
-    protein: Math.round((calories * proteinPercent) / 4), // 4 cal/g protein
-    carbs: Math.round((calories * carbPercent) / 4), // 4 cal/g carbs
-    fat: Math.round((calories * fatPercent) / 9), // 9 cal/g fat
+    protein: Math.round(protein),
+    carbs: Math.round(carbs),
+    fat: Math.round(fat),
   };
 };
 

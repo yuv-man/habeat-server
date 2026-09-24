@@ -19,7 +19,11 @@
  *    context and behaves as it did before this existed.
  */
 
-import { Injectable } from "@nestjs/common";
+import { Injectable, Optional } from "@nestjs/common";
+import { fromGeminiUsage, recordLlmUsage, runWithUsageUser } from "../utils/llm-usage";
+import { BatchRequest, getBatch, submitBatch } from "../utils/gemini-batch";
+import { listGeminiModels, pickGeminiModels, STRUCTURED_MODELS } from "../utils/gemini-models";
+import { ILlmBatchJob, LlmBatchJob } from "../llm-usage/llm-batch-job.model";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import mongoose from "mongoose";
@@ -71,8 +75,27 @@ export const ANALYSIS_WINDOW_DAYS = 30;
 
 /** How often a profile is rebuilt. Behaviour does not turn over faster than
  *  this, and each rebuild is a model call — refreshing on every plan would put
- *  an LLM round-trip on a path the user is watching. */
-export const PROFILE_REFRESH_DAYS = 3;
+ *  an LLM round-trip on a path the user is watching. Weekly: it was every 3
+ *  days, and this job was the largest single line in a user's LLM bill
+ *  (measured September 2026) while the planner only reads it once a week. */
+export const PROFILE_REFRESH_DAYS = 7;
+
+/** Only users seen within this many days are analysed. A profile of someone
+ *  who has stopped opening the app helps nobody, and every rebuild is paid for:
+ *  a user who left kept costing ~$0.22 a month in analyses no one read. */
+export const ACTIVE_WITHIN_DAYS = 7;
+
+/** A batch not finished within this many hours is abandoned (Google's target is 24). */
+export const BATCH_GIVE_UP_HOURS = 36;
+
+/** The nightly analysis goes through the Batch API unless switched off
+ *  (GEMINI_BATCH_ANALYSIS=false). Off under tests unless asked for. */
+export const batchAnalysisEnabled = (): boolean => {
+  const flag = process.env.GEMINI_BATCH_ANALYSIS;
+  if (flag === "true") return true;
+  if (flag === "false") return false;
+  return process.env.NODE_ENV !== "test";
+};
 
 /** Profiles refreshed per scheduled tick. Caps the burst when many users come
  *  due at once; the rest are picked up on the next tick. */
@@ -188,6 +211,8 @@ export class BehaviorService {
     @InjectModel(Goal.name) private goalModel: Model<IGoal>,
     @InjectModel(Plan.name) private planModel: Model<IPlan>,
     private analyst: BehaviorAnalystAgent,
+    @Optional() @InjectModel(LlmBatchJob.name)
+    private batchJobModel?: Model<ILlmBatchJob>,
   ) {}
 
   // ── stage 1: aggregation ──────────────────────────────────────────────────
@@ -453,6 +478,30 @@ export class BehaviorService {
     return ageDays >= PROFILE_REFRESH_DAYS;
   }
 
+  /** Everything an analysis needs, short of the model: summary, checks, last run. */
+  private async prepareAnalysis(userId: string, periodDays?: number) {
+    const summary = await this.buildSummary(userId, periodDays);
+    const computed = deriveProfile(summary);
+    const existing = await this.getProfile(userId);
+    // Grade the previous run before writing over it.
+    const selfCheck = this.verifyAgainst(existing, computed.checks);
+    return { summary, computed, existing, selfCheck };
+  }
+
+  /**
+   * The analyst prompt for this user, or null when there is too little data
+   * to analyse. Used to send the nightly run as one batch.
+   */
+  async analysisPromptFor(userId: string): Promise<string | null> {
+    const { summary, computed, existing, selfCheck } = await this.prepareAnalysis(userId);
+    if (computed.confidence === "insufficient") return null;
+    return this.analyst.buildPrompt(
+      summary,
+      computed.checks,
+      existing ? { patterns: existing.patterns ?? [], selfCheck } : null,
+    );
+  }
+
   /**
    * Rebuild the profile: aggregate, check, verify the last run, analyse, persist.
    *
@@ -461,25 +510,32 @@ export class BehaviorService {
    */
   async refreshProfile(
     userId: string,
-    opts: { skipLlm?: boolean; periodDays?: number } = {},
+    opts: {
+      skipLlm?: boolean;
+      periodDays?: number;
+      /** The analyst's answer, already fetched (the nightly Batch API run). */
+      analysisRaw?: string;
+    } = {},
   ): Promise<IBehaviorProfile> {
-    const summary = await this.buildSummary(userId, opts.periodDays);
-    const computed = deriveProfile(summary);
-    const existing = await this.getProfile(userId);
-
-    // Grade the previous run before writing over it.
-    const selfCheck = this.verifyAgainst(existing, computed.checks);
+    const { summary, computed, existing, selfCheck } = await this.prepareAnalysis(
+      userId,
+      opts.periodDays,
+    );
 
     let analysis = null;
     // Below "insufficient" there is nothing worth spending a model call on, and
     // an analysis of four days of data would read far more confidently than it
     // deserves to.
-    if (!opts.skipLlm && computed.confidence !== "insufficient") {
-      analysis = await this.analyst.analyse(
-        summary,
-        computed.checks,
-        existing ? { patterns: existing.patterns ?? [], selfCheck } : null,
-      );
+    if (computed.confidence !== "insufficient") {
+      if (opts.analysisRaw !== undefined) {
+        analysis = this.analyst.fromRaw(opts.analysisRaw, summary, computed.checks);
+      } else if (!opts.skipLlm) {
+        analysis = await this.analyst.analyse(
+          summary,
+          computed.checks,
+          existing ? { patterns: existing.patterns ?? [], selfCheck } : null,
+        );
+      }
     }
 
     const directives = {
@@ -613,6 +669,15 @@ export class BehaviorService {
   async findDueUserIds(limit: number = SCHEDULED_BATCH_SIZE): Promise<string[]> {
     const now = Date.now();
 
+    // Opening the tracker creates the day's progress record, so a record in
+    // the last week is the plainest sign someone is still using the app.
+    const since = new Date(now - ACTIVE_WITHIN_DAYS * 24 * 60 * 60 * 1000);
+    const sinceKey = `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, "0")}-${String(since.getDate()).padStart(2, "0")}`;
+    const activeIds: any[] = await this.progressModel
+      .distinct("userId", { dateKey: { $gte: sinceKey } })
+      .exec();
+    if (!activeIds.length) return [];
+
     const staleCutoff = new Date(now - PROFILE_REFRESH_DAYS * 24 * 60 * 60 * 1000);
     const planCutoff = new Date(now - PLAN_PREWARM_DAYS * 24 * 60 * 60 * 1000);
     const prewarmCutoff = new Date(now - PREWARM_MIN_AGE_HOURS * 60 * 60 * 1000);
@@ -631,6 +696,7 @@ export class BehaviorService {
 
     const due = await this.profileModel
       .find({
+        userId: { $in: activeIds },
         $or: [
           { generatedAt: { $lt: staleCutoff } },
           ...(prewarmIds.length
@@ -652,15 +718,63 @@ export class BehaviorService {
    * request: this is where the model calls happen, deliberately away from
    * anything a user is waiting on.
    */
-  async runScheduledAnalysis(): Promise<{ refreshed: number; failed: number }> {
+  async runScheduledAnalysis(): Promise<{ refreshed: number; failed: number; batched?: number }> {
     const due = await this.findDueUserIds();
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || !batchAnalysisEnabled() || !this.batchJobModel) {
+      return this.refreshEach(due);
+    }
 
+    // Everyone's analysis in one Batch API job: half the price, and nobody is
+    // waiting on it at night. The answers are applied by collectBatchResults.
+    let refreshed = 0;
+    let failed = 0;
+    const requests: BatchRequest[] = [];
+    for (const userId of due) {
+      try {
+        const prompt = await this.analysisPromptFor(userId);
+        if (prompt) {
+          requests.push({ key: userId, prompt });
+        } else {
+          // Too little data for an analysis: the computed profile is the whole profile.
+          await this.refreshProfile(userId, { skipLlm: true });
+          refreshed++;
+        }
+      } catch (err) {
+        failed++;
+        logger.error(`[BehaviorService] Could not prepare the analysis for ${userId}: ${err}`);
+      }
+    }
+    if (!requests.length) return { refreshed, failed, batched: 0 };
+
+    try {
+      const model = pickGeminiModels(STRUCTURED_MODELS, await listGeminiModels(apiKey))[0];
+      const name = await submitBatch(apiKey, model, `behavior-analysis ${new Date().toISOString()}`, requests);
+      await this.batchJobModel.create({
+        name,
+        kind: "behavior-analysis",
+        model,
+        keys: requests.map((r) => r.key),
+      });
+      logger.info(`[BehaviorService] Nightly run: ${requests.length} analyses sent as batch ${name}`);
+      return { refreshed, failed, batched: requests.length };
+    } catch (err) {
+      // No batch tonight: analyse them one by one as before, so no one misses a week.
+      logger.warn(`[BehaviorService] Batch submission failed, analysing directly: ${err}`);
+      const direct = await this.refreshEach(requests.map((r) => r.key));
+      return { refreshed: refreshed + direct.refreshed, failed: failed + direct.failed, batched: 0 };
+    }
+  }
+
+  /** The direct path: one model call per user. */
+  private async refreshEach(userIds: string[]): Promise<{ refreshed: number; failed: number }> {
     let refreshed = 0;
     let failed = 0;
 
-    for (const userId of due) {
+    for (const userId of userIds) {
       try {
-        await this.refreshProfile(userId);
+        // Counted against the user it is for, though no request carries it.
+        await runWithUsageUser(userId, () => this.refreshProfile(userId));
         refreshed++;
       } catch (err) {
         failed++;
@@ -668,14 +782,72 @@ export class BehaviorService {
       }
     }
 
-    if (due.length > 0) {
+    if (userIds.length > 0) {
       logger.info(
         `[BehaviorService] Nightly run: ${refreshed} refreshed, ${failed} failed ` +
-          `(${due.length} due, batch cap ${SCHEDULED_BATCH_SIZE})`,
+          `(${userIds.length} due, batch cap ${SCHEDULED_BATCH_SIZE})`,
       );
     }
 
     return { refreshed, failed };
+  }
+
+  /**
+   * Apply the answers of finished analysis batches. Polled through the day; a
+   * job that has not finished within a day and a half is given up on — its
+   * users are still due, so they are picked up the next night.
+   */
+  async collectBatchResults(now: Date = new Date()): Promise<number> {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || !this.batchJobModel) return 0;
+    const jobs = await this.batchJobModel
+      .find({ status: "submitted", kind: "behavior-analysis" })
+      .lean()
+      .exec();
+
+    let applied = 0;
+    for (const job of jobs) {
+      let status;
+      try {
+        status = await getBatch(apiKey, job.name);
+      } catch (err) {
+        logger.warn(`[BehaviorService] Could not read batch ${job.name}: ${err}`);
+        continue;
+      }
+
+      if (status.state === "pending" || status.state === "running") {
+        const ageHours = (now.getTime() - new Date(job.submittedAt).getTime()) / 3_600_000;
+        if (ageHours > BATCH_GIVE_UP_HOURS) {
+          await this.batchJobModel.updateOne({ _id: job._id }, { $set: { status: "failed", finishedAt: now } }).exec();
+          logger.warn(`[BehaviorService] Batch ${job.name} did not finish in ${BATCH_GIVE_UP_HOURS}h; its users stay due`);
+        }
+        continue;
+      }
+      if (status.state === "failed") {
+        await this.batchJobModel.updateOne({ _id: job._id }, { $set: { status: "failed", finishedAt: now } }).exec();
+        logger.warn(`[BehaviorService] Batch ${job.name} failed; its users stay due`);
+        continue;
+      }
+
+      let jobApplied = 0;
+      for (const answer of status.answers) {
+        const usage = fromGeminiUsage(job.model, "BehaviorAnalyst", answer.usage);
+        if (usage) recordLlmUsage({ ...usage, batch: true }, answer.key);
+        if (!answer.text || !answer.key) continue;
+        try {
+          await this.refreshProfile(answer.key, { analysisRaw: answer.text });
+          jobApplied++;
+        } catch (err) {
+          logger.error(`[BehaviorService] Could not apply the analysis for ${answer.key}: ${err}`);
+        }
+      }
+      await this.batchJobModel
+        .updateOne({ _id: job._id }, { $set: { status: "done", finishedAt: now, applied: jobApplied } })
+        .exec();
+      logger.info(`[BehaviorService] Batch ${job.name}: applied ${jobApplied} of ${status.answers.length} analyses`);
+      applied += jobApplied;
+    }
+    return applied;
   }
 
   // ── stage 4: what the weekly planner is told ──────────────────────────────

@@ -325,7 +325,7 @@ export class StreamingGeneratorService {
     const bmr = calculateBMR(userData.weight, userData.height, userData.age, userData.gender);
     const tdee = calculateTDEE(bmr, userData.workoutFrequency);
     const targetCalories = Math.max(1200, calculateTargetCalories(tdee, userData.path));
-    const macros = calculateMacros(targetCalories, userData.path);
+    const macros = calculateMacros(targetCalories, userData.path, userData);
 
     return { targetCalories, macros };
   }

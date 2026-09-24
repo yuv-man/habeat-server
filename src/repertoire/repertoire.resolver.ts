@@ -17,7 +17,7 @@ import {
   buildDietaryConstraintBlock,
   findMealViolations,
 } from "../utils/dietary-constraints";
-import { ANALYSIS_MODELS, callGeminiWithFallback } from "../utils/gemini-models";
+import { STRUCTURED_MODELS, callGeminiWithFallback } from "../utils/gemini-models";
 import logger from "../utils/logger";
 import { IDishNutrition } from "./repertoire-dish.schema";
 import { RepertoireSlot } from "./repertoire.capture";
@@ -152,7 +152,7 @@ export class DishResolver {
     try {
       const raw = await callGeminiWithFallback(
         apiKey,
-        ANALYSIS_MODELS,
+        STRUCTURED_MODELS,
         async (model) => {
           const result = await model.generateContent([
             { text: buildResolverPrompt(name, constraints, slotHint) },

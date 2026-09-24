@@ -19,6 +19,7 @@
  */
 
 import { scaleMeal } from "./calorie-balance";
+import { isOwnAsIs } from "./own-dishes";
 
 /** Lunches (by weekday, 0 = Sunday) that are the previous day's dinner. */
 export const LEFTOVER_LUNCH_DAYS = new Set([2, 4]); // Tue ← Mon, Thu ← Wed
@@ -76,28 +77,36 @@ export const applyFamiliarWeek = (
       const anchor = weeklyPlan[anchorKey].meals.breakfast;
       for (const k of group) {
         const meals = weeklyPlan[k]?.meals;
-        if (!meals?.breakfast || k === anchorKey) continue;
+        // A missing breakfast is filled too: the generator leaves repeat slots
+        // out of the prompt (familiarWeekFills) rather than pay for a dish that
+        // would be replaced here.
+        if (!meals || k === anchorKey) continue;
         // Already a repeat of this anchor (an earlier pass): leave it — the
         // user may have ticked it off.
-        if (meals.breakfast.repeatOf === anchorKey) continue;
+        if (meals.breakfast?.repeatOf === anchorKey) continue;
         meals.breakfast = repeatOf(anchor, meals.breakfast, { repeatOf: anchorKey });
         stats.breakfastRepeats++;
       }
     }
 
     // ── snacks: two, alternating ──
-    const withSnack = days.filter((k) => weeklyPlan[k]?.meals?.snacks?.[0]);
-    const snackAnchors = withSnack.slice(0, 2);
-    withSnack.forEach((k, i) => {
-      if (i < 2) return;
-      const anchorKey = snackAnchors[i % 2];
-      const meals = weeklyPlan[k].meals;
-      if (meals.snacks[0].repeatOf === anchorKey) return;
-      meals.snacks[0] = repeatOf(weeklyPlan[anchorKey].meals.snacks[0], meals.snacks[0], {
-        repeatOf: anchorKey,
+    const snackAnchors = days.filter((k) => weeklyPlan[k]?.meals?.snacks?.[0]).slice(0, 2);
+    // Every other day of the week gets one of the two — including a day whose
+    // snack was left out of the prompt on purpose.
+    days
+      .filter((k) => weeklyPlan[k]?.meals && !snackAnchors.includes(k))
+      .forEach((k, i) => {
+        if (!snackAnchors.length) return;
+        const anchorKey = snackAnchors[i % snackAnchors.length];
+        const meals = weeklyPlan[k].meals;
+        if (meals.snacks?.[0]?.repeatOf === anchorKey) return;
+        const repeat = repeatOf(weeklyPlan[anchorKey].meals.snacks[0], meals.snacks?.[0], {
+          repeatOf: anchorKey,
+        });
+        meals.snacks = Array.isArray(meals.snacks) && meals.snacks.length ? meals.snacks : [];
+        meals.snacks[0] = repeat;
+        stats.snackRepeats++;
       });
-      stats.snackRepeats++;
-    });
 
     // ── cook once, eat twice ──
     for (const k of days) {
@@ -107,14 +116,21 @@ export const applyFamiliarWeek = (
       const prevKey = toKey(prev);
       const dinner = weeklyPlan[prevKey]?.meals?.dinner;
       const meals = weeklyPlan[k]?.meals;
-      if (!dinner || !meals?.lunch || meals.lunch.leftoverOf === prevKey) continue;
+      if (!dinner || !meals || meals.lunch?.leftoverOf === prevKey) continue;
+      // Never over a dish the user cooks: it was placed on purpose, and one
+      // week's schnitzel vanished under Wednesday's soup this way.
+      if (meals.lunch?.fromRepertoire && !meals.lunch.leftoverOf) continue;
 
       // Keep the day's total: the leftover portion takes the lunch it replaces'
-      // calories, within the same limits as any other portion change.
+      // calories, within the same limits as any other portion change. A lunch
+      // left out of the prompt has no size to take; the portion stays.
       const leftover = repeatOf(dinner, meals.lunch, { leftoverOf: prevKey });
-      const want = Number(meals.lunch.calories) || 0;
+      const want = Number(meals.lunch?.calories) || 0;
       const have = Number(dinner.calories) || 0;
-      if (want > 0 && have > 0) scaleMeal(leftover, Math.min(1.5, Math.max(0.5, want / have)));
+      // Their own dish keeps their portion here too; the day balances around it.
+      if (want > 0 && have > 0 && !isOwnAsIs(dinner)) {
+        scaleMeal(leftover, Math.min(1.5, Math.max(0.5, want / have)));
+      }
       meals.lunch = leftover;
       dinner.makesLeftovers = true;
       stats.leftoverLunches++;
@@ -122,4 +138,40 @@ export const applyFamiliarWeek = (
   }
 
   return { weeklyPlan, stats };
+};
+
+/**
+ * The slots applyFamiliarWeek will fill itself, for a plan covering `planKeys`
+ * — breakfasts after each group's first, snacks after the first two days,
+ * leftover lunches. The generator leaves these out of the prompt: it used to
+ * pay for a dish in each and then throw it away here. Only slots in
+ * `activeSlots` are returned, as "YYYY-MM-DD|slot".
+ */
+export const familiarWeekFills = (
+  planKeys: string[],
+  activeSlots: string[] = ["breakfast", "lunch", "dinner", "snack"],
+): Set<string> => {
+  const fills = new Set<string>();
+  const keys = [...new Set(planKeys)].sort();
+  const weeks = new Map<string, string[]>();
+  for (const k of keys) weeks.set(weekOf(k), [...(weeks.get(weekOf(k)) ?? []), k]);
+
+  for (const days of weeks.values()) {
+    if (activeSlots.includes("breakfast")) {
+      for (const weekend of [false, true]) {
+        const group = days.filter((k) => [0, 6].includes(parseKey(k).getDay()) === weekend);
+        group.slice(1).forEach((k) => fills.add(`${k}|breakfast`));
+      }
+    }
+    if (activeSlots.includes("snack")) days.slice(2).forEach((k) => fills.add(`${k}|snack`));
+    if (activeSlots.includes("lunch") && activeSlots.includes("dinner")) {
+      for (const k of days) {
+        if (!LEFTOVER_LUNCH_DAYS.has(parseKey(k).getDay())) continue;
+        const prev = parseKey(k);
+        prev.setDate(prev.getDate() - 1);
+        if (days.includes(toKey(prev))) fills.add(`${k}|lunch`);
+      }
+    }
+  }
+  return fills;
 };

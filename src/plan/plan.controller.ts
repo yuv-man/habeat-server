@@ -27,6 +27,7 @@ import {
   AddWorkoutDto,
   DeleteSnackDto,
   DeleteWorkoutDto,
+  SetSideDto,
 } from "./dto";
 import {
   WeeklyPlanResponse,
@@ -108,6 +109,36 @@ export class PlanController {
     );
   }
 
+  @Get(":userId/side-options/:date/:mealType")
+  @ApiOperation({ summary: "Sides that suit a lunch or dinner, and the current one" })
+  @ApiResponse({ status: 200, description: "Side options" })
+  @ApiResponse({ status: 400, description: "Not a lunch or dinner" })
+  async getSideOptions(
+    @Param("userId") userId: string,
+    @Param("date") date: string,
+    @Param("mealType") mealType: string,
+    @Request() req
+  ) {
+    return this.planService.getSideOptions(resolveOwnUserId(req, userId), date, mealType);
+  }
+
+  @Put(":userId/side")
+  @ApiOperation({ summary: "Choose the side (or none) next to a lunch or dinner" })
+  @ApiResponse({ status: 200, description: "Side changed; the day's other meals rebalanced" })
+  @ApiResponse({ status: 400, description: "Not a side for this dish, or the meal is logged" })
+  async setSide(
+    @Param("userId") userId: string,
+    @Body() body: SetSideDto,
+    @Request() req
+  ) {
+    return this.planService.setSide(
+      resolveOwnUserId(req, userId),
+      body.date,
+      body.mealType,
+      body.optionId ?? null
+    );
+  }
+
   @Put(":userId/workout")
   @ApiOperation({ summary: "Update a workout in the plan" })
   @ApiResponse({
@@ -179,7 +210,8 @@ export class PlanController {
       resolveOwnUserId(req),
       planId,
       body.date,
-      body.name
+      body.name,
+      body.time
     );
   }
 

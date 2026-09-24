@@ -68,6 +68,16 @@ export const PATTERN_DEFINITIONS: PatternDefinition[] = [
     interventions: ["I07", "I08", "I09"],
     stages: FULL_LADDER,
   },
+  {
+    id: "P09",
+    name: "Skipping lunch",
+    description:
+      "Lunch is regularly skipped, most often on busy days, which leaves the evening to make up for it.",
+    category: "timing",
+    minimumDataDays: 7,
+    interventions: ["I13", "I14", "I15"],
+    stages: FULL_LADDER,
+  },
 ];
 
 export const patternById = (id: string): PatternDefinition | undefined =>

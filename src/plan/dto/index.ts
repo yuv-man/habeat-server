@@ -7,3 +7,4 @@ export { AddWorkoutDto } from "./add-workout.dto";
 export { DeleteSnackDto } from "./delete-snack.dto";
 export { DeleteWorkoutDto } from "./delete-workout.dto";
 export { UpdateShoppingItemDto } from "./update-shopping-item.dto";
+export { SetSideDto } from "./set-side.dto";

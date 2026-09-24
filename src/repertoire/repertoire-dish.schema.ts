@@ -83,6 +83,11 @@ export interface IRepertoireDish {
   /** Diet path the tunes were written for. A different path makes them stale. */
   tunedForPath: string | null;
   tunedAt: Date | null;
+  /** Diet path of the last tuning attempt, whether or not any version survived
+   *  validation. A dish that can't be made healthier is not retried — each
+   *  attempt is a paid model call — until the path changes. */
+  tuneAttemptedForPath?: string | null;
+  tuneAttemptedAt?: Date | null;
   rhythm: {
     /** What the user told us. Null for dishes captured from logs. */
     usualPerMonth: number | null;
@@ -156,6 +161,8 @@ const repertoireDishSchema = new Schema<IRepertoireDish>(
     tuneCeiling: { type: Number, enum: [0, 1, 2, 3], default: 3 },
     tunedForPath: { type: String, default: null },
     tunedAt: { type: Date, default: null },
+    tuneAttemptedForPath: { type: String, default: null },
+    tuneAttemptedAt: { type: Date, default: null },
     rhythm: {
       usualPerMonth: { type: Number, default: null },
       observedPerMonth: { type: Number, default: 0 },

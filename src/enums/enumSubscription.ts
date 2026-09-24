@@ -32,6 +32,10 @@ export const TIER_FEATURES = {
   weeklyInsights: SubscriptionTier.PREMIUM,
   photoRecognition: SubscriptionTier.PREMIUM,
   aiMealSuggestions: SubscriptionTier.PLUS,
+  // Cost limits (see plan-limits.ts): each is a model call a free user would
+  // otherwise make without limit.
+  unlimitedPlanGeneration: SubscriptionTier.PLUS,
+  dishTuning: SubscriptionTier.PLUS,
 } as const;
 
 export type FeatureKey = keyof typeof TIER_FEATURES;

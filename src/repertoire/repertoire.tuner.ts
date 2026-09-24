@@ -14,7 +14,7 @@
  */
 
 import { Injectable } from "@nestjs/common";
-import { ANALYSIS_MODELS, callGeminiWithFallback } from "../utils/gemini-models";
+import { STRUCTURED_MODELS, callGeminiWithFallback } from "../utils/gemini-models";
 import {
   DietaryConstraints,
   buildDietaryConstraintBlock,
@@ -501,7 +501,7 @@ export class DishTuner {
       // call failed silently for every user (utils/gemini-models.ts).
       const raw = await callGeminiWithFallback(
         apiKey,
-        ANALYSIS_MODELS,
+        STRUCTURED_MODELS,
         async (model) => {
           const result = await model.generateContent([
             { text: buildTunePrompt(dish, path, constraints, dislikes) },

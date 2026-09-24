@@ -8,6 +8,18 @@ import { MoodEntry, MealMoodCorrelation } from "../../../src/cbt/cbt.model";
 import { User } from "../../../src/user/user.model";
 import { Goal } from "../../../src/goals/goal.model";
 import { Plan } from "../../../src/plan/plan.model";
+import { LlmBatchJob } from "../../../src/llm-usage/llm-batch-job.model";
+import { setLlmUsageSink } from "../../../src/utils/llm-usage";
+import { getBatch, submitBatch } from "../../../src/utils/gemini-batch";
+
+jest.mock("../../../src/utils/gemini-batch", () => ({
+  submitBatch: jest.fn(),
+  getBatch: jest.fn(),
+}));
+jest.mock("../../../src/utils/gemini-models", () => ({
+  ...jest.requireActual("../../../src/utils/gemini-models"),
+  listGeminiModels: jest.fn(async () => []),
+}));
 
 const USER_ID = "507f1f77bcf86cd799439011";
 
@@ -44,10 +56,13 @@ const findStub = (rows: any[] = []) => ({
  *  called at all — which is the point of keeping models off request paths. */
 const analystStub = (result: any) => ({
   analyse: jest.fn(async () => result),
+  buildPrompt: jest.fn(() => "PROMPT"),
+  fromRaw: jest.fn(() => result),
 });
 
 let saved: any = null;
 let analyst: any = null;
+let batchJobModel: any = null;
 
 const build = async (opts: {
   progress?: any[];
@@ -57,6 +72,10 @@ const build = async (opts: {
   existingProfile?: any;
   due?: any[];
   agingPlans?: any[];
+  /** Users seen in the last week (progress records). */
+  active?: string[];
+  /** Batch jobs on record; providing it enables the Batch API path's store. */
+  batchJobs?: any[];
 }) => {
   saved = null;
   analyst = analystStub(opts.analysis ?? null);
@@ -87,7 +106,11 @@ const build = async (opts: {
       { provide: getModelToken(BehaviorProfile.name), useValue: profileModel },
       {
         provide: getModelToken(DailyProgress.name),
-        useValue: findStub(opts.progress ?? []),
+        useValue: {
+          ...findStub(opts.progress ?? []),
+          // Who has opened the app lately: everyone, unless a test says not.
+          distinct: jest.fn(() => ({ exec: async () => opts.active ?? [USER_ID] })),
+        },
       },
       {
         provide: getModelToken(MoodEntry.name),
@@ -115,6 +138,18 @@ const build = async (opts: {
         provide: BehaviorAnalystAgent,
         useValue: analyst,
       },
+      ...(opts.batchJobs
+        ? [
+            {
+              provide: getModelToken(LlmBatchJob.name),
+              useValue: (batchJobModel = {
+                create: jest.fn(async (doc: any) => doc),
+                find: jest.fn(() => ({ lean: () => ({ exec: async () => opts.batchJobs }) })),
+                updateOne: jest.fn(() => ({ exec: async () => ({}) })),
+              }),
+            },
+          ]
+        : []),
     ],
   }).compile();
 
@@ -346,6 +381,32 @@ describe("BehaviorService — models stay off the request path", () => {
     expect(queried.$or[1].userId.$in).toHaveLength(1);
   });
 
+  it("never analyses someone who has stopped opening the app", async () => {
+    const service = await build({ active: [], agingPlans: [{ userId: { toString: () => USER_ID } }] });
+    const find = jest.fn();
+    (service as any).profileModel.find = find;
+
+    expect(await service.findDueUserIds()).toEqual([]);
+    // Not even asked: no active users means no candidates, and no model calls.
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it("only considers users seen in the last week", async () => {
+    let queried: any = null;
+    const service = await build({ active: [USER_ID], agingPlans: [] });
+    (service as any).profileModel.find = jest.fn((q: any) => {
+      queried = q;
+      return {
+        sort: () => ({
+          limit: () => ({ select: () => ({ lean: () => ({ exec: async () => [] }) }) }),
+        }),
+      };
+    });
+
+    await service.findDueUserIds();
+    expect(queried.userId).toEqual({ $in: [USER_ID] });
+  });
+
   it("looks for stale profiles alone when no plan is near its end", async () => {
     let queried: any = null;
     const service = await build({ agingPlans: [] });
@@ -514,5 +575,85 @@ describe("BehaviorService — the self-test", () => {
     expect(
       saved.checks.every((c: any) => "threshold" in c && "evidence" in c),
     ).toBe(true);
+  });
+});
+
+describe("BehaviorService — the nightly Batch API run", () => {
+  const env = { ...process.env };
+  beforeEach(() => {
+    process.env.GEMINI_API_KEY = "test-key";
+    process.env.GEMINI_BATCH_ANALYSIS = "true";
+    (submitBatch as jest.Mock).mockReset();
+    (getBatch as jest.Mock).mockReset();
+  });
+  afterEach(() => {
+    process.env = { ...env };
+    setLlmUsageSink(null);
+  });
+
+  it("sends the night's analyses as one batch instead of a call each", async () => {
+    (submitBatch as jest.Mock).mockResolvedValue("batches/night-1");
+    const service = await build({
+      progress: skippedBreakfastHistory(),
+      due: [{ userId: { toString: () => USER_ID } }],
+      batchJobs: [],
+    });
+
+    const result = await service.runScheduledAnalysis();
+
+    expect(result).toEqual({ refreshed: 0, failed: 0, batched: 1 });
+    expect((submitBatch as jest.Mock).mock.calls[0][3]).toEqual([{ key: USER_ID, prompt: "PROMPT" }]);
+    expect(analyst.analyse).not.toHaveBeenCalled();
+    expect(batchJobModel.create).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "batches/night-1", kind: "behavior-analysis", keys: [USER_ID] }),
+    );
+  });
+
+  it("analyses directly when the batch cannot be sent, so no one misses a week", async () => {
+    (submitBatch as jest.Mock).mockRejectedValue(new Error("400"));
+    const service = await build({
+      progress: skippedBreakfastHistory(),
+      due: [{ userId: { toString: () => USER_ID } }],
+      batchJobs: [],
+    });
+
+    const result = await service.runScheduledAnalysis();
+    expect(result).toEqual({ refreshed: 1, failed: 0, batched: 0 });
+    expect(analyst.analyse).toHaveBeenCalled();
+  });
+
+  it("applies a finished batch and counts it against the user, at batch price", async () => {
+    const records: any[] = [];
+    setLlmUsageSink((r) => records.push(r));
+    (getBatch as jest.Mock).mockResolvedValue({
+      state: "succeeded",
+      answers: [
+        { key: USER_ID, text: '{"keyPatterns":[]}', usage: { promptTokenCount: 5000, candidatesTokenCount: 1000 }, error: null },
+      ],
+    });
+    const service = await build({
+      progress: skippedBreakfastHistory(),
+      analysis: { keyPatterns: [], planningDirectives: {} },
+      batchJobs: [{ _id: "j1", name: "batches/night-1", model: "gemini-3.1-flash-lite", submittedAt: new Date() }],
+    });
+
+    expect(await service.collectBatchResults()).toBe(1);
+    expect(analyst.fromRaw).toHaveBeenCalled();
+    expect(analyst.analyse).not.toHaveBeenCalled();
+    expect(saved).not.toBeNull();
+    expect(records[0]).toMatchObject({ userId: USER_ID, batch: true, context: "BehaviorAnalyst" });
+    // 5,000 in ($0.00125) and 1,000 out ($0.0015) on 3.1 Flash-Lite, halved.
+    expect(records[0].costUsd).toBeCloseTo(0.001375, 6);
+    expect(batchJobModel.updateOne.mock.calls[0][1].$set).toMatchObject({ status: "done", applied: 1 });
+  });
+
+  it("gives up on a batch that never finishes; its users stay due", async () => {
+    (getBatch as jest.Mock).mockResolvedValue({ state: "running", answers: [] });
+    const twoDaysAgo = new Date(Date.now() - 48 * 3_600_000);
+    const service = await build({
+      batchJobs: [{ _id: "j1", name: "batches/slow", model: "gemini-3.1-flash-lite", submittedAt: twoDaysAgo }],
+    });
+    expect(await service.collectBatchResults()).toBe(0);
+    expect(batchJobModel.updateOne.mock.calls[0][1].$set.status).toBe("failed");
   });
 });

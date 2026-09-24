@@ -10,7 +10,8 @@ import mongoose, { Model } from "mongoose";
 import { DailyProgress } from "../progress/progress.model";
 import { IDailyProgress } from "../types/interfaces";
 import { User } from "../user/user.model";
-import { resolveDietaryConstraints } from "../utils/dietary-constraints";
+import { findMealViolations, resolveDietaryConstraints } from "../utils/dietary-constraints";
+import { getEffectiveSubscriptionTier, hasFeatureAccess } from "../enums/enumSubscription";
 import { toLocalDateKey } from "../utils/eating-episodes";
 import logger from "../utils/logger";
 import {
@@ -44,7 +45,7 @@ import {
 } from "./repertoire-dish.schema";
 import { DishTuner, TuneProposal } from "./repertoire.tuner";
 import { dishArtFor } from "./dish-images";
-import { DishResolver } from "./repertoire.resolver";
+import { DishResolver, ResolvedDish } from "./repertoire.resolver";
 import { dishKey, RepertoireSlot } from "./repertoire.capture";
 import {
   Level,
@@ -289,6 +290,11 @@ export class RepertoireService {
     if (!force && dish.tunes?.length && dish.tunedForPath === path) {
       return { dish, generated: false, dropped: [] };
     }
+    // Already tried for this path and nothing survived: the answer won't
+    // change by asking again, and every ask is billed. Only `force` retries.
+    if (!force && !dish.tunes?.length && dish.tuneAttemptedForPath === path && dish.tuneAttemptedAt) {
+      return { dish, generated: false, dropped: [] };
+    }
 
     const proposal = await this.tuner.tune(
       dish,
@@ -299,10 +305,16 @@ export class RepertoireService {
     if (!proposal) {
       throw new ServiceUnavailableException("Dish tuning is unavailable right now");
     }
+    const attempted = { tuneAttemptedForPath: path, tuneAttemptedAt: new Date() };
     // Nothing survived validation. Keep what the dish had — a failed re-tune
-    // must not wipe tunes the user has already accepted.
+    // must not wipe tunes the user has already accepted — but remember the
+    // attempt, so the next plan does not pay for the same answer again.
     if (!proposal.tunes.length) {
-      return { dish, generated: true, dropped: proposal.dropped };
+      const marked = await this.dishModel
+        .findOneAndUpdate({ _id: dish._id, userId: this.oid(userId) }, { $set: attempted }, { new: true })
+        .lean()
+        .exec();
+      return { dish: (marked ?? dish) as IRepertoireDish, generated: true, dropped: proposal.dropped };
     }
 
     const $set: Record<string, unknown> = {
@@ -310,6 +322,7 @@ export class RepertoireService {
       currentTuneLevel: clampToAvailable(dish.currentTuneLevel ?? 0, proposal.tunes),
       tunedForPath: path,
       tunedAt: new Date(),
+      ...attempted,
     };
     if (proposal.usual) {
       $set["usual.ingredients"] = proposal.usual.ingredients;
@@ -412,11 +425,10 @@ export class RepertoireService {
       return { dish: existing as IRepertoireDish, status: "already-known" };
     }
 
-    const resolved = await this.resolver.resolve(
-      name,
-      constraints ?? (await this.constraintsFor(userId)),
-      input.slots,
-    );
+    const userConstraints = constraints ?? (await this.constraintsFor(userId));
+    const resolved =
+      (await this.resolvedElsewhere(key, name, userConstraints, input.slots)) ??
+      (await this.resolver.resolve(name, userConstraints, input.slots));
 
     const note = !resolved
       ? "could not work out how this dish is made — add the details later"
@@ -450,6 +462,46 @@ export class RepertoireService {
 
     logger.info(`[Repertoire] ${userId} added "${name}" (${source})${note ? ` — ${note}` : ""}`);
     return { dish: dish as IRepertoireDish, status: "added", note };
+  }
+
+  /**
+   * The same dish as another user already has, resolved: its ingredients,
+   * nutrition and slots. How a schnitzel is made does not depend on who asks,
+   * and resolving it was a paid model call per user. This user's own
+   * restrictions are checked afresh — the other user's are not theirs.
+   * Only estimates are shared; nutrition someone logged is their own record.
+   */
+  private async resolvedElsewhere(
+    key: string,
+    name: string,
+    constraints: Awaited<ReturnType<RepertoireService["constraintsFor"]>>,
+    slotHint?: RepertoireSlot[],
+  ): Promise<ResolvedDish | null> {
+    const other = (await this.dishModel
+      .findOne({
+        canonicalKey: key,
+        "usual.nutritionPerServing": { $ne: null },
+        "usual.nutritionConfidence": "estimated",
+        "usual.ingredients.1": { $exists: true },
+      })
+      .select("usual slots rhythm.leftoversFriendly")
+      .lean()
+      .exec()) as any;
+    if (!other) return null;
+
+    const ingredients = (other.usual.ingredients ?? []).map((i: any) => ({
+      name: String(i.name),
+      amount: String(i.amount ?? ""),
+    }));
+    logger.info(`[Repertoire] Reused the resolution of "${name}" (${key}) — no model call`);
+    return {
+      ingredients,
+      nutritionPerServing: other.usual.nutritionPerServing,
+      prepMinutes: other.usual.prepMinutes ?? 20,
+      slots: slotHint?.length ? slotHint : other.slots?.length ? other.slots : ["lunch", "dinner"],
+      leftoversFriendly: other.rhythm?.leftoversFriendly ?? false,
+      violations: findMealViolations({ name, ingredients }, constraints),
+    };
   }
 
   /**
@@ -605,16 +657,52 @@ export class RepertoireService {
    * they make it, which is a fine answer — it is their food either way.
    */
   async tunePending(userId: string, limit = 6): Promise<number> {
+    // Both generation phases ask for this seconds apart; two runs at once both
+    // saw the same untuned dishes and paid for each of them twice.
+    if (this.tuningUsers.has(userId)) return 0;
+    this.tuningUsers.add(userId);
+    try {
+      return await this.tunePendingNow(userId, limit);
+    } finally {
+      this.tuningUsers.delete(userId);
+    }
+  }
+
+  /** Users with a tuning run in progress, in this process. */
+  private readonly tuningUsers = new Set<string>();
+
+  private async tunePendingNow(userId: string, limit: number): Promise<number> {
+    const user = (await this.userModel
+      .findById(this.oid(userId))
+      .select("path subscriptionTier role")
+      .lean()
+      .exec()) as { path?: string; subscriptionTier?: string; role?: string } | null;
+    const path: string | null = user?.path ?? null;
+    // Healthier versions of their dishes are a Plus feature: each is a model
+    // call per dish. Free users are planned their dishes as they make them.
+    if (!hasFeatureAccess(getEffectiveSubscriptionTier(user?.subscriptionTier, user?.role), "dishTuning")) {
+      return 0;
+    }
+
     const pending = await this.dishModel
       .find({
         userId: this.oid(userId),
         status: "active",
-        $or: [
-          { tunes: { $size: 0 } },
-          { tunes: { $exists: false } },
-          // Stored before versions had names of their own: unusable, because a
-          // swap the user cannot see is not a swap.
-          { "tunes.0.name": { $exists: false } },
+        $and: [
+          {
+            $or: [
+              { tunes: { $size: 0 } },
+              { tunes: { $exists: false } },
+              // Stored before versions had names of their own: unusable, because a
+              // swap the user cannot see is not a swap.
+              { "tunes.0.name": { $exists: false } },
+            ],
+          },
+          {
+            // Tried for this path already and nothing survived: not pending. This
+            // ran after every plan, re-buying the same rejected answers each week.
+            $or: [{ tuneAttemptedAt: null }, { tuneAttemptedForPath: { $ne: path } }],
+          },
         ],
       })
       .select("_id name")

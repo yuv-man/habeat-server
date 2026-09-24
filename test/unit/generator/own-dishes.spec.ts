@@ -1,4 +1,12 @@
-import { applyOwnDishes, chooseTune, OWN_DISH_MAIN_SHARE } from "../../../src/generator/own-dishes";
+import {
+  applyOwnDishes,
+  balanceAroundOwnDishes,
+  changeSide,
+  chooseTune,
+  SideChoiceError,
+  sideChoicesFor,
+  OWN_DISH_MAIN_SHARE,
+} from "../../../src/generator/own-dishes";
 
 const dish = (name: string, over: any = {}) => ({
   _id: name,
@@ -21,7 +29,8 @@ const generated = (name: string, calories: number) => ({
   name,
   category: "x",
   calories,
-  macros: { protein: 25, carbs: 60, fat: 20 },
+  // Calories are the energy in the macros, as on a real plan.
+  macros: { protein: 25, carbs: 60, fat: Math.round((calories - 340) / 9) },
   ingredients: [["something", "100 g"]],
   prepTime: 30,
   done: false,
@@ -58,32 +67,108 @@ describe("applyOwnDishes", () => {
     expect(stats.placed).toBe(placed.length);
   });
 
-  it("plans the dish as the user makes it, portioned to the slot", () => {
+  it("plans the dish as the user makes it, at their own portion", () => {
+    // A smaller schnitzel is not their schnitzel, and nobody re-reads the
+    // recipe to notice. The day makes room for it instead.
     const { weeklyPlan } = applyOwnDishes(week(), [dish("Pasta with tomato and basil")], 2158);
     const placed = mains(weeklyPlan).find((m) => m.fromRepertoire)!;
 
     expect(placed.name).toBe("Pasta with tomato and basil");
-    expect(placed.ingredients[0]).toEqual(["pasta", expect.any(String)]);
+    expect(placed.ingredients.slice(0, 2)).toEqual([
+      ["pasta", "100 g"],
+      ["tomato", "150 g"],
+    ]);
     expect(placed.prepTime).toBe(25);
-    // 500 kcal dish into a 755 kcal lunch or 647 kcal dinner: scaled, capped at 1.5x.
-    expect(placed.calories).toBeGreaterThan(600);
-    expect(placed.calories).toBe(
-      placed.macros.protein * 4 + placed.macros.carbs * 4 + placed.macros.fat * 9,
-    );
+    // Their 500 kcal, plus whatever side fills the slot.
+    expect(placed.calories - (placed.side?.calories ?? 0)).toBe(500);
+    expect(placed.tuneLevel).toBeUndefined();
   });
 
-  it("serves a light dish as a bigger bowl rather than leaving the day short", () => {
-    const soup = dish("Vegetable soup with lentils", {
+  it("gives their dish an id of its own, so its recipe is not the replaced meal's", () => {
+    // The recipe is looked up by id: keeping the replaced meal's id opened
+    // "Pan Seared Ribeye" for a schnitzel.
+    const before = week();
+    const replacedIds = new Set(mains(before).map((m) => String(m._id)));
+    const { weeklyPlan } = applyOwnDishes(before, [dish("Chicken schnitzel")], 2158);
+    for (const placed of mains(weeklyPlan).filter((m) => m.fromRepertoire)) {
+      expect(placed._id).toBeDefined();
+      expect(replacedIds.has(String(placed._id))).toBe(false);
+    }
+  });
+
+  it("fills the meal with a side next to a light dish, rather than resizing it", () => {
+    const skewers = dish("Chicken shishlik skewers", {
       usual: {
-        ingredients: [{ name: "lentils", amount: "60 g" }, { name: "carrot", amount: "80 g" }],
-        prepMinutes: 35,
-        nutritionPerServing: { calories: 284, protein: 14, carbs: 40, fat: 7 },
+        ingredients: [{ name: "chicken thighs", amount: "200 g" }],
+        prepMinutes: 15,
+        nutritionPerServing: { calories: 410, protein: 41, carbs: 11, fat: 22 },
       },
     });
-    const { weeklyPlan } = applyOwnDishes(week(), [soup], 2158);
+    const { weeklyPlan } = applyOwnDishes(week(), [skewers], 2800);
     const placed = mains(weeklyPlan).find((m) => m.fromRepertoire)!;
-    expect(placed.calories).toBeGreaterThan(500); // 284 × 2, not × 1.5
-    expect(placed.ingredients[0][1]).not.toBe("60 g");
+
+    expect(placed.name).toBe("Chicken shishlik skewers");
+    expect(placed.ingredients[0]).toEqual(["chicken thighs", "200 g"]);
+    expect(placed.side).toBeDefined();
+    // The meal now fills its slot (lunch 980 or dinner 840 of 2,800).
+    expect(placed.calories).toBeGreaterThan(750);
+  });
+
+  it("serves a healthier swap at its own portion too, with a side to fill the meal", () => {
+    const tuned = dish("Chicken schnitzel", {
+      usual: {
+        ingredients: [{ name: "chicken breast", amount: "150 g" }],
+        prepMinutes: 20,
+        nutritionPerServing: { calories: 574, protein: 44, carbs: 41, fat: 26 },
+      },
+      tunes: [
+        {
+          level: 1,
+          name: "Oven-baked chicken schnitzel",
+          changes: ["baked"],
+          nutritionPerServing: { calories: 456, protein: 44, carbs: 35, fat: 15 },
+        },
+      ],
+    });
+    const { weeklyPlan } = applyOwnDishes(week(), [tuned], 2800, undefined, 1);
+    const swap = mains(weeklyPlan).find((m) => m.tuneLevel)!;
+    // A doubled chicken breast is not a lighter take on their schnitzel.
+    expect(swap.calories - (swap.side?.calories ?? 0)).toBe(456);
+    expect(swap.side).toBeDefined();
+  });
+
+  it("makes room in the rest of the day for their dish, rather than resizing it", () => {
+    const { weeklyPlan } = applyOwnDishes(week(), [dish("Pasta with tomato and basil")], 2158);
+    const key = Object.keys(weeklyPlan).find((k) =>
+      [weeklyPlan[k].meals.lunch, weeklyPlan[k].meals.dinner].some((m: any) => m.fromRepertoire),
+    )!;
+    const day = weeklyPlan[key];
+    const total = (d: any) =>
+      [d.meals.breakfast, d.meals.lunch, d.meals.dinner, ...d.meals.snacks].reduce(
+        (s: number, m: any) => s + m.calories,
+        0,
+      );
+
+    const { days } = balanceAroundOwnDishes(weeklyPlan, 2158);
+
+    expect(days).toBeGreaterThan(0);
+    expect(Math.abs(total(day) - 2158) / 2158).toBeLessThan(0.03);
+    const own = [day.meals.lunch, day.meals.dinner].find((m: any) => m.fromRepertoire);
+    expect(own.calories - (own.side?.calories ?? 0)).toBe(500);
+  });
+
+  it("leaves a day with none of their dishes, and a meal already eaten, alone", () => {
+    const p = week();
+    const key = "2026-09-21";
+    p[key].meals.lunch = { ...p[key].meals.lunch, fromRepertoire: "d1", calories: 400 };
+    p[key].meals.breakfast.done = true;
+    const breakfast = p[key].meals.breakfast.calories;
+    const untouched = JSON.stringify(p["2026-09-22"]);
+
+    balanceAroundOwnDishes(p, 2158);
+
+    expect(p[key].meals.breakfast.calories).toBe(breakfast);
+    expect(JSON.stringify(p["2026-09-22"])).toBe(untouched);
   });
 
   it("respects the slots a dish is actually eaten at", () => {
@@ -192,14 +277,16 @@ describe("applyOwnDishes", () => {
         carbs: 385,
         fat: 78,
       });
-      const placed = mains(weeklyPlan).find((m: any) => m.fromRepertoire)!;
+      const placed = mains(weeklyPlan).find((m: any) => m.tuneLevel)!;
 
       expect(placed.name).toBe("Baked chicken schnitzel with salad");
       expect(placed.insteadOf).toBe("Chicken schnitzel with salad");
       expect(placed.swapNote).toBe("Your schnitzel, oven-baked instead of fried");
-      // Portioned to the slot, so the amounts move — but it is the swap's
-      // recipe, not hers: no frying oil, far less breadcrumb.
-      expect(placed.ingredients.map((i: string[]) => i[0])).toEqual(["chicken breast", "breadcrumbs"]);
+      // The swap's recipe, not hers: no frying oil, far less breadcrumb.
+      expect(placed.ingredients.slice(0, 2)).toEqual([
+        ["chicken breast", "150 g"],
+        ["breadcrumbs", "25 g"],
+      ]);
       expect(placed.macros.fat).toBeLessThan(placed.macros.protein);
     });
 
@@ -210,7 +297,7 @@ describe("applyOwnDishes", () => {
         carbs: 385,
         fat: 78,
       });
-      const placed = mains(weeklyPlan).find((m: any) => m.fromRepertoire)!;
+      const placed = mains(weeklyPlan).find((m: any) => m.tuneLevel)!;
 
       // Level 2 allowed here, so that is the version served — under its own
       // name, with her dish named as the one it replaces.
@@ -274,10 +361,111 @@ describe("applyOwnDishes", () => {
       expect(chooseTune(unnamed, dinnerTarget, 3)).toBeNull();
     });
 
+    it("serves most of their dishes as they make them — swaps are at most half", () => {
+      const { weeklyPlan, stats } = applyOwnDishes(week(), [pasta, dish("Chicken schnitzel")], 2158, undefined, 3);
+      const placed = mains(weeklyPlan).filter((m: any) => m.fromRepertoire);
+      const swapped = placed.filter((m: any) => m.tuneLevel);
+
+      expect(placed.length).toBeGreaterThan(1);
+      expect(swapped.length).toBeLessThanOrEqual(Math.floor(placed.length / 2));
+      expect(stats.tuned.length).toBe(swapped.length);
+      // The first time a dish of theirs shows up, it is theirs.
+      expect(placed[0].tuneLevel).toBeUndefined();
+    });
+
+    it("keeps the swap share across generation phases", () => {
+      const first = applyOwnDishes(week(), [pasta], 2158, undefined, 3).weeklyPlan;
+      const again = applyOwnDishes(first, [pasta], 2158, undefined, 3).weeklyPlan;
+      const placed = mains(again).filter((m: any) => m.fromRepertoire);
+      expect(placed.filter((m: any) => m.tuneLevel).length).toBeLessThanOrEqual(Math.floor(placed.length / 2));
+    });
+
     it("has nothing to serve differently when a dish was never tuned", () => {
       const { weeklyPlan, stats } = applyOwnDishes(week(), [dish("Plain")], 2158, undefined, 3);
       expect(stats.tuned).toEqual([]);
       expect(mains(weeklyPlan).find((m: any) => m.fromRepertoire)!.tuneLevel).toBeUndefined();
     });
+  });
+});
+
+describe("changeSide", () => {
+  const skewers = () =>
+    dish("Chicken shishlik skewers", {
+      usual: {
+        ingredients: [{ name: "chicken thighs", amount: "200 g" }],
+        prepMinutes: 15,
+        nutritionPerServing: { calories: 410, protein: 41, carbs: 11, fat: 22 },
+      },
+    });
+  // The fixture week is sized for 2,158 kcal: lunch 755, dinner 647.
+  const dayWithSkewers = () => {
+    const { weeklyPlan } = applyOwnDishes(week(), [skewers()], 2158);
+    const key = Object.keys(weeklyPlan).find((k) => weeklyPlan[k].meals.dinner.fromRepertoire || weeklyPlan[k].meals.lunch.fromRepertoire)!;
+    const slot = weeklyPlan[key].meals.dinner.fromRepertoire ? "dinner" : "lunch";
+    return { day: weeklyPlan[key], slot: slot as "lunch" | "dinner", slotCalories: slot === "dinner" ? 647 : 755 };
+  };
+  const total = (d: any) =>
+    [d.meals.breakfast, d.meals.lunch, d.meals.dinner, ...d.meals.snacks].reduce((s: number, m: any) => s + m.calories, 0);
+
+  it("lists the sides for their dish and marks the current one", () => {
+    const { day, slot, slotCalories } = dayWithSkewers();
+    const { current, options } = sideChoicesFor(day.meals[slot], slotCalories);
+    expect(current).toBe(day.meals[slot].side.id);
+    expect(options.map((o) => o.id)).toContain(current);
+  });
+
+  it("swaps the side, keeps their dish, and keeps the day on target", () => {
+    const { day, slot, slotCalories } = dayWithSkewers();
+    changeSide(day, slot, "quinoa+green-salad", slotCalories, 2158);
+    const meal = day.meals[slot];
+    expect(meal.name).toBe("Chicken shishlik skewers");
+    expect(meal.ingredients[0]).toEqual(["chicken thighs", "200 g"]);
+    expect(meal.side.id).toBe("quinoa+green-salad");
+    expect(meal.calories - meal.side.calories).toBe(410);
+    expect(meal.sideChosen).toBe(true);
+    expect(Math.abs(total(day) - 2158) / 2158).toBeLessThan(0.04);
+  });
+
+  it("takes the side away and lets the rest of the day make room", () => {
+    const { day, slot, slotCalories } = dayWithSkewers();
+    changeSide(day, slot, null, slotCalories, 2158);
+    expect(day.meals[slot].side).toBeUndefined();
+    expect(day.meals[slot].calories).toBe(410);
+    expect(Math.abs(total(day) - 2158) / 2158).toBeLessThan(0.04);
+  });
+
+  it("refuses a side that does not suit the dish, and a meal already logged", () => {
+    const { day, slot, slotCalories } = dayWithSkewers();
+    expect(() => changeSide(day, slot, "chips", slotCalories, 2158)).toThrow(SideChoiceError);
+    day.meals[slot].done = true;
+    expect(() => changeSide(day, slot, null, slotCalories, 2158)).toThrow(SideChoiceError);
+  });
+
+  it("adds a side to a planned meal too, and the rest of the day makes room", () => {
+    const d = week()["2026-09-21"];
+    const lunch = d.meals.lunch.calories;
+    changeSide(d, "lunch", "israeli-salad", 755, 2158);
+
+    expect(d.meals.lunch.name).toBe("L21");
+    expect(d.meals.lunch.side.id).toBe("israeli-salad");
+    // The dish keeps its portion; the side sits on top of it.
+    expect(d.meals.lunch.calories - d.meals.lunch.side.calories).toBe(lunch);
+    // Breakfast, dinner and snack gave up what the side added.
+    expect(Math.abs(total(d) - 2158) / 2158).toBeLessThan(0.04);
+    // Side ingredients land on the shopping list under a category.
+    expect(d.meals.lunch.ingredients.at(-1)).toEqual(["israeli salad", expect.any(String), "Vegetables"]);
+  });
+
+  it("takes a side back off a planned meal", () => {
+    const d = week()["2026-09-21"];
+    changeSide(d, "lunch", "israeli-salad", 755, 2158);
+    changeSide(d, "lunch", null, 755, 2158);
+
+    expect(d.meals.lunch.side).toBeUndefined();
+    expect(d.meals.lunch.name).toBe("L21");
+    expect(d.meals.lunch.ingredients).toHaveLength(1);
+    // Back to an ordinary planned meal: it rebalances with the rest of the day.
+    expect(Math.abs(d.meals.lunch.calories - 755) / 755).toBeLessThan(0.1);
+    expect(Math.abs(total(d) - 2158) / 2158).toBeLessThan(0.04);
   });
 });

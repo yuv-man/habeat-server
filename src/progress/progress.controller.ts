@@ -11,7 +11,7 @@ import {
   Request,
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { ProgressService } from "./progress.service";
+import { ProgressService, MissReason, MISS_REASONS } from "./progress.service";
 import { AuthGuard } from "../auth/auth.guard";
 import { MealSource } from "../types/interfaces";
 import { resolveOwnUserId } from "../utils/ownership";
@@ -87,6 +87,40 @@ export class ProgressController {
     this.analyticsService.capture(resolvedUserId, "meal_completed", {
       mealType: body.mealType,
       source: body.source,
+    });
+    return result;
+  }
+
+  /** "I skipped this meal" — or undo it. */
+  @Put("meal-skip/:userId/:mealId")
+  async setMealSkipped(
+    @Param("userId") userId: string,
+    @Param("mealId") mealId: string,
+    @Request() req,
+    @Body()
+    body: {
+      mealType: "breakfast" | "lunch" | "dinner" | "snacks";
+      skipped: boolean;
+      reason?: MissReason;
+    }
+  ) {
+    const resolvedUserId = resolveOwnUserId(req, userId);
+    // Unknown reasons are dropped rather than rejected: the skip itself is the
+    // fact that matters, and it must not fail over a label.
+    const reason = MISS_REASONS.includes(body.reason as MissReason)
+      ? body.reason
+      : undefined;
+    const result = await this.progressService.setMealSkipped(
+      resolvedUserId,
+      mealId,
+      body.mealType,
+      body.skipped !== false,
+      reason
+    );
+    this.analyticsService.capture(resolvedUserId, "meal_skipped", {
+      mealType: body.mealType,
+      skipped: body.skipped !== false,
+      reason,
     });
     return result;
   }

@@ -1192,7 +1192,7 @@ const defaultWorkoutTemplates = [
 ];
 
 // Helper function to distribute workouts evenly across designated workout days
-const distributeWorkouts = (
+export const distributeWorkouts = (
   weeklyPlanArray: any[],
   workoutDays: number[],
   dayToName: Record<number, string>,
@@ -1288,6 +1288,16 @@ const distributeWorkouts = (
   logger.info(
     `[distributeWorkouts] Day map created with ${dayMap.size} entries. Workout days: ${workoutDays.join(", ")}`
   );
+
+  // The plan is generated in parts (today, then the rest of the week), and a
+  // week started mid-week has no Monday at all. Handing workouts to days that
+  // are not here threw them away: the one the model wrote for Wednesday went
+  // to the absent Monday, and Wednesday got a generic fallback instead.
+  workoutDays = workoutDays.filter((d) => dayMap.has(d));
+  if (workoutDays.length === 0) {
+    logger.info(`[distributeWorkouts] No workout days in this part of the week`);
+    return;
+  }
 
   // If we have collected workouts, distribute them
   if (allWorkouts.length > 0) {

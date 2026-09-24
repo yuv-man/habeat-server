@@ -11,7 +11,7 @@
  */
 
 import { Injectable } from "@nestjs/common";
-import { ANALYSIS_MODELS, callGeminiWithFallback } from "../utils/gemini-models";
+import { STRUCTURED_MODELS, callGeminiWithFallback } from "../utils/gemini-models";
 import { loadKnowledge } from "../knowledge/loader";
 import logger from "../utils/logger";
 import { BehaviorSummary } from "./behavior-summary.types";
@@ -266,21 +266,14 @@ export class BehaviorAnalystAgent {
       return null;
     }
 
-    const knowledge = loadKnowledge("behavior-analyst", { maxTokens: 1200 });
-    const prompt = [
-      knowledge,
-      ANALYST_SYSTEM_INSTRUCTION,
-      buildAnalystPrompt(summary, checks, previous),
-    ]
-      .filter(Boolean)
-      .join("\n\n---\n\n");
+    const prompt = this.buildPrompt(summary, checks, previous);
 
     try {
       // Picked at runtime: a hard-coded model was retired upstream and this
       // call failed silently for every user (utils/gemini-models.ts).
       const raw = await callGeminiWithFallback(
         apiKey,
-        ANALYSIS_MODELS,
+        STRUCTURED_MODELS,
         async (model) => {
           const result = await model.generateContent([{ text: prompt }]);
           if (!result?.response) throw new Error("Empty response");
@@ -289,21 +282,41 @@ export class BehaviorAnalystAgent {
         { context: "BehaviorAnalyst" },
       );
 
-      const parsed = parseJson(raw);
-      if (!parsed) {
-        logger.warn("[BehaviorAnalyst] Response was not parseable JSON");
-        return null;
-      }
-
-      const validated = validateAnalysis(parsed, summary, checks);
-      logger.info(
-        `[BehaviorAnalyst] ${validated.keyPatterns.length} patterns kept of ` +
-          `${Array.isArray(parsed.keyPatterns) ? parsed.keyPatterns.length : 0} proposed`,
-      );
-      return validated;
+      return this.fromRaw(raw, summary, checks);
     } catch (err) {
       logger.error(`[BehaviorAnalyst] Analysis failed: ${err}`);
       return null;
     }
+  }
+
+  /**
+   * The whole prompt for one user. Separate from the call so the nightly run
+   * can send everyone's in one Batch API job (half price) instead of one call
+   * each.
+   */
+  buildPrompt(
+    summary: BehaviorSummary,
+    checks: CheckResult[],
+    previous?: Parameters<BehaviorAnalystAgent["analyse"]>[2],
+  ): string {
+    const knowledge = loadKnowledge("behavior-analyst", { maxTokens: 1200 });
+    return [knowledge, ANALYST_SYSTEM_INSTRUCTION, buildAnalystPrompt(summary, checks, previous)]
+      .filter(Boolean)
+      .join("\n\n---\n\n");
+  }
+
+  /** Read and validate the model's answer, however it arrived. */
+  fromRaw(raw: string, summary: BehaviorSummary, checks: CheckResult[]): AnalysisResult | null {
+    const parsed = parseJson(raw);
+    if (!parsed) {
+      logger.warn("[BehaviorAnalyst] Response was not parseable JSON");
+      return null;
+    }
+    const validated = validateAnalysis(parsed, summary, checks);
+    logger.info(
+      `[BehaviorAnalyst] ${validated.keyPatterns.length} patterns kept of ` +
+        `${Array.isArray(parsed.keyPatterns) ? parsed.keyPatterns.length : 0} proposed`,
+    );
+    return validated;
   }
 }

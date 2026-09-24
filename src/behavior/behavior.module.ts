@@ -3,6 +3,7 @@ import { MongooseModule } from "@nestjs/mongoose";
 
 import { BehaviorController } from "./behavior.controller";
 import { BehaviorService } from "./behavior.service";
+import { LlmBatchJob, LlmBatchJobSchema } from "../llm-usage/llm-batch-job.model";
 import { BehaviorAnalystAgent } from "./behavior-analyst.agent";
 import { BehaviorProfile, BehaviorProfileSchema } from "./behavior-profile.model";
 
@@ -33,6 +34,7 @@ import logger from "../utils/logger";
       // Read-only, and only to know when a plan is about to be regenerated —
       // the profile is refreshed the night before, not during.
       { name: Plan.name, schema: PlanSchema },
+      { name: LlmBatchJob.name, schema: LlmBatchJobSchema },
     ]),
   ],
   controllers: [BehaviorController],
@@ -56,5 +58,17 @@ export class BehaviorModule implements OnModuleInit {
     logger.info(
       `[BehaviorModule] Nightly profile refresh scheduled for ${REFRESH_HOUR}:00 local`,
     );
+
+    // The nightly analysis goes out as a Batch API job; its answers arrive
+    // later. Check every quarter of an hour, and once shortly after startup so
+    // a job that finished while the server was down is not left waiting.
+    if (process.env.NODE_ENV !== "test") {
+      const collect = () =>
+        this.service
+          .collectBatchResults()
+          .catch((err) => logger.error(`[BehaviorModule] Batch collection failed: ${err}`));
+      setTimeout(collect, 60_000).unref?.();
+      setInterval(collect, 15 * 60_000).unref?.();
+    }
   }
 }

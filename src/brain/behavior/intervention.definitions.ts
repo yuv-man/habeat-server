@@ -235,6 +235,59 @@ export const INTERVENTIONS: InterventionDefinition[] = [
       goingWellIf: "You're ordering less than you were when we started.",
     },
   },
+
+  // ── P09 · Skipping lunch ──────────────────────────────────────────────────
+  {
+    id: "I13",
+    patternId: "P09",
+    name: "Make lunch the easy meal",
+    description:
+      "Lower lunch to something that fits a busy day, without changing anything else yet.",
+    stage: "awareness",
+    difficulty: 0.1,
+    mealStrategy:
+      "Make every weekday lunch portable, no-cook and eaten in under 10 minutes. Keep the rest of the day familiar. Never enlarge dinner or evening food to make up for a skipped lunch.",
+    successMetric: "User keeps logging lunches, eaten or skipped, with a reason.",
+    userFacing: {
+      whatWeAreDoing:
+        "Lunch is now something you can eat at your desk in ten minutes. Nothing else changes — we're just seeing which days it still gets away from you.",
+      goingWellIf: "You notice which days lunch disappears, and why.",
+    },
+  },
+  {
+    id: "I14",
+    patternId: "P09",
+    name: "Cook once, eat twice",
+    description:
+      "Turn the evening meal the user already cooks into the next day's lunch.",
+    stage: "preparation",
+    difficulty: 0.3,
+    mealStrategy:
+      "Scale weekday dinners to one extra portion and schedule that leftover as the next day's lunch. The lunch must need zero cooking and under 5 minutes to plate. Prefer the user's own dishes for this.",
+    successMetric: "Lunch completed on at least 4 weekdays.",
+    userFacing: {
+      whatWeAreDoing:
+        "Tonight's dinner makes one extra portion — that's tomorrow's lunch, already sorted before the day starts.",
+      goingWellIf: "Lunch happens on 4 or more workdays.",
+    },
+  },
+  {
+    id: "I15",
+    patternId: "P09",
+    name: "A backup for the days meetings win",
+    description:
+      "Give the user a no-prep lunch fallback and an afternoon snack for long days.",
+    stage: "replacement",
+    difficulty: 0.5,
+    mealStrategy:
+      "Include one no-prep 'desk lunch' fallback (fridge-ready or shelf-stable, no utensils needed) that can replace any weekday lunch, and a filling mid-afternoon snack on weekdays so the evening does not start hungry.",
+    successMetric: "Fewer skipped lunches than when we started.",
+    userFacing: {
+      whatWeAreDoing:
+        "There's a no-prep backup lunch for the days meetings win, and an afternoon snack so you don't walk into the evening starving.",
+      goingWellIf: "Skipped lunches are rare, and evenings feel less hungry.",
+    },
+  },
 ];
 
 export const interventionById = (id: string): InterventionDefinition | undefined =>

@@ -21,7 +21,14 @@ import { BrainState, BrainPatternView } from "./decision/brain-state.types";
 import { BehaviorStage, STAGE_LADDER } from "./behavior/behavior.types";
 import { projectBehaviorEvents, observedDaysIn } from "./events/event.projector";
 import { renderPlannerContext } from "./brain.prompt";
-import { BrainFocus, PATTERN_EMOJI, STAGE_LABELS } from "./brain.view";
+import {
+  BrainFocus,
+  PATTERN_EMOJI,
+  PATTERN_TIPS,
+  PatternProgress,
+  STAGE_LABELS,
+  TREND_LABELS,
+} from "./brain.view";
 
 import { DailyProgress } from "../progress/progress.model";
 import { MoodEntry, MealMoodCorrelation } from "../cbt/cbt.model";
@@ -36,6 +43,9 @@ export const BRAIN_WINDOW_DAYS = 30;
 
 /** A state older than this is stale and gets refreshed in the background. */
 export const STATE_REFRESH_HOURS = 20;
+
+/** How long a resolved pattern is still shown as good news. */
+export const PROGRESS_RESOLVED_DAYS = 30;
 
 /** How many users one scheduled pass will analyse. */
 export const BRAIN_BATCH_SIZE = 50;
@@ -339,6 +349,66 @@ export class BrainService {
     };
   }
 
+  /**
+   * Every pattern the user has — or recently had — and which way it is moving,
+   * with a few concrete things to try. The focus card says what the Brain is
+   * working on; this says how the rest of the picture is changing.
+   *
+   * Only confirmed patterns are shown: a single sighting is as likely to be a
+   * bad week as a habit (see the status ladder), and telling someone about a
+   * habit they don't have is worse than saying nothing.
+   */
+  async getPatternProgress(userId: string): Promise<PatternProgress[]> {
+    const objectId = new mongoose.Types.ObjectId(userId);
+    const [patterns, state] = await Promise.all([
+      this.patternModel.find({ userId: objectId }).lean(),
+      this.stateModel.findOne({ userId: objectId }).select("activeBehavior").lean(),
+    ]);
+    const focusId = state?.activeBehavior?.patternId ?? null;
+    const resolvedCutoff = Date.now() - PROGRESS_RESOLVED_DAYS * 86_400_000;
+
+    const order: Record<PatternProgress["trend"], number> = {
+      improving: 0,
+      steady: 1,
+      resolved: 2,
+    };
+
+    return patterns
+      .map((p): PatternProgress | null => {
+        const definition = patternById(p.patternId);
+        if (!definition) return null;
+
+        let trend: PatternProgress["trend"];
+        if (p.status === PatternStatus.RESOLVED) {
+          // Only a pattern that was ever real can resolve, and only recently
+          // resolved ones are news.
+          if ((p.detectionCount ?? 0) < 2) return null;
+          if (!p.resolvedAt || new Date(p.resolvedAt).getTime() < resolvedCutoff) return null;
+          trend = "resolved";
+        } else if (p.status === PatternStatus.DISCOVERED) {
+          return null;
+        } else if (p.status === PatternStatus.IMPROVING) {
+          trend = "improving";
+        } else {
+          trend = "steady";
+        }
+
+        return {
+          patternId: p.patternId,
+          name: definition.name,
+          emoji: PATTERN_EMOJI[p.patternId] ?? "🔎",
+          trend,
+          trendLabel: TREND_LABELS[trend],
+          isFocus: p.patternId === focusId,
+          evidence: trend === "resolved" ? null : (p.evidence?.[0]?.description ?? null),
+          tips: trend === "resolved" ? [] : (PATTERN_TIPS[p.patternId] ?? []),
+          since: p.firstDetectedAt ?? null,
+        };
+      })
+      .filter((p): p is PatternProgress => p !== null)
+      .sort((a, b) => Number(b.isFocus) - Number(a.isFocus) || order[a.trend] - order[b.trend]);
+  }
+
   async getPatterns(userId: string): Promise<IBehaviorPatternDoc[]> {
     return this.patternModel
       .find({ userId: new mongoose.Types.ObjectId(userId) })
@@ -592,6 +662,24 @@ export class BrainService {
         return 1 - Math.min(1, takeaway / meals.length);
       }
 
+      case "P09": {
+        // Success is lunches that happened, of the lunches we know about.
+        const lunch = new Map<string, boolean>();
+        for (const e of events) {
+          if (e.mealType !== "lunch" || !e.dateKey) continue;
+          if (
+            e.type === BehaviorEventType.MEAL_LOGGED ||
+            e.type === BehaviorEventType.PLAN_MEAL_COMPLETED
+          ) {
+            lunch.set(e.dateKey, true);
+          } else if (e.type === BehaviorEventType.MEAL_SKIPPED && !lunch.get(e.dateKey)) {
+            lunch.set(e.dateKey, false);
+          }
+        }
+        if (lunch.size === 0) return null;
+        return [...lunch.values()].filter(Boolean).length / lunch.size;
+      }
+
       default:
         // At the awareness stage the metric is simply that the user kept
         // logging, which is the same question for every pattern.
@@ -640,7 +728,7 @@ export class BrainService {
 
     const resolved = await this.patternModel
       .find({ userId, status: PatternStatus.RESOLVED })
-      .select("patternId")
+      .select("patternId resolvedAt")
       .lean();
 
     const sameBehaviour =
@@ -683,7 +771,7 @@ export class BrainService {
           // every undetected pattern here would tell someone they had
           // "resolved" a takeaway habit they never had in the first place.
           resolvedPatterns: resolved.map((p) => p.patternId),
-          plannerContext: renderPlannerContext(state),
+          plannerContext: renderPlannerContext(state, resolved),
           lastAnalysisAt: new Date(),
         },
         $inc: { version: 1 },

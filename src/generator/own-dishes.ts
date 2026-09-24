@@ -13,13 +13,33 @@
  * portion it to that slot. The full version also optimises the week's macros.
  */
 
+import { Types } from "mongoose";
 import { scaleMeal } from "./calorie-balance";
 import { MealSlot, slotCalorieShares } from "./meal-plan-prompt";
+import {
+  attachSide,
+  chooseSide,
+  detachSide,
+  PlanSide,
+  SideRequest,
+  sideById,
+  sideOptions,
+} from "./own-dish-sides";
 
 /** Share of a week's lunches and dinners given to dishes the user cooks. */
 export const OWN_DISH_MAIN_SHARE = 0.4;
-/** A serving of one's own dish can double; past that it is not that dish. */
-export const OWN_DISH_MAX_SCALE = 2;
+/**
+ * At most this share of the week's own-dish meals are served as a healthier
+ * swap; the rest come as the user makes them. A schnitzel is a schnitzel: a
+ * week where every one of their dishes became a "better version" is a week
+ * with none of their food in it, and the healthier part is the plan around it.
+ */
+export const OWN_DISH_SWAP_SHARE = 0.5;
+/** Portion limits for the meals rebalanced around a dish served as-is. */
+const AROUND_MIN_SCALE = 0.7;
+const AROUND_MAX_SCALE = 1.3;
+/** A day this close to its target is left alone. */
+const AROUND_TOLERANCE = 0.03;
 
 export interface DishNutrition {
   calories: number;
@@ -150,6 +170,7 @@ const asMeal = (
   replaced: any,
   targetCalories: number,
   tune: PlannableTune | null,
+  avoid: string[] = [],
 ) => {
   const n = (tune?.nutritionPerServing ?? dish.usual!.nutritionPerServing!) as DishNutrition;
   const ingredients = tune?.ingredients?.length ? tune.ingredients : dish.usual!.ingredients ?? [];
@@ -166,7 +187,10 @@ const asMeal = (
     ingredients: ingredients.map((i) => [i.name, i.amount]),
     prepTime: dish.usual?.prepMinutes ?? 20,
     done: false,
-    _id: replaced?._id,
+    // An id of its own. Keeping the replaced meal's id made the recipe button
+    // open that meal: the recipe is looked up by id, library first, so Tamir's
+    // schnitzel opened "Pan Seared Ribeye".
+    _id: new Types.ObjectId(),
     /** So the client can say "one of your own" and the Brain can tell them apart. */
     fromRepertoire: dish._id ? String(dish._id) : dish.name,
     ...(tune
@@ -180,11 +204,20 @@ const asMeal = (
         }
       : {}),
   };
-  if (targetCalories > 0 && n.calories > 0) {
-    // Wider than the generated-meal limits (calorie-balance.ts): a light dish
-    // of their own — a lentil soup at 284 kcal against an 841 kcal dinner —
-    // is normally eaten as a bigger bowl, not left to leave the day short.
-    scaleMeal(meal, Math.min(OWN_DISH_MAX_SCALE, Math.max(0.5, targetCalories / n.calories)));
+  // Their dish — or the swap for it — comes at its own portion: a smaller
+  // schnitzel is not their schnitzel, a doubled chicken breast is not a
+  // lighter take on it, and nobody re-reads the recipe to notice. A light one
+  // gets a side to fill the meal (own-dish-sides.ts); what is left, the rest
+  // of the day makes room for (balanceAroundOwnDishes).
+  if (targetCalories > 0) {
+    const side = chooseSide({
+      dishName: dish.name,
+      ingredientNames: ingredients.map((i) => i.name),
+      dishCalories: meal.calories,
+      slotCalories: targetCalories,
+      avoid,
+    });
+    if (side) attachSide(meal, side);
   }
   return meal;
 };
@@ -204,6 +237,8 @@ export const applyOwnDishes = (
   maxTuneLevel: 0 | 1 | 2 | 3 = 1,
   /** The day's macro targets, so the chosen version fits the day. */
   dailyMacros?: DishNutrition,
+  /** Allergies, dislikes and restrictions — what a side must not contain. */
+  avoid: string[] = [],
 ): { weeklyPlan: Record<string, any>; stats: OwnDishStats } => {
   const stats: OwnDishStats = { placed: 0, dishes: [], tuned: [] };
   const usable = dishes.filter((d) => d?.name && d.usual?.nutritionPerServing?.calories);
@@ -223,6 +258,10 @@ export const applyOwnDishes = (
   const lastDay = new Map<string, string>();
   let credit = 0;
   let next = 0;
+  // Own-dish meals this week, and how many of them are swaps — including any
+  // an earlier phase placed, so the share holds across phases.
+  let ownMeals = 0;
+  let swaps = 0;
 
   for (const { key, slot } of slots) {
     const meal = weeklyPlan[key].meals[slot];
@@ -236,6 +275,8 @@ export const applyOwnDishes = (
       used.set(id, (used.get(id) ?? 0) + 1);
       lastDay.set(id, key);
       credit -= every;
+      ownMeals++;
+      if (meal.tuneLevel) swaps++;
       continue;
     }
 
@@ -261,7 +302,9 @@ export const applyOwnDishes = (
 
     const id = String(chosen._id ?? chosen.name);
     const slotCalories = Math.round(targetCalories * shares[slot]);
-    const tune = chooseTune(
+    // As they make it first; a swap only while swaps stay within their share.
+    const maySwap = swaps + 1 <= Math.floor((ownMeals + 1) * OWN_DISH_SWAP_SHARE);
+    const tune = maySwap && chooseTune(
       chosen,
       {
         calories: slotCalories,
@@ -278,8 +321,10 @@ export const applyOwnDishes = (
       },
       maxTuneLevel,
     );
-    weeklyPlan[key].meals[slot] = asMeal(chosen, meal, slotCalories, tune);
+    weeklyPlan[key].meals[slot] = asMeal(chosen, meal, slotCalories, tune || null, avoid);
+    ownMeals++;
     if (tune) {
+      swaps++;
       stats.tuned.push({ dish: chosen.name, level: tune.level, changes: tune.changes });
     }
     used.set(id, (used.get(id) ?? 0) + 1);
@@ -290,4 +335,132 @@ export const applyOwnDishes = (
   }
 
   return { weeklyPlan, stats };
+};
+
+/** A dish of theirs served as they make it — including as the next day's leftovers. */
+export const isOwnAsIs = (meal: any): boolean => !!meal?.fromRepertoire && !meal?.tuneLevel;
+
+/**
+ * A meal the day balances around rather than scales: their dish or the swap
+ * for it (served at its own portion), or any meal carrying a side (whose
+ * numbers must stay the ones it was attached with, so it can come off again).
+ */
+export const isFixedPortion = (meal: any): boolean => !!meal?.fromRepertoire || !!meal?.side;
+
+/**
+ * Make room in the day for their own dish.
+ *
+ * Their dish is served at their portion, so the day lands off its target by
+ * whatever that portion differs from the slot. The other meals of the day —
+ * the ones we chose — are scaled together to bring it back. Meals already
+ * ticked off are left as eaten. Mutates and returns the plan.
+ */
+export const balanceAroundOwnDishes = (
+  weeklyPlan: Record<string, any>,
+  targetCalories: number,
+): { weeklyPlan: Record<string, any>; days: number } => {
+  let days = 0;
+  if (!(targetCalories > 0)) return { weeklyPlan, days };
+
+  for (const day of Object.values(weeklyPlan ?? {})) {
+    const m = (day as any)?.meals;
+    if (!m) continue;
+    const meals = [m.breakfast, m.lunch, m.dinner, ...(Array.isArray(m.snacks) ? m.snacks : [])].filter(
+      (x) => x && typeof x.calories === "number",
+    );
+    if (!meals.some(isFixedPortion)) continue;
+    if (balanceDay(day, targetCalories)) days++;
+  }
+
+  return { weeklyPlan, days };
+};
+
+/**
+ * Bring one day back to its target by scaling the meals that may be scaled —
+ * not the fixed-portion ones, not the ones already eaten. Returns whether it
+ * changed anything. Mutates the day.
+ */
+export const balanceDay = (day: any, targetCalories: number): boolean => {
+  const m = day?.meals;
+  if (!m || !(targetCalories > 0)) return false;
+  const meals = [m.breakfast, m.lunch, m.dinner, ...(Array.isArray(m.snacks) ? m.snacks : [])].filter(
+    (x) => x && typeof x.calories === "number",
+  );
+
+  const total = meals.reduce((s, x) => s + x.calories, 0);
+  const gap = targetCalories - total;
+  if (Math.abs(gap) <= AROUND_TOLERANCE * targetCalories) return false;
+
+  const around = meals.filter((x) => !isFixedPortion(x) && !x.done);
+  const aroundCalories = around.reduce((s, x) => s + x.calories, 0);
+  if (!aroundCalories) return false;
+
+  const factor = Math.min(
+    AROUND_MAX_SCALE,
+    Math.max(AROUND_MIN_SCALE, (aroundCalories + gap) / aroundCalories),
+  );
+  for (const meal of around) scaleMeal(meal, factor);
+  return true;
+};
+
+const ingredientName = (i: unknown): string =>
+  Array.isArray(i) ? String(i[0] ?? "") : String(i ?? "").split("|")[0];
+
+/** What the side picker needs to size sides for this meal: the dish alone. */
+export const sideRequestFor = (meal: any, slotCalories: number, avoid: string[] = []): SideRequest => {
+  const sideCount = meal?.side?.ingredients?.length ?? 0;
+  const ingredients: unknown[] = Array.isArray(meal?.ingredients) ? meal.ingredients : [];
+  return {
+    dishName: String(meal?.name ?? ""),
+    ingredientNames: ingredients.slice(0, ingredients.length - sideCount).map(ingredientName),
+    dishCalories: (Number(meal?.calories) || 0) - (Number(meal?.side?.calories) || 0),
+    slotCalories,
+    avoid,
+  };
+};
+
+/** The sides this meal can have, and which one it has now. */
+export const sideChoicesFor = (
+  meal: any,
+  slotCalories: number,
+  avoid: string[] = [],
+): { current: string | null; options: PlanSide[] } => {
+  const options = sideOptions(sideRequestFor(meal, slotCalories, avoid));
+  // Sides placed before they carried an id are matched by name.
+  const current =
+    meal?.side?.id ?? options.find((o) => o.name === meal?.side?.name)?.id ?? null;
+  return { current, options };
+};
+
+export class SideChoiceError extends Error {}
+
+/**
+ * The user picked a side (or none) for a lunch or dinner — one of their own
+ * dishes or any planned meal. Swap it on the meal, then let the rest of the
+ * day make room, as when the plan was built. The dish itself is untouched.
+ * Mutates the day.
+ */
+export const changeSide = (
+  day: any,
+  slot: "lunch" | "dinner",
+  optionId: string | null,
+  slotCalories: number,
+  targetCalories: number,
+  avoid: string[] = [],
+): any => {
+  const meal = day?.meals?.[slot];
+  if (!meal) throw new SideChoiceError("No meal to add a side to");
+  if (meal.done) throw new SideChoiceError("This meal is already logged");
+
+  const request = sideRequestFor(meal, slotCalories, avoid);
+  const next = optionId ? sideById(request, optionId) : null;
+  if (optionId && !next) throw new SideChoiceError(`"${optionId}" is not a side for this dish`);
+
+  detachSide(meal);
+  if (next) attachSide(meal, next);
+  /** Chosen by them: a later automatic pass must leave it as it is. */
+  meal.sideChosen = true;
+
+  balanceDay(day, targetCalories);
+  return day;
 };

@@ -683,7 +683,8 @@ const ingredientRules = `INGREDIENT FORMAT — each entry is a single string "na
 const nutritionRules = `NUTRITION — this is checked:
 - protein, carbs and fat are grams for the whole meal, computed from the ingredient amounts above.
 - calories must equal protein*4 + carbs*4 + fat*9, rounded to the nearest whole number.
-- Each meal in the outline carries its own protein/carb/fat target. Hit the shape as well as the calories: the day only adds up if every meal does.
+- Report what your ingredients actually give. Never copy a target into a meal's numbers — a week where every meal lands exactly on a round share of the target is treated as copied.
+- Build each meal towards the day's macro split (given as percentages of calories) through its ingredients: choose the protein portion, starch and fat so the dish itself has that shape.
 - Aim within about 10% of each meal's calorie target. Do not force an exact match — a real dish rarely lands on a round number.`;
 
 export interface WeeklyPromptInput {
@@ -729,6 +730,15 @@ export interface WeeklyPromptInput {
   fastingContext?: string;
 }
 
+/** "35% protein / 30% carbs / 35% fat" — the shape each meal should aim for. */
+export const macroSplit = (macros: { protein: number; carbs: number; fat: number }): string => {
+  const kcal = { protein: macros.protein * 4, carbs: macros.carbs * 4, fat: macros.fat * 9 };
+  const total = kcal.protein + kcal.carbs + kcal.fat;
+  if (total <= 0) return "an even split";
+  const pct = (v: number) => Math.round((v / total) * 100);
+  return `${pct(kcal.protein)}% protein / ${pct(kcal.carbs)}% carbs / ${pct(kcal.fat)}% fat`;
+};
+
 const renderDay = (day: PlannedDay): string => {
   const lines = day.meals.map((m) => {
     const bits = m.favourite
@@ -736,17 +746,23 @@ const renderDay = (day: PlannedDay): string => {
           m.favouriteKind === "own"
             ? `A DISH THEY ALREADY COOK — plan "${m.favourite}" the way they make it. Do not rename it or turn it into a different dish.`
             : `ONE OF THEIR FAVOURITES — make a proper "${m.favourite}" dish, as it is really made`,
-          m.macros
-            ? `~${m.calories} kcal · protein ${m.macros.protein}g, carbs ${m.macros.carbs}g, fat ${m.macros.fat}g`
-            : `~${m.calories} kcal`,
+          // Calories only. Per-meal gram targets were copied straight into the
+          // answer: every lunch of a week came back as exactly 86/74/38 g
+          // whatever the dish, so the plan's nutrition described the targets,
+          // not the food. The day's mix is corrected in code from the real
+          // numbers (macro-targets.ts nudgeDayMacros).
+          `~${m.calories} kcal`,
         ]
       : [
           `form: ${m.archetype}`,
           `main protein: ${m.protein}`,
           m.flavour ? `season towards: ${m.flavour}` : null,
-          m.macros
-            ? `~${m.calories} kcal · protein ${m.macros.protein}g, carbs ${m.macros.carbs}g, fat ${m.macros.fat}g`
-            : `~${m.calories} kcal`,
+          // Calories only. Per-meal gram targets were copied straight into the
+          // answer: every lunch of a week came back as exactly 86/74/38 g
+          // whatever the dish, so the plan's nutrition described the targets,
+          // not the food. The day's mix is corrected in code from the real
+          // numbers (macro-targets.ts nudgeDayMacros).
+          `~${m.calories} kcal`,
         ].filter(Boolean);
     return `    ${m.slot.padEnd(9)} → ${bits.join(" | ")}`;
   });
@@ -819,7 +835,7 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
     [
       `PERSON: ${userData.age ?? "?"}y ${userData.gender ?? "?"}, ${userData.height ?? "?"}cm, ${userData.weight ?? "?"}kg, goal: ${userData.path ?? "maintain"}`,
       `LANGUAGE: Respond in ${language} — dish names and ingredient names must be written in ${language}.`,
-      `DAILY TARGET: ${targetCalories} kcal — protein ${macros.protein}g, carbs ${macros.carbs}g, fat ${macros.fat}g`,
+      `DAILY TARGET: ${targetCalories} kcal — protein ${macros.protein}g, carbs ${macros.carbs}g, fat ${macros.fat}g (${macroSplit(macros)} of calories)`,
       `MAX PREP TIME: ${effectiveMaxPrep} minutes per meal`,
       cookingSpec
         ? `COOKING SKILL: ${cookingSpec.label} — ${cookingSpec.guidance}`
@@ -873,8 +889,12 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   sections.push(ingredientRules);
   sections.push(nutritionRules);
 
-  // Derive active slot set from the skeleton to build a dynamic output schema
-  const activeSlotSet = new Set(skeleton[0]?.meals.map((m) => m.slot) ?? ["breakfast", "lunch", "dinner", "snack"]);
+  // Output schema from every slot the outline asks for. Days can differ: slots
+  // filled in code (repeats, leftovers, library meals) are left out of the
+  // outline, and the model writes only what is listed.
+  const outlineSlots = skeleton.flatMap((d) => d.meals.map((m) => m.slot));
+  const activeSlotSet = new Set(outlineSlots.length ? outlineSlots : ["breakfast", "lunch", "dinner", "snack"]);
+  const daysDiffer = skeleton.some((d) => d.meals.length !== activeSlotSet.size);
   const mealSchema = [
     activeSlotSet.has("breakfast") ? `"breakfast":MEAL` : null,
     activeSlotSet.has("lunch") ? `"lunch":MEAL` : null,
@@ -890,7 +910,7 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
   );
 
   sections.push(
-    `RETURN a JSON array with one object per day, in the order listed above:
+    `${daysDiffer ? "Write ONLY the meals listed for each day in the outline. A slot not listed for a day is already taken care of — leave it out of that day's \"meals\" object entirely.\n\n" : ""}RETURN a JSON array with one object per day, in the order listed above:
 [{"date":"YYYY-MM-DD","day":"monday","meals":{${mealSchema}},"workouts":[]}]
 
 MEAL = {"name":string,"calories":number,"macros":{"protein":number,"carbs":number,"fat":number},"ingredients":[string],"prepTime":number${needsEnglishName ? `,"nameEn":string` : ""}}

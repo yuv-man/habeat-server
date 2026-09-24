@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI, GenerativeModel } from "@google/generative-ai";
+import { fromGeminiUsage, recordLlmUsage } from "./llm-usage";
 import logger from "./logger";
 
 /**
@@ -293,6 +294,14 @@ export const callGeminiWithRateLimit = async <T>(
     model: modelName,
     ...(systemInstruction ? { systemInstruction } : {}),
   });
+  // Every Gemini call in the app comes through here: record what each costs.
+  const generate = model.generateContent.bind(model);
+  model.generateContent = (async (...args: Parameters<typeof generate>) => {
+    const result = await generate(...args);
+    const usage = fromGeminiUsage(modelName, context, result?.response?.usageMetadata);
+    if (usage) recordLlmUsage(usage);
+    return result;
+  }) as typeof model.generateContent;
 
   const executeWithRetry = async (attempt: number): Promise<T> => {
     try {

@@ -8,6 +8,7 @@ import {
   planSeed,
   SLOT_CALORIE_SHARE,
   DaySpec,
+  macroSplit,
 } from "../../../src/generator/meal-plan-prompt";
 import { resolveDietaryConstraints } from "../../../src/utils/dietary-constraints";
 
@@ -267,6 +268,20 @@ describe("buildWeeklyPlanPrompt", () => {
     }
   });
 
+  it("gives meals calorie targets but no gram targets to copy", () => {
+    // Per-meal "protein 86g, carbs 74g, fat 38g" came back verbatim on every
+    // lunch of a week, whatever the dish.
+    const skeleton = buildMenuSkeleton(DAYS, none, 2000, "seed", [], undefined, undefined, [], base.macros);
+    const prompt = buildWeeklyPlanPrompt({ ...base, skeleton });
+    const outline = prompt.split("\n").filter((l) => /→/.test(l));
+    expect(outline.length).toBeGreaterThan(0);
+    for (const line of outline) {
+      expect(line).toMatch(/~\d+ kcal/);
+      expect(line).not.toMatch(/protein \d+g/);
+    }
+    expect(prompt).toContain("24% protein / 45% carbs / 31% fat of calories");
+  });
+
   it("keeps flagged non-food terms out of dislikes and preferences", () => {
     // "white socks" survived onboarding because the user chose to keep it after
     // being warned. It must not reach the model as a dietary instruction.
@@ -524,5 +539,17 @@ describe("breakfast reads as breakfast", () => {
     for (const p of proteins) {
       expect(p).not.toMatch(/sirloin|steak|beef|lamb|pork|chicken/i);
     }
+  });
+});
+
+describe("macroSplit", () => {
+  it("describes the day's macros as shares of calories", () => {
+    expect(macroSplit({ protein: 174, carbs: 283, fat: 109 })).toBe(
+      "25% protein / 40% carbs / 35% fat",
+    );
+  });
+
+  it("does not divide by zero", () => {
+    expect(macroSplit({ protein: 0, carbs: 0, fat: 0 })).toBe("an even split");
   });
 });

@@ -1,4 +1,9 @@
 import { BrainState } from "./decision/brain-state.types";
+import { patternById } from "./patterns/pattern.definitions";
+
+/** A resolved pattern stays in the brief this long, so the week after a
+ *  habit eases is not the week its supports quietly disappear. */
+export const RECENTLY_RESOLVED_DAYS = 28;
 
 /**
  * Renders BrainState as the brief the meal generator receives.
@@ -12,13 +17,35 @@ import { BrainState } from "./decision/brain-state.types";
  * because when the analyst's brief and the active intervention pull in
  * different directions the model follows whichever it read first.
  */
-export const renderPlannerContext = (state: BrainState): string | null => {
+export const renderPlannerContext = (
+  state: BrainState,
+  /** Patterns this user had and no longer has, with when that happened. */
+  resolved: { patternId: string; resolvedAt?: Date | null }[] = [],
+  now: Date = new Date(),
+): string | null => {
   // An unreliable state is worse than none: the model will happily build a
   // whole week around a pattern seen twice.
   if (state.confidence === "insufficient") return null;
 
   const lines: string[] = [];
   const { decision, analysis } = state;
+
+  // Week-to-week progress, measured against where the user started (the
+  // pattern ladder's baseline), not against last week's noise. Without this
+  // the planner only ever hears what is wrong, and will "fix" a week that is
+  // already working by changing it.
+  const improving = state.patterns
+    .filter((p) => p.status === "improving")
+    .map((p) => p.name);
+  const recentlyResolved = resolved
+    .filter(
+      (r) =>
+        r.resolvedAt &&
+        now.getTime() - new Date(r.resolvedAt).getTime() <=
+          RECENTLY_RESOLVED_DAYS * 86_400_000,
+    )
+    .map((r) => patternById(r.patternId)?.name)
+    .filter((n): n is string => Boolean(n));
 
   if (decision.patternId && decision.mealStrategy) {
     lines.push(
@@ -43,6 +70,21 @@ export const renderPlannerContext = (state: BrainState): string | null => {
         `Observed: ${evidence.map((e) => e.description).join(" ")}`,
       );
     }
+  }
+
+  if (improving.length || recentlyResolved.length) {
+    const progress: string[] = [];
+    if (improving.length) {
+      progress.push(
+        `Improving since we started: ${improving.join(", ")}. Keep the meals and structure that are working this week; do not stack new changes on top of them.`,
+      );
+    }
+    if (recentlyResolved.length) {
+      progress.push(
+        `Recently resolved: ${recentlyResolved.join(", ")}. Keep the supports that got the user here (same easy anchors, same timing) and taper them slowly — do not reintroduce the old shape of the week.`,
+      );
+    }
+    lines.push(`PROGRESS — ${progress.join(" ")}`);
   }
 
   const directives = analysis.directives;

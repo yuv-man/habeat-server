@@ -4,6 +4,7 @@ import { ShoppingModule } from "../shopping/shopping.module";
 import { JwtModule } from "@nestjs/jwt";
 import { GeneratorController } from "./generator.controller";
 import { GeneratorService } from "./generator.service";
+import { MealLibraryService } from "./meal-library.service";
 import { Plan, PlanSchema } from "../plan/plan.model";
 import { User, UserSchema } from "../user/user.model";
 import { Meal, MealSchema } from "src/meal/meal.model";
@@ -44,6 +45,7 @@ import { RepertoireModule } from "../repertoire/repertoire.module";
   controllers: [GeneratorController],
   providers: [
     GeneratorService,
+    MealLibraryService,
     UsdaNutritionService,
     StreamingGeneratorService,
     GeneratorGateway,
