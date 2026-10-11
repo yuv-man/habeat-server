@@ -5,7 +5,13 @@ import { AuthService } from "../../../src/auth/auth.service";
 import { User } from "../../../src/user/user.model";
 import { Plan } from "../../../src/plan/plan.model";
 import { PlanService } from "../../../src/plan/plan.service";
-import { UnauthorizedException, ConflictException } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import { AnalyticsService } from "../../../src/analytics/analytics.service";
+import {
+  UnauthorizedException,
+  ConflictException,
+  BadRequestException,
+} from "@nestjs/common";
 
 // Mock the oauth utilities
 jest.mock("../../../src/utils/oauth", () => ({
@@ -21,6 +27,17 @@ jest.mock("../../../src/utils/generateToken", () => ({
   __esModule: true,
   default: jest.fn().mockReturnValue("mock_jwt_token"),
 }));
+
+/** A user query usable both awaited directly and as
+ *  `findOne().select("+password")`, the one read that needs the hash. */
+const userQuery = (user: unknown) => {
+  const query: any = {
+    select: jest.fn(() => query),
+    then: (resolve: any, reject: any) =>
+      Promise.resolve(user).then(resolve, reject),
+  };
+  return query;
+};
 
 describe("AuthService", () => {
   let service: AuthService;
@@ -55,6 +72,7 @@ describe("AuthService", () => {
       findOne: jest.fn(),
       findById: jest.fn(),
       create: jest.fn(),
+      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
     };
 
     mockPlanModel = {
@@ -88,6 +106,15 @@ describe("AuthService", () => {
         {
           provide: PlanService,
           useValue: mockPlanService,
+        },
+        // No admin ids/emails configured, so nobody is promoted to admin.
+        {
+          provide: ConfigService,
+          useValue: { get: jest.fn().mockReturnValue(undefined) },
+        },
+        {
+          provide: AnalyticsService,
+          useValue: { identify: jest.fn(), capture: jest.fn() },
         },
       ],
     }).compile();
@@ -170,7 +197,7 @@ describe("AuthService", () => {
         _id: { toString: () => "507f1f77bcf86cd799439011" },
         comparePassword: jest.fn().mockResolvedValue(true),
       };
-      mockUserModel.findOne.mockResolvedValue(userWithCompare);
+      mockUserModel.findOne.mockReturnValue(userQuery(userWithCompare));
 
       const result = await service.login("test@example.com", "password123");
 
@@ -184,7 +211,7 @@ describe("AuthService", () => {
         ...mockUser,
         comparePassword: jest.fn().mockResolvedValue(false),
       };
-      mockUserModel.findOne.mockResolvedValue(userWithCompare);
+      mockUserModel.findOne.mockReturnValue(userQuery(userWithCompare));
 
       await expect(
         service.login("test@example.com", "wrongpassword"),
@@ -192,7 +219,7 @@ describe("AuthService", () => {
     });
 
     it("should throw UnauthorizedException if user not found", async () => {
-      mockUserModel.findOne.mockResolvedValue(null);
+      mockUserModel.findOne.mockReturnValue(userQuery(null));
 
       await expect(
         service.login("nonexistent@example.com", "password"),
@@ -202,10 +229,20 @@ describe("AuthService", () => {
 
   describe("logout", () => {
     it("should return success message", async () => {
-      const result = await service.logout();
+      const result = await service.logout("user123");
 
       expect(result.status).toBe("success");
       expect(result.message).toBe("Logged out successfully");
+    });
+
+    it("revokes every token the user holds", async () => {
+      // A logout that leaves the token valid isn't a logout.
+      await service.logout("user123");
+
+      expect(mockUserModel.updateOne).toHaveBeenCalledWith(
+        { _id: "user123" },
+        { $inc: { tokenVersion: 1 } },
+      );
     });
   });
 
@@ -225,18 +262,27 @@ describe("AuthService", () => {
     it("should throw UnauthorizedException if user not found", async () => {
       mockUserModel.findById.mockResolvedValue(null);
 
-      await expect(service.getUser("nonexistent")).rejects.toThrow(
+      await expect(service.getUser("507f1f77bcf86cd799439099")).rejects.toThrow(
         UnauthorizedException,
       );
     });
 
-    it("should throw UnauthorizedException if plan not found", async () => {
+    it("rejects a malformed user id before querying", async () => {
+      await expect(service.getUser("nonexistent")).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(mockUserModel.findById).not.toHaveBeenCalled();
+    });
+
+    it("returns a null plan for a user who hasn't finished onboarding", async () => {
+      // OAuth sign-ups exist before their first plan does.
       mockUserModel.findById.mockResolvedValue(mockUser);
       mockPlanModel.findOne.mockResolvedValue(null);
 
-      await expect(service.getUser("507f1f77bcf86cd799439011")).rejects.toThrow(
-        UnauthorizedException,
-      );
+      const result = await service.getUser("507f1f77bcf86cd799439011");
+
+      expect(result.data.plan).toBeNull();
+      expect(result.data.user).toBeDefined();
     });
   });
 

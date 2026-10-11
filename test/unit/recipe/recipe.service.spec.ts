@@ -2,16 +2,25 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { getModelToken } from "@nestjs/mongoose";
 import { RecipeService } from "../../../src/recipe/recipe.service";
 import { Recipe } from "../../../src/recipe/recipe.model";
+import { Meal } from "../../../src/meal/meal.model";
+import { User } from "../../../src/user/user.model";
+import { Plan } from "../../../src/plan/plan.model";
 import { NotFoundException } from "@nestjs/common";
 
 describe("RecipeService", () => {
   let service: RecipeService;
   let mockRecipeModel: any;
+  let mockMealModel: any;
+  let mockPlanModel: any;
+
+  /** `model.method(...).lean().exec()` resolving to `value`. */
+  const leanExec = (value: unknown) => ({
+    lean: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(value) }),
+  });
 
   const mockRecipe = {
     _id: "507f1f77bcf86cd799439011",
     mealName: "Grilled Chicken Salad",
-    title: "Mediterranean Grilled Chicken Salad",
     description: "A healthy Mediterranean-style salad",
     category: "lunch",
     servings: 2,
@@ -54,7 +63,6 @@ describe("RecipeService", () => {
       ...mockRecipe,
       _id: "507f1f77bcf86cd799439012",
       mealName: "Avocado Toast",
-      title: "Classic Avocado Toast",
       category: "breakfast",
     },
   ];
@@ -66,7 +74,14 @@ describe("RecipeService", () => {
       findOne: jest.fn(),
       findByIdAndUpdate: jest.fn(),
       findByIdAndDelete: jest.fn(),
+      findOneAndUpdate: jest.fn().mockResolvedValue(null),
       create: jest.fn(),
+    };
+    mockMealModel = { findById: jest.fn().mockReturnValue(leanExec(null)) };
+    mockPlanModel = {
+      findOne: jest.fn().mockReturnValue({
+        select: jest.fn().mockReturnValue(leanExec(null)),
+      }),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -76,6 +91,9 @@ describe("RecipeService", () => {
           provide: getModelToken(Recipe.name),
           useValue: mockRecipeModel,
         },
+        { provide: getModelToken(Meal.name), useValue: mockMealModel },
+        { provide: getModelToken(User.name), useValue: { findById: jest.fn() } },
+        { provide: getModelToken(Plan.name), useValue: mockPlanModel },
       ],
     }).compile();
 
@@ -162,32 +180,50 @@ describe("RecipeService", () => {
     });
   });
 
-  describe("findByMealName", () => {
-    it("should return a recipe by meal name", async () => {
-      mockRecipeModel.findOne.mockReturnValue({
-        lean: jest.fn().mockReturnValue({
-          exec: jest.fn().mockResolvedValue(mockRecipe),
-        }),
-      });
-      mockRecipeModel.findByIdAndUpdate.mockResolvedValue(mockRecipe);
+  describe("findByMealId", () => {
+    const LIBRARY_MEAL_ID = "507f1f77bcf86cd799439099";
 
-      const result = await service.findByMealName("Grilled Chicken", "en");
+    it("returns the stored recipe for the meal and counts the use", async () => {
+      mockRecipeModel.findOne.mockReturnValue(leanExec(mockRecipe));
+
+      const result = await service.findByMealId(LIBRARY_MEAL_ID, "user123", "en");
 
       expect(result.success).toBe(true);
       expect(result.data).toEqual(mockRecipe);
+      expect(mockRecipeModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { mealId: LIBRARY_MEAL_ID },
+        expect.objectContaining({ $inc: { usageCount: 1 } }),
+      );
     });
 
-    it("should return null data if recipe not found", async () => {
-      mockRecipeModel.findOne.mockReturnValue({
-        lean: jest.fn().mockReturnValue({
-          exec: jest.fn().mockResolvedValue(null),
-        }),
-      });
+    it("throws NotFoundException when the meal is in neither the library nor the plan", async () => {
+      mockRecipeModel.findOne.mockReturnValue(leanExec(null));
 
-      const result = await service.findByMealName("Nonexistent", "en");
+      await expect(
+        service.findByMealId("plan-meal-that-does-not-exist", "user123", "en"),
+      ).rejects.toThrow(NotFoundException);
+      // Only looked in the caller's plan.
+      expect(mockPlanModel.findOne).toHaveBeenCalledWith({ userId: "user123" });
+    });
 
-      expect(result.success).toBe(true);
-      expect(result.data).toBeNull();
+    it("reuses another meal's recipe for the same dish instead of generating", async () => {
+      const meal = {
+        _id: LIBRARY_MEAL_ID,
+        name: "Grilled Chicken Salad",
+        category: "lunch",
+        calories: 450,
+        ingredients: [["chicken breast", "200g"]],
+      };
+      mockRecipeModel.findOne
+        .mockReturnValueOnce(leanExec(null)) // nothing under this meal id yet
+        .mockReturnValueOnce(leanExec({ ...mockRecipe, mealId: "other-meal" }));
+      mockMealModel.findById.mockReturnValue(leanExec(meal));
+      mockRecipeModel.create.mockImplementation(async (doc: any) => doc);
+
+      const result = await service.findByMealId(LIBRARY_MEAL_ID, "user123", "en");
+
+      expect(result.data.mealId).toBe(LIBRARY_MEAL_ID);
+      expect(result.data.mealName).toBe(mockRecipe.mealName);
     });
   });
 
@@ -195,7 +231,6 @@ describe("RecipeService", () => {
     it("should create a new recipe", async () => {
       const newRecipeData = {
         mealName: "New Recipe",
-        title: "New Recipe Title",
         category: "dinner",
         servings: 4,
         prepTime: 20,
@@ -221,7 +256,7 @@ describe("RecipeService", () => {
 
   describe("update", () => {
     it("should update an existing recipe", async () => {
-      const updateData = { title: "Updated Title" };
+      const updateData = { description: "Updated description" };
       const updatedRecipe = { ...mockRecipe, ...updateData };
 
       mockRecipeModel.findByIdAndUpdate.mockReturnValue({
@@ -236,7 +271,7 @@ describe("RecipeService", () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.data.title).toBe("Updated Title");
+      expect(result.data.description).toBe("Updated description");
     });
 
     it("should throw NotFoundException if recipe not found", async () => {
@@ -247,7 +282,7 @@ describe("RecipeService", () => {
       });
 
       await expect(
-        service.update("nonexistent", { title: "Test" })
+        service.update("nonexistent", { description: "Test" })
       ).rejects.toThrow(NotFoundException);
     });
   });

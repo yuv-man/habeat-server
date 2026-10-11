@@ -2,6 +2,11 @@ import { Test, TestingModule } from "@nestjs/testing";
 import { RecipeController } from "../../../src/recipe/recipe.controller";
 import { RecipeService } from "../../../src/recipe/recipe.service";
 import { AuthGuard } from "../../../src/auth/auth.guard";
+import { ForbiddenException } from "@nestjs/common";
+
+const asUser = (id: string, role = "user") => ({ user: { _id: id, role } });
+const user = asUser("user123");
+const admin = asUser("admin1", "admin");
 
 // Mock AuthGuard to bypass authentication in tests
 const mockAuthGuard = {
@@ -15,7 +20,6 @@ describe("RecipeController", () => {
   const mockRecipe = {
     _id: "507f1f77bcf86cd799439011",
     mealName: "Grilled Chicken Salad",
-    title: "Mediterranean Grilled Chicken Salad",
     category: "lunch",
     servings: 2,
     prepTime: 15,
@@ -35,7 +39,7 @@ describe("RecipeController", () => {
     mockRecipeService = {
       findAll: jest.fn(),
       findById: jest.fn(),
-      findByMealName: jest.fn(),
+      findByMealId: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
       delete: jest.fn(),
@@ -128,18 +132,22 @@ describe("RecipeController", () => {
     });
   });
 
-  describe("findByMealName", () => {
-    it("should return recipe by meal name", async () => {
+  describe("findByMealId", () => {
+    it("returns the recipe for a meal in the caller's own plan", async () => {
       const expectedResult = { success: true, data: mockRecipe };
-      mockRecipeService.findByMealName.mockResolvedValue(expectedResult);
+      mockRecipeService.findByMealId.mockResolvedValue(expectedResult);
 
-      const result = await controller.findByMealName("Grilled Chicken", "en");
+      const result = await controller.findByMealId(user, "user123", "meal1", "en");
 
       expect(result).toEqual(expectedResult);
-      expect(mockRecipeService.findByMealName).toHaveBeenCalledWith(
-        "Grilled Chicken",
-        "en"
-      );
+      expect(mockRecipeService.findByMealId).toHaveBeenCalledWith("meal1", "user123", "en");
+    });
+
+    it("refuses to look inside another user's plan", () => {
+      expect(() =>
+        controller.findByMealId(user, "someone-else", "meal1", "en"),
+      ).toThrow(ForbiddenException);
+      expect(mockRecipeService.findByMealId).not.toHaveBeenCalled();
     });
   });
 
@@ -161,7 +169,6 @@ describe("RecipeController", () => {
     it("should create a new recipe", async () => {
       const newRecipe = {
         mealName: "New Recipe",
-        title: "New Recipe Title",
         category: "dinner",
       };
       const expectedResult = {
@@ -170,7 +177,7 @@ describe("RecipeController", () => {
       };
       mockRecipeService.create.mockResolvedValue(expectedResult);
 
-      const result = await controller.create(newRecipe);
+      const result = await controller.create(admin, newRecipe);
 
       expect(result).toEqual(expectedResult);
       expect(mockRecipeService.create).toHaveBeenCalledWith(newRecipe);
@@ -179,7 +186,7 @@ describe("RecipeController", () => {
 
   describe("update", () => {
     it("should update a recipe", async () => {
-      const updateData = { title: "Updated Title" };
+      const updateData = { description: "Updated" };
       const expectedResult = {
         success: true,
         data: { ...mockRecipe, ...updateData },
@@ -187,6 +194,7 @@ describe("RecipeController", () => {
       mockRecipeService.update.mockResolvedValue(expectedResult);
 
       const result = await controller.update(
+        admin,
         "507f1f77bcf86cd799439011",
         updateData
       );
@@ -207,12 +215,26 @@ describe("RecipeController", () => {
       };
       mockRecipeService.delete.mockResolvedValue(expectedResult);
 
-      const result = await controller.delete("507f1f77bcf86cd799439011");
+      const result = await controller.delete(admin, "507f1f77bcf86cd799439011");
 
       expect(result).toEqual(expectedResult);
       expect(mockRecipeService.delete).toHaveBeenCalledWith(
         "507f1f77bcf86cd799439011"
       );
+    });
+  });
+
+  describe("shared recipes are admin-only to change", () => {
+    // A recipe is reused by every user with the same dish; one user editing
+    // or deleting it changes it for all of them.
+    it("refuses create, update and delete from a regular user", () => {
+      expect(() => controller.create(user, {})).toThrow(ForbiddenException);
+      expect(() => controller.update(user, "r1", {})).toThrow(ForbiddenException);
+      expect(() => controller.delete(user, "r1")).toThrow(ForbiddenException);
+
+      expect(mockRecipeService.create).not.toHaveBeenCalled();
+      expect(mockRecipeService.update).not.toHaveBeenCalled();
+      expect(mockRecipeService.delete).not.toHaveBeenCalled();
     });
   });
 });

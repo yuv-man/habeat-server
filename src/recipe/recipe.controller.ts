@@ -8,6 +8,8 @@ import {
   Param,
   Query,
   UseGuards,
+  Request,
+  ForbiddenException,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -20,6 +22,14 @@ import {
 } from "@nestjs/swagger";
 import { RecipeService } from "./recipe.service";
 import { AuthGuard } from "../auth/auth.guard";
+import { isAdminRole } from "../enums/enumSubscription";
+import { resolveOwnUserId } from "../utils/ownership";
+
+/** Recipes are shared across users (see recipe-signature.ts): an edit or a
+ *  delete changes the recipe for everyone who has that dish. */
+const requireAdmin = (req: any) => {
+  if (!isAdminRole(req.user?.role)) throw new ForbiddenException("Admins only");
+};
 
 @ApiTags("recipes")
 @Controller("recipes")
@@ -83,16 +93,28 @@ export class RecipeController {
   }
 
   @Get(":userId/meal/:mealId")
-  @ApiOperation({ summary: "Get recipe by meal name" })
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth("JWT-auth")
+  @ApiOperation({ summary: "Get (or generate) the recipe for a meal in the caller's plan" })
   @ApiParam({ name: "mealId", description: "ID of the meal" })
   @ApiQuery({ name: "language", required: false, example: "en" })
   @ApiResponse({ status: 200, description: "Recipe retrieved successfully" })
+  @ApiResponse({ status: 403, description: "userId is not the caller" })
   findByMealId(
+    @Request() req: any,
     @Param("userId") userId: string,
     @Param("mealId") mealId: string,
     @Query("language") language?: string
   ) {
-    return this.recipeService.findByMealId(mealId, userId, language);
+    // The user comes from the token, never the URL. This used to be open:
+    // anyone could read meals out of another user's plan, and every unknown
+    // meal id cost an AI generation. The path keeps `:userId` so existing
+    // clients don't break, but it must name the caller.
+    return this.recipeService.findByMealId(
+      mealId,
+      resolveOwnUserId(req, userId),
+      language
+    );
   }
 
   @Get(":id")
@@ -107,7 +129,7 @@ export class RecipeController {
   @Post()
   @UseGuards(AuthGuard)
   @ApiBearerAuth("JWT-auth")
-  @ApiOperation({ summary: "Create a new recipe" })
+  @ApiOperation({ summary: "Create a new recipe (admins only)" })
   @ApiBody({
     schema: {
       type: "object",
@@ -158,29 +180,32 @@ export class RecipeController {
     },
   })
   @ApiResponse({ status: 201, description: "Recipe created successfully" })
-  create(@Body() recipeData: any) {
+  create(@Request() req: any, @Body() recipeData: any) {
+    requireAdmin(req);
     return this.recipeService.create(recipeData);
   }
 
   @Put(":id")
   @UseGuards(AuthGuard)
   @ApiBearerAuth("JWT-auth")
-  @ApiOperation({ summary: "Update a recipe" })
+  @ApiOperation({ summary: "Update a recipe (admins only)" })
   @ApiParam({ name: "id", description: "Recipe ID" })
   @ApiResponse({ status: 200, description: "Recipe updated successfully" })
   @ApiResponse({ status: 404, description: "Recipe not found" })
-  update(@Param("id") id: string, @Body() updateData: any) {
+  update(@Request() req: any, @Param("id") id: string, @Body() updateData: any) {
+    requireAdmin(req);
     return this.recipeService.update(id, updateData);
   }
 
   @Delete(":id")
   @UseGuards(AuthGuard)
   @ApiBearerAuth("JWT-auth")
-  @ApiOperation({ summary: "Delete a recipe" })
+  @ApiOperation({ summary: "Delete a recipe (admins only)" })
   @ApiParam({ name: "id", description: "Recipe ID" })
   @ApiResponse({ status: 200, description: "Recipe deleted successfully" })
   @ApiResponse({ status: 404, description: "Recipe not found" })
-  delete(@Param("id") id: string) {
+  delete(@Request() req: any, @Param("id") id: string) {
+    requireAdmin(req);
     return this.recipeService.delete(id);
   }
 }

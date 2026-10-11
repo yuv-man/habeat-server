@@ -4,6 +4,9 @@ import { ProgressService } from "../../../src/progress/progress.service";
 import { DailyProgress } from "../../../src/progress/progress.model";
 import { Plan } from "../../../src/plan/plan.model";
 import { Meal } from "../../../src/meal/meal.model";
+import { User } from "../../../src/user/user.model";
+import { EngagementService } from "../../../src/engagement/engagement.service";
+import { ChallengeService } from "../../../src/challenge/challenge.service";
 import { NotFoundException } from "@nestjs/common";
 
 describe("ProgressService", () => {
@@ -119,6 +122,18 @@ describe("ProgressService", () => {
     save: jest.fn().mockResolvedValue(true),
   };
 
+  /** A plan query that works both chained (`findOne().select().lean()`, as
+   *  getTodayProgress reads it) and awaited directly. */
+  const planQuery = (plan: any) => {
+    const query: any = {
+      select: jest.fn(() => query),
+      lean: jest.fn(() => query),
+      then: (resolve: any, reject: any) =>
+        Promise.resolve(plan).then(resolve, reject),
+    };
+    return query;
+  };
+
   beforeEach(async () => {
     mockProgressModel = {
       findOne: jest.fn(),
@@ -159,6 +174,37 @@ describe("ProgressService", () => {
           provide: getModelToken(Meal.name),
           useValue: mockMealModel,
         },
+        // Side effects of logging (learning profile, XP, challenges). None of
+        // these tests are about them, so they only need to not throw.
+        {
+          provide: getModelToken(User.name),
+          useValue: {
+            findById: jest.fn().mockReturnValue({
+              lean: jest.fn().mockReturnValue({
+                exec: jest.fn().mockResolvedValue(null),
+              }),
+            }),
+            updateOne: jest.fn().mockResolvedValue(null),
+            findByIdAndUpdate: jest.fn().mockResolvedValue(null),
+          },
+        },
+        {
+          provide: EngagementService,
+          useValue: {
+            onMealCompleted: jest.fn().mockResolvedValue(null),
+            checkDayCompletion: jest.fn().mockResolvedValue(null),
+          },
+        },
+        {
+          provide: ChallengeService,
+          useValue: {
+            onMealCompleted: jest.fn().mockResolvedValue(null),
+            onStreakUpdated: jest.fn().mockResolvedValue(null),
+            onProteinGoalReached: jest.fn().mockResolvedValue(null),
+            onWaterIntake: jest.fn().mockResolvedValue(null),
+            onWorkoutCompleted: jest.fn().mockResolvedValue(null),
+          },
+        },
       ],
     }).compile();
 
@@ -171,10 +217,8 @@ describe("ProgressService", () => {
 
   describe("getTodayProgress", () => {
     it("should return existing progress for today", async () => {
-      mockProgressModel.findOne.mockReturnValue({
-        populate: jest.fn().mockResolvedValue(mockProgress),
-      });
-      mockPlanModel.findOne.mockResolvedValue(mockPlanWithMacros);
+      mockProgressModel.findOne.mockResolvedValue(mockProgress);
+      mockPlanModel.findOne.mockReturnValue(planQuery(mockPlanWithMacros));
 
       const result = await service.getTodayProgress("user123");
 
@@ -184,10 +228,8 @@ describe("ProgressService", () => {
     });
 
     it("should create new progress with nutrition goals from plan if none exists", async () => {
-      mockProgressModel.findOne.mockReturnValue({
-        populate: jest.fn().mockResolvedValue(null),
-      });
-      mockPlanModel.findOne.mockResolvedValue(mockPlanWithMacros);
+      mockProgressModel.findOne.mockResolvedValue(null);
+      mockPlanModel.findOne.mockReturnValue(planQuery(mockPlanWithMacros));
       mockProgressModel.create.mockResolvedValue(mockProgress);
 
       const result = await service.getTodayProgress("user123");
@@ -208,10 +250,8 @@ describe("ProgressService", () => {
         ...mockPlanWithMacros,
         userMetrics: { tdee: 2000 }, // no dailyMacros
       };
-      mockProgressModel.findOne.mockReturnValue({
-        populate: jest.fn().mockResolvedValue(null),
-      });
-      mockPlanModel.findOne.mockResolvedValue(planWithoutMacros);
+      mockProgressModel.findOne.mockResolvedValue(null);
+      mockPlanModel.findOne.mockReturnValue(planQuery(planWithoutMacros));
       mockProgressModel.create.mockResolvedValue(mockProgress);
 
       await service.getTodayProgress("user123");
@@ -226,10 +266,9 @@ describe("ProgressService", () => {
   describe("getProgressByDate", () => {
     it("should return progress for specific date", async () => {
       mockProgressModel.findOne.mockReturnValue({
-        populate: jest.fn().mockReturnValue({
-          lean: jest.fn().mockResolvedValue(mockProgress),
-        }),
+        populate: jest.fn().mockResolvedValue(mockProgress),
       });
+      mockPlanModel.findOne.mockReturnValue(planQuery(mockPlanWithMacros));
 
       const result = await service.getProgressByDate("user123", "2024-12-07");
 
@@ -239,10 +278,9 @@ describe("ProgressService", () => {
 
     it("should throw NotFoundException if no progress for date", async () => {
       mockProgressModel.findOne.mockReturnValue({
-        populate: jest.fn().mockReturnValue({
-          lean: jest.fn().mockResolvedValue(null),
-        }),
+        populate: jest.fn().mockResolvedValue(null),
       });
+      mockPlanModel.findOne.mockReturnValue(planQuery(mockPlanWithMacros));
 
       await expect(
         service.getProgressByDate("user123", "2024-01-01")
@@ -686,10 +724,8 @@ describe("ProgressService", () => {
           },
         },
       };
-      mockProgressModel.findOne.mockReturnValue({
-        populate: jest.fn().mockResolvedValue(null),
-      });
-      mockPlanModel.findOne.mockResolvedValue(planWithDecimalMacros);
+      mockProgressModel.findOne.mockResolvedValue(null);
+      mockPlanModel.findOne.mockReturnValue(planQuery(planWithDecimalMacros));
       mockProgressModel.create.mockResolvedValue(mockProgress);
 
       await service.getTodayProgress("user123");
