@@ -257,6 +257,7 @@ export class PlanService {
       return {
         _id: existingMeal._id.toString(),
         name: existingMeal.name,
+        nameEn: existingMeal.nameEn || existingMeal.name,
         calories: existingMeal.calories,
         macros: existingMeal.macros || { protein: 0, carbs: 0, fat: 0 },
         category: existingMeal.category,
@@ -354,6 +355,7 @@ export class PlanService {
 
     const newMeal = await this.mealModel.create({
       name: generatedMeal.name || mealName,
+      nameEn: generatedMeal.nameEn || generatedMeal.name || mealName,
       calories: finalCalories,
       macros: finalMacros,
       category: category,
@@ -371,6 +373,7 @@ export class PlanService {
     return {
       _id: newMeal._id.toString(),
       name: newMeal.name,
+      nameEn: newMeal.nameEn || newMeal.name,
       calories: newMeal.calories,
       macros: newMeal.macros,
       category: newMeal.category as any,
@@ -1066,6 +1069,11 @@ export class PlanService {
         resolvedMeal = {
           _id: existingMeal._id.toString(),
           name: newMeal.name || existingMeal.name,
+          nameEn:
+            newMeal.nameEn ||
+            existingMeal.nameEn ||
+            newMeal.name ||
+            existingMeal.name,
           calories: newMeal.calories || existingMeal.calories,
           macros: newMeal.macros || existingMeal.macros,
           category: normalizedMealType,
@@ -1090,6 +1098,7 @@ export class PlanService {
 
         const savedMeal = await this.mealModel.create({
           name: newMeal.name,
+          nameEn: newMeal.nameEn || newMeal.name,
           calories: newMeal.calories,
           macros: newMeal.macros,
           category: normalizedMealType,
@@ -1105,6 +1114,7 @@ export class PlanService {
         resolvedMeal = {
           _id: savedMeal._id.toString(),
           name: savedMeal.name,
+          nameEn: savedMeal.nameEn || savedMeal.name,
           calories: savedMeal.calories,
           macros: savedMeal.macros,
           category: normalizedMealType,
@@ -1133,6 +1143,9 @@ export class PlanService {
     const mealData = {
       _id: getValidObjectId(resolvedMeal._id),
       name: resolvedMeal.name,
+      // Only used to pick a photo, but dropping it here took the photo away
+      // from every localized meal the moment it was swapped.
+      nameEn: resolvedMeal.nameEn || resolvedMeal.name,
       calories: Math.round(resolvedMeal.calories || 0),
       macros: {
         protein: Math.round(resolvedMeal.macros?.protein || 0),

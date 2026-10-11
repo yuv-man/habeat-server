@@ -7,6 +7,10 @@ export const DailyProgress = { name: "DailyProgress" };
 const mealSnapshotSchema = new Schema(
   {
     name: { type: String, required: true },
+    // English name, used only to pick the meal's photo. Without it the strict
+    // schema dropped it on save, and every localized meal on the daily tracker
+    // was matched by its Hebrew name — which matches no photo at all.
+    nameEn: { type: String, required: false },
     calories: { type: Number, required: true },
     macros: {
       protein: { type: Number, required: true },

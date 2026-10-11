@@ -17,6 +17,7 @@ const ingredientTupleSchema = new Schema(
 const embeddedMealSchema = new Schema(
   {
     name: { type: String, required: true },
+    nameEn: { type: String, required: false },
     calories: { type: Number, required: true },
     macros: {
       protein: { type: Number, required: true },
