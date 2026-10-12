@@ -72,9 +72,10 @@ const bump = (list: any[], name: string, extra: Record<string, unknown> = {}) =>
     Object.assign(existing, extra);
     return existing;
   }
-  const entry = { name, count: 1, ...extra };
-  list.push(entry);
-  return entry;
+  list.push({ name, count: 1, ...extra });
+  // A Mongoose array stores a cast copy of what is pushed; return that copy,
+  // or later changes to the entry never reach the database.
+  return list[list.length - 1];
 };
 
 const unbump = (list: any[], name: string): any[] => {

@@ -119,3 +119,22 @@ describe("forgetLearnedPreference", () => {
     expect(corrected.selectedMeals).toEqual([]);
   });
 });
+
+describe("on a real user document", () => {
+  // The cases above use plain arrays. A Mongoose array stores a cast copy of
+  // what is pushed, and a first "Don't like it" used to be written to the
+  // original — so it never reached the database.
+  const mongoose = require("mongoose");
+  const { UserSchema } = require("../../../src/user/user.model");
+  const UserDoc = mongoose.models.MealLearningSpecUser ?? mongoose.model("MealLearningSpecUser", UserSchema);
+
+  it("keeps a first 'Don't like it' and avoids the dish", () => {
+    const user = new UserDoc({ email: "x@test.dev", mealLearningProfile: {} });
+    user.mealLearningProfile = applyMealLearningEvents(user.mealLearningProfile, [
+      { type: "swap", name: "Chicken and rice", reason: "dont_like" },
+    ]);
+    const saved = user.toObject().mealLearningProfile;
+    expect(saved.swappedMeals[0]).toMatchObject({ name: "Chicken and rice", count: 1, dislikes: 1, unexplained: 0 });
+    expect(swapAvoidNames(saved)).toEqual(["Chicken and rice"]);
+  });
+});
