@@ -15,6 +15,7 @@
  * it as before.
  */
 import { DietaryConstraints, findMealViolations } from "../utils/dietary-constraints";
+import { findMealDislikes } from "../utils/ingredient-match";
 import { MealLabels } from "../meal/meal-labels";
 import { isLowCarbPath, MealSlot, PlannedDay } from "./meal-plan-prompt";
 
@@ -76,8 +77,7 @@ export const libraryMealFits = (
   const ratio = meal.calories / targetCalories;
   if (ratio < MIN_RATIO || ratio > MAX_RATIO) return "calories too far from the slot";
   if (findMealViolations(meal, opts.constraints).length) return "breaks a dietary constraint";
-  const text = [norm(meal.name), ...(meal.labels?.ingredientNames ?? [])].join(" | ");
-  if ((opts.dislikes ?? []).some((d) => d.trim() && text.includes(norm(d)))) return "contains a dislike";
+  if (findMealDislikes(meal, opts.dislikes ?? []).length) return "contains a dislike";
   if (isLowCarbPath(opts.path) && !meal.labels?.lowCarb) return "not low-carb";
   const prep = meal.labels?.prepMinutes ?? meal.prepTime;
   if (opts.maxPrepMinutes && prep && prep > opts.maxPrepMinutes) return "takes too long";

@@ -701,6 +701,8 @@ export class ProgressService {
         message: meal.done
           ? `${mealType} marked as completed`
           : `${mealType} marked as incomplete`,
+        /** For analytics: what was ticked, not just that something was. */
+        completedMeal: { done: !!meal.done, ownDish: !!(meal as any).fromRepertoire },
         engagement: engagementResult
           ? {
               xpAwarded: engagementResult.xpAwarded,

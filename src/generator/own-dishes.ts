@@ -222,6 +222,12 @@ const asMeal = (
   return meal;
 };
 
+/** A repertoire dish as a plan meal for `category`, at its own portion and with
+ *  no side — the form a swap option takes. Null when the dish has no numbers
+ *  yet (nutrition is filled in after the dish is added). */
+export const dishAsPlanMeal = (dish: PlannableDish, category: string): any | null =>
+  dish.usual?.nutritionPerServing ? asMeal(dish, { category }, 0, null) : null;
+
 /**
  * Replace a share of the week's mains with dishes the user actually cooks.
  * Spread through the week, no dish on consecutive days, none more often than

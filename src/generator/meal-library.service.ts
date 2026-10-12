@@ -8,6 +8,7 @@ import { LibrarySupply } from "./generate.service";
 import { MealSlot } from "./meal-plan-prompt";
 import { scheduleDailyAt } from "../behavior/behavior.schedule";
 import logger from "../utils/logger";
+import { swapAvoidNames } from "../utils/meal-learning";
 
 /** Labels are recomputed after the nightly analysis, when nothing is waiting. */
 const LABEL_HOUR = 4;
@@ -64,7 +65,7 @@ export class MealLibraryService implements OnModuleInit {
    * the picker; this only narrows the query.
    */
   async supplyFor(
-    user: { mealLearningProfile?: { swappedMeals?: { name: string }[] } },
+    user: { mealLearningProfile?: { swappedMeals?: { name: string; count: number; dislikes?: number; unexplained?: number }[] } },
     activeSlots: MealSlot[],
     recentMeals: string[] = [],
   ): Promise<LibrarySupply> {
@@ -81,7 +82,8 @@ export class MealLibraryService implements OnModuleInit {
       .lean()
       .exec()) as any[];
 
-    const swapped = (user.mealLearningProfile?.swappedMeals ?? []).map((m) => m.name);
+    // Not every swapped meal: one "no time tonight" is not a verdict on the dish.
+    const swapped = swapAvoidNames(user.mealLearningProfile);
     return {
       candidates: candidates.map(
         (m): LibraryMeal => ({

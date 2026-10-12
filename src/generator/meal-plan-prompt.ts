@@ -35,6 +35,12 @@ import {
   CookingLevel,
   prepCeilingFor,
 } from "../constants/cookingLevel";
+import { findDislikesInText } from "../utils/ingredient-match";
+import {
+  learnedPreferencesSection,
+  resolveMealPreferences,
+  type PreferenceSource,
+} from "../preferences/meal-preferences";
 
 /** Used when the user has not told us how much cooking they are up for. */
 const DEFAULT_MAX_PREP_MINUTES = 45;
@@ -290,13 +296,14 @@ const proteinsForSlot = (
  * no plan, and the constraint block still guarantees it is safe to eat.
  */
 const withoutDislikedProteins = (proteins: string[], dislikes: string[]): string[] => {
-  const disliked = dislikes.map((d) => d.trim().toLowerCase()).filter(Boolean);
-  if (disliked.length === 0) return proteins;
+  if (!dislikes.some((d) => d?.trim())) return proteins;
 
-  const kept = proteins.filter((p) => {
-    const name = p.toLowerCase();
-    return !disliked.some((d) => name === d || name.includes(d) || d.includes(name));
-  });
+  const kept = proteins.filter(
+    (p) =>
+      findDislikesInText(p, dislikes).length === 0 &&
+      // "Chicken thighs" disliked still rules out the rotation's "chicken".
+      !dislikes.some((d) => findDislikesInText(d, [p]).length > 0),
+  );
 
   return kept.length >= 2 ? kept : proteins;
 };
@@ -700,6 +707,10 @@ export interface WeeklyPromptInput {
     /** How much cooking the user says they'll do. Sets the prep ceiling and the
      *  techniques the plan may assume. */
     cookingLevel?: CookingLevel;
+    dietaryRestrictions?: string[];
+    allergies?: string[];
+    /** What they ate, chose and turned down (preferences/meal-preferences.ts). */
+    mealLearningProfile?: PreferenceSource["mealLearningProfile"];
   };
   skeleton: PlannedDay[];
   constraints: DietaryConstraints;
@@ -872,6 +883,12 @@ export const buildWeeklyPlanPrompt = (input: WeeklyPromptInput): string => {
         .join("\n")}`,
     );
   }
+
+  // What worked and what didn't, from the user's own choices. This was
+  // collected all along and never reached the generator, so a plan could only
+  // ever learn what to stop serving, never what to bring back.
+  const learned = learnedPreferencesSection(resolveMealPreferences(userData));
+  if (learned) sections.push(learned);
 
   if (recentMeals.length) {
     sections.push(

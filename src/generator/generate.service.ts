@@ -60,6 +60,7 @@ import {
   pickLibraryMeals,
   slotKey,
 } from "./library-picks";
+import { preferWithoutDislikes } from "./dislike-enforcement";
 import { prepCeilingFor } from "../constants/cookingLevel";
 import { weeklyWorkoutDays } from "../utils/workout-schedule";
 import { rebalanceDayCalories } from "./calorie-balance";
@@ -1021,66 +1022,73 @@ const generateMealPlanWithGemini = async (
     `[Gemini] Successfully generated ${weeklyPlanArray.length}/${datesToGenerate.length} days in ${elapsedSec}s`,
   );
 
-  // Verify the model actually honoured the hard dietary constraints.
-  weeklyPlanArray = await enforceDietaryConstraints(
-    weeklyPlanArray,
-    constraints,
-    "Gemini",
-    async (violatingDates, repairNote) => {
-      const repairDays = allDaysData.filter((d) => violatingDates.includes(d.dateStr));
-      if (repairDays.length === 0) return null;
+  // Rewrites the given days with a note on what was wrong. Shared by the hard
+  // constraint check and the dislike check below.
+  const regenerateDays = async (violatingDates: string[], repairNote: string): Promise<any[] | null> => {
+    const repairDays = allDaysData.filter((d) => violatingDates.includes(d.dateStr));
+    if (repairDays.length === 0) return null;
 
-      // Re-seed the repair so it cannot re-roll the same forms that just failed.
-      const repairSkeleton = buildMenuSkeleton(
-        repairDays,
-        constraints,
-        targetCalories,
-        planSeed(
-          String((userData as any)._id ?? "anon"),
-          getLocalDateKey(weekStartDate),
-          "repair",
-        ),
-        userData.dislikes,
-        activeSlots,
-        userData.path,
-        favourites,
-        macros,
+    // Re-seed the repair so it cannot re-roll the same forms that just failed.
+    const repairSkeleton = buildMenuSkeleton(
+      repairDays,
+      constraints,
+      targetCalories,
+      planSeed(
+        String((userData as any)._id ?? "anon"),
+        getLocalDateKey(weekStartDate),
+        "repair",
+      ),
+      userData.dislikes,
+      activeSlots,
+      userData.path,
+      favourites,
+      macros,
+    );
+
+    const repairPrompt = buildWeeklyPlanPrompt({
+      userData,
+      skeleton: repairSkeleton,
+      constraints,
+      targetCalories,
+      macros,
+      recentMeals,
+      ownDishes,
+      styleNote: goalContextStr,
+      moodContext,
+      behaviourContext,
+      ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
+      repairNote,
+      language,
+      fastingContext,
+    });
+
+    try {
+      return await generateMultiDayPlan(
+        apiKey,
+        candidateModels,
+        repairPrompt,
+        "DietaryRepair",
+        2,
+        MULTI_DAY_TIMEOUT_MS,
+        MEAL_PLAN_SYSTEM_INSTRUCTION,
+        outputTokenBudget(repairDays.length),
       );
+    } catch (err) {
+      logger.error(`[Gemini] Dietary repair request failed: ${getErrorMessage(err)}`);
+      return null;
+    }
+  };
 
-      const repairPrompt = buildWeeklyPlanPrompt({
-        userData,
-        skeleton: repairSkeleton,
-        constraints,
-        targetCalories,
-        macros,
-        recentMeals,
-        ownDishes,
-        styleNote: goalContextStr,
-        moodContext,
-        behaviourContext,
-        ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
-        repairNote,
-        language,
-        fastingContext,
-      });
-
-      try {
-        return await generateMultiDayPlan(
-          apiKey,
-          candidateModels,
-          repairPrompt,
-          "DietaryRepair",
-          2,
-          MULTI_DAY_TIMEOUT_MS,
-          MEAL_PLAN_SYSTEM_INSTRUCTION,
-          outputTokenBudget(repairDays.length),
-        );
-      } catch (err) {
-        logger.error(`[Gemini] Dietary repair request failed: ${getErrorMessage(err)}`);
-        return null;
-      }
-    },
-  );
+  weeklyPlanArray = await enforceDietaryConstraints(weeklyPlanArray, constraints, "Gemini", regenerateDays);
+  // Then what the user dislikes: swapped for a library meal where one fits.
+  weeklyPlanArray = preferWithoutDislikes({
+    days: weeklyPlanArray,
+    dislikes: userData.dislikes ?? [],
+    constraints,
+    context: "Gemini",
+    candidates: library?.candidates,
+    path: userData.path,
+  });
 
   weeklyPlanArray = applyCalorieBalance(weeklyPlanArray, targetCalories, activeSlots, "Gemini");
 
@@ -1409,41 +1417,46 @@ const generateMealPlanWithOpenRouter = async (
 
   // Small free-tier models are the most likely to drift off a restriction, so
   // the same verification runs here before anything reaches the user.
-  const verifiedDays = await enforceDietaryConstraints(
-    allDayResults,
+  const regenerateDays = async (violatingDates: string[], repairNote: string): Promise<any[] | null> => {
+    const repairDays = allDaysData.filter((d) => violatingDates.includes(d.dateStr));
+    if (repairDays.length === 0) return null;
+
+    const repairSkeleton = buildMenuSkeleton(
+      repairDays,
+      constraints,
+      targetCalories,
+      planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate), "repair"),
+      userData.dislikes,
+      activeSlots,
+      userData.path,
+      favourites,
+      macros,
+    );
+
+    const repairPrompt = buildWeeklyPlanPrompt({
+      userData, skeleton: repairSkeleton, constraints, targetCalories, macros,
+      recentMeals, ownDishes, styleNote: goalContextStr, moodContext, behaviourContext,
+      ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
+      repairNote, language, fastingContext,
+    });
+
+    const repaired = await runOpenRouterPrompt(
+      repairPrompt,
+      "dietary repair",
+      repairDays.length,
+    );
+    return repaired.length > 0 ? repaired : null;
+  };
+
+  const constrainedDays = await enforceDietaryConstraints(allDayResults, constraints, "OpenRouter", regenerateDays);
+  const verifiedDays = preferWithoutDislikes({
+    days: constrainedDays,
+    dislikes: userData.dislikes ?? [],
     constraints,
-    "OpenRouter",
-    async (violatingDates, repairNote) => {
-      const repairDays = allDaysData.filter((d) => violatingDates.includes(d.dateStr));
-      if (repairDays.length === 0) return null;
-
-      const repairSkeleton = buildMenuSkeleton(
-        repairDays,
-        constraints,
-        targetCalories,
-        planSeed(String((userData as any)._id ?? "anon"), getLocalDateKey(weekStartDate), "repair"),
-        userData.dislikes,
-        activeSlots,
-        userData.path,
-        favourites,
-        macros,
-      );
-
-      const repairPrompt = buildWeeklyPlanPrompt({
-        userData, skeleton: repairSkeleton, constraints, targetCalories, macros,
-        recentMeals, ownDishes, styleNote: goalContextStr, moodContext, behaviourContext,
-        ...(behaviourMaxPrepMinutes ? { maxPrepMinutes: behaviourMaxPrepMinutes } : {}),
-        repairNote, language, fastingContext,
-      });
-
-      const repaired = await runOpenRouterPrompt(
-        repairPrompt,
-        "dietary repair",
-        repairDays.length,
-      );
-      return repaired.length > 0 ? repaired : null;
-    },
-  );
+    context: "OpenRouter",
+    candidates: library?.candidates,
+    path: userData.path,
+  });
 
   const parsedResponse = {
     weeklyPlan: applyCalorieBalance(verifiedDays, targetCalories, activeSlots, "OpenRouter"),
@@ -1700,56 +1713,6 @@ const PLAN_TEMPLATE_STYLES: Record<string, string> = {
 - Zero food guilt approach
 - Comfort food with better nutritional balance
 - Simple cooking methods, no exotic ingredients`,
-};
-
-const buildLearningProfileSection = (userData: IUserData): string => {
-  const profile = (userData as any).mealLearningProfile;
-  if (!profile) return "";
-
-  const completed: Array<{ name: string; count: number }> = profile.completedMeals || [];
-  const swapped: Array<{ name: string; count: number }> = profile.swappedMeals || [];
-  const scores: Record<string, number> =
-    profile.cuisineScores instanceof Map
-      ? Object.fromEntries(profile.cuisineScores)
-      : profile.cuisineScores || {};
-
-  const hasData =
-    completed.length > 0 ||
-    swapped.length > 0 ||
-    Object.keys(scores).length > 0;
-
-  if (!hasData) return "";
-
-  const topCompleted = [...completed]
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 5)
-    .map((m) => m.name)
-    .join(", ");
-
-  const topSwapped = [...swapped]
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 5)
-    .map((m) => m.name)
-    .join(", ");
-
-  const topCuisines = Object.entries(scores)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 5)
-    .map(([c, s]) => `${c}: ${s.toFixed(1)}`)
-    .join(", ");
-
-  return `
-LEARNED PREFERENCES (from actual usage — treat as strong signals):
-- Enjoyed meals (completed regularly): ${topCompleted || "none yet"}
-- Meals to avoid (frequently swapped): ${topSwapped || "none yet"}
-- Cuisine affinity: ${topCuisines || "none yet"}
-
-Rules:
-- Never suggest a meal from the avoid list.
-- Occasionally include meals similar to the enjoyed list (not a copy, a variation).
-- Weight cuisine affinity scores alongside stated preferences — higher score = more inspired by that cuisine.
-- Avoid list is a hard constraint. Enjoy list is a soft suggestion.
-`;
 };
 
 // Builds the week's date/workout schedule shared by every meal-plan generation

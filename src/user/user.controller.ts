@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Put,
+  Post,
   Delete,
   Body,
   Param,
@@ -21,6 +22,7 @@ import { UserService } from "./user.service";
 import { AuthGuard } from "../auth/auth.guard";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { resolveOwnUserId } from "../utils/ownership";
+import { ForgetPreferenceDto } from "./dto/forget-preference.dto";
 
 @ApiTags("users")
 @Controller("users")
@@ -80,6 +82,28 @@ export class UserController {
       throw new ForbiddenException("Access denied");
     }
     return this.userService.delete(id);
+  }
+
+  @Get(":userId/learned-preferences")
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth("JWT-auth")
+  @ApiOperation({ summary: "What Habeat has inferred from the user's meal choices" })
+  @ApiParam({ name: "userId", description: "User ID or 'me' for current user" })
+  getLearnedPreferences(@Param("userId") userId: string, @Request() req) {
+    return this.userService.getLearnedPreferences(resolveOwnUserId(req, userId));
+  }
+
+  @Post(":userId/learned-preferences/forget")
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth("JWT-auth")
+  @ApiOperation({ summary: "Correct an inferred preference (\"I do want this\" / \"Not really\")" })
+  @ApiParam({ name: "userId", description: "User ID or 'me' for current user" })
+  forgetLearnedPreference(
+    @Param("userId") userId: string,
+    @Body() body: ForgetPreferenceDto,
+    @Request() req
+  ) {
+    return this.userService.forgetLearnedPreference(resolveOwnUserId(req, userId), body.kind, body.name);
   }
 
   @Get(":userId/favorite-meals")

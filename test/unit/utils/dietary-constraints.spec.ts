@@ -233,3 +233,57 @@ describe("buildDietaryConstraintBlock", () => {
     expect(block).toContain("Tofu");
   });
 });
+
+describe("allergies rule out their whole group", () => {
+  // Allergies used to be matched only as the word the user picked: a
+  // "Shellfish" allergy blocked the word "shellfish" and let shrimp through.
+  const blocks = (allergy: string, ingredient: string) =>
+    findMealViolations(
+      { name: "Test meal", ingredients: [[ingredient, "100 g"]] },
+      resolveDietaryConstraints({ allergies: [allergy] }),
+    ).length > 0;
+
+  const mustBlock: Array<[string, string]> = [
+    ["Shellfish", "shrimp"], ["Shellfish", "crab"], ["Shellfish", "mussels"],
+    ["Fish", "salmon"], ["Fish", "fish sauce"],
+    ["Nuts", "almonds"], ["Nuts", "cashew"], ["Nuts", "almond butter"],
+    ["Peanuts", "peanut"], ["Peanuts", "satay sauce"],
+    ["Dairy", "milk"], ["Dairy", "cheddar cheese"], ["Dairy", "greek yogurt"],
+    ["Eggs", "egg"], ["Eggs", "mayonnaise"],
+    ["Gluten", "bread"], ["Wheat", "flour"],
+    ["Soy", "tofu"], ["Soy", "soy sauce"], ["Soy", "edamame"],
+    ["Sesame", "tahini"], ["Corn", "corn tortilla"], ["Mustard", "dijon"],
+    ["Celery", "celeriac"], ["Sulfites", "sulfites"], ["Lupin", "lupin flour"],
+  ];
+  it.each(mustBlock)("%s allergy blocks %s", (allergy, ingredient) => {
+    expect(blocks(allergy, ingredient)).toBe(true);
+  });
+
+  const mustAllow: Array<[string, string]> = [
+    ["Shellfish", "salmon"], ["Fish", "shrimp"], ["Dairy", "almond milk"],
+    ["Dairy", "peanut butter"], ["Eggs", "eggplant"], ["Nuts", "coconut milk"],
+    ["Nuts", "peanut butter"], ["Sulfites", "red wine"],
+  ];
+  it.each(mustAllow)("%s allergy still allows %s", (allergy, ingredient) => {
+    expect(blocks(allergy, ingredient)).toBe(false);
+  });
+
+  it("treats a nut-free diet as excluding peanuts too", () => {
+    const nutFree = resolveDietaryConstraints({ dietaryRestrictions: ["Nut-free"] });
+    expect(findMealViolations({ name: "Satay", ingredients: [["peanut butter", "30 g"]] }, nutFree).length).toBeGreaterThan(0);
+  });
+
+  it("reads 'tree nuts allergy' as tree nuts", () => {
+    expect(blocks("Tree nuts allergy", "walnuts")).toBe(true);
+    expect(blocks("Tree nuts", "peanut")).toBe(false);
+  });
+
+  it("still enforces an allergy it has no group for, by name", () => {
+    expect(blocks("Kiwi", "kiwi")).toBe(true);
+  });
+
+  it("tells the model about an allergy with the matching rule's wording", () => {
+    const c = resolveDietaryConstraints({ allergies: ["Shellfish"] });
+    expect(c.rules.map((r) => r.id)).toContain("shellfish-free");
+  });
+});

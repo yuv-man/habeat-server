@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Optional,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
@@ -55,7 +56,18 @@ import {
 import { PATH_WATER_INTAKE, PATH_WORKOUTS_GOAL } from "../enums/enumPaths";
 import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 import { estimateSnackFallback } from "./snack-fallback";
-import { updateMealLearningProfile } from "../utils/meal-learning";
+import { recordMealLearning, type SwapReason } from "../utils/meal-learning";
+import { AnalyticsService } from "../analytics/analytics.service";
+
+/** How a swap happened, beyond the meal itself. */
+export interface ReplaceMealOptions {
+  /** Why the planned meal didn't work, when the user said. */
+  reason?: SwapReason;
+  /** Which screen or feature made the swap, for analytics. */
+  via?: string;
+  /** Putting back the meal a previous swap replaced. */
+  undo?: boolean;
+}
 import { computeActiveSlots, slotCalorieShares } from "../generator/meal-plan-prompt";
 import { changeSide, SideChoiceError, sideChoicesFor } from "../generator/own-dishes";
 
@@ -71,7 +83,8 @@ export class PlanService {
     private progressModel: Model<IDailyProgress>,
     private generatorService: GeneratorService,
     private shoppingService: ShoppingService,
-    private usdaNutritionService: UsdaNutritionService
+    private usdaNutritionService: UsdaNutritionService,
+    @Optional() private analyticsService?: AnalyticsService
   ) {}
 
   // ============================================================================
@@ -1004,10 +1017,12 @@ export class PlanService {
       name: string;
       calories?: number;
       source?: MealSource;
+      fromRepertoire?: string;
     },
     snackIndex?: number,
     language: string = "en",
-    aiRules?: string
+    aiRules?: string,
+    options: ReplaceMealOptions = {}
   ) {
     const plan = await this.planModel.findById(planId);
     if (!plan) {
@@ -1056,7 +1071,20 @@ export class PlanService {
         newMeal.macros?.protein !== undefined &&
         Array.isArray(newMeal.ingredients));
 
-    if (hasCompleteData) {
+    if (options.undo && hasCompleteData && mongoose.Types.ObjectId.isValid(String(newMeal._id ?? ""))) {
+      // Undo puts back exactly the meal that was there, id included — a new
+      // id would detach it from the recipe already generated for it.
+      resolvedMeal = {
+        _id: String(newMeal._id),
+        name: newMeal.name,
+        nameEn: newMeal.nameEn || newMeal.name,
+        calories: newMeal.calories as number,
+        macros: newMeal.macros as IMeal["macros"],
+        category: normalizedMealType,
+        prepTime: parsePrepTime(newMeal.prepTime),
+        ingredients: (newMeal.ingredients ?? []) as MealIngredient[],
+      };
+    } else if (hasCompleteData) {
       // Client provided complete meal data - check if it exists in DB to get ID
       const existingMeal = await this.findMealByName(
         newMeal.name,
@@ -1160,6 +1188,8 @@ export class PlanService {
       // same Pad Thai is takeaway on Friday and home-cooked on Sunday, and the
       // catalogue meal has no business remembering either.
       ...(newMeal.source ? { source: newMeal.source } : {}),
+      // Their own dish keeps its "Your dish" label after a swap or an undo.
+      ...(newMeal.fromRepertoire ? { fromRepertoire: newMeal.fromRepertoire } : {}),
     };
 
     let oldMeal: any = null;
@@ -1212,15 +1242,40 @@ export class PlanService {
       dayPlan.totalFat = Math.round((dayPlan.totalFat || 0) + fatDiff);
     }
 
-    // Fire-and-forget: record the swapped-away meal in learning profile
+    // Fire-and-forget: what the swap says about the user's taste. One write,
+    // so the swap and the selection can't race each other. An undo takes both
+    // back — the user changed their mind, not their preferences.
     if (oldMeal?.name) {
-      updateMealLearningProfile(this.userModel, userId, oldMeal.name, "swap").catch(() => {});
+      recordMealLearning(
+        this.userModel,
+        userId,
+        options.undo
+          ? [
+              { type: "unswap", name: mealData.name },
+              { type: "unselect", name: oldMeal.name },
+            ]
+          : [
+              { type: "swap", name: oldMeal.name, reason: options.reason },
+              { type: "select", name: mealData.name },
+            ],
+      ).catch(() => {});
     }
 
     // Mark weeklyPlan as modified so Mongoose saves the nested changes
     plan.markModified("weeklyPlan");
     await plan.save();
     logger.info(`[replaceMeal] Plan saved with updated meal for ${dateKey}`);
+
+    // Every swap path ends here (swap modal, undo, chat), so one event covers
+    // them all. `reason` is null when the user didn't give one.
+    this.analyticsService?.capture(userId, "meal_swapped", {
+      meal_type: normalizedMealType,
+      via: options.via ?? "unknown",
+      reason: options.reason ?? null,
+      undo: !!options.undo,
+      to_source: newMeal.fromRepertoire ? "own" : isManualEntry ? "manual" : "suggested",
+      from_own_dish: !!oldMeal?.fromRepertoire,
+    });
 
     // ============================================================================
     // STEP 5: Update progress (if this is for the target date)

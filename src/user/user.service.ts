@@ -7,9 +7,10 @@ import logger from "../utils/logger";
 import mongoose from "mongoose";
 import { IUserData, IMeal } from "../types/interfaces";
 import { compressImage, isBase64Image } from "../utils/imageCompression";
-import { updateMealLearningProfile } from "../utils/meal-learning";
+import { forgetLearnedPreference, updateMealLearningProfile } from "../utils/meal-learning";
 import { RepertoireService } from "../repertoire/repertoire.service";
 import { BehaviorService } from "../behavior/behavior.service";
+import { resolveMealPreferences } from "../preferences/meal-preferences";
 
 @Injectable()
 export class UserService {
@@ -157,6 +158,23 @@ export class UserService {
       success: true,
       data: favoriteMeals,
     };
+  }
+
+  /** What we've inferred from the user's choices, so they can see and correct it. */
+  async getLearnedPreferences(userId: string) {
+    const user = await this.userModel.findById(userId).select("dietaryRestrictions allergies dislikes mealLearningProfile").lean().exec();
+    if (!user) throw new NotFoundException("User not found");
+    const prefs = resolveMealPreferences(user as any);
+    return { success: true, data: { enjoyed: prefs.enjoyed, avoided: prefs.avoidNames } };
+  }
+
+  async forgetLearnedPreference(userId: string, kind: "enjoyed" | "avoided", name: string) {
+    const user = await this.userModel.findById(userId);
+    if (!user) throw new NotFoundException("User not found");
+    (user as any).mealLearningProfile = forgetLearnedPreference((user as any).mealLearningProfile, kind, name);
+    user.markModified("mealLearningProfile");
+    await user.save();
+    return this.getLearnedPreferences(userId);
   }
 
   async updateMealLearningProfile(

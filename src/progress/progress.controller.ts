@@ -84,9 +84,14 @@ export class ProgressController {
       body.mealType,
       body.source
     );
+    const ticked = (result as any)?.data?.completedMeal;
     this.analyticsService.capture(resolvedUserId, "meal_completed", {
       mealType: body.mealType,
       source: body.source,
+      // false when the tick was taken back
+      done: ticked?.done ?? true,
+      // their own dish, vs one we suggested
+      own_dish: ticked?.ownDish ?? false,
     });
     return result;
   }

@@ -166,7 +166,9 @@ export class ChatService {
             payload.mealType,
             payload.proposedMeal,
             payload.snackIndex,
-            "en"
+            "en",
+            undefined,
+            { via: "chat" }
           );
 
           // Mark action as accepted

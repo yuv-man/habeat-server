@@ -96,6 +96,22 @@ const swappedMealEntrySchema = new Schema(
   {
     name: { type: String, required: true },
     count: { type: Number, default: 1 },
+    // No defaults on purpose: absent means the record predates swap reasons,
+    // and all of its `count` was unexplained (meal-learning.ts swapAvoidNames).
+    /** Swaps where the user said "Don't like it". */
+    dislikes: { type: Number, required: false },
+    /** Swaps with no reason given. */
+    unexplained: { type: Number, required: false },
+  },
+  { _id: false }
+);
+
+/** A meal the user picked as a replacement — a positive signal. */
+const selectedMealEntrySchema = new Schema(
+  {
+    name: { type: String, required: true },
+    count: { type: Number, default: 1 },
+    lastSelected: { type: Date, default: Date.now },
   },
   { _id: false }
 );
@@ -107,6 +123,11 @@ const swapEventSchema = new Schema(
   {
     name: { type: String, required: true },
     at: { type: Date, default: Date.now },
+    reason: {
+      type: String,
+      enum: ["no_time", "missing_ingredients", "not_in_mood", "dont_like"],
+      required: false,
+    },
   },
   { _id: false }
 );
@@ -115,6 +136,7 @@ const mealLearningProfileSchema = new Schema(
   {
     completedMeals: { type: [completedMealEntrySchema], default: [] },
     swappedMeals: { type: [swappedMealEntrySchema], default: [] },
+    selectedMeals: { type: [selectedMealEntrySchema], default: [] },
     /** Rolling window of recent swaps, newest last, capped in the writer. */
     recentSwaps: { type: [swapEventSchema], default: [] },
     cuisineScores: { type: Map, of: Number, default: new Map() },

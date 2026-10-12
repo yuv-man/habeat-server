@@ -8,7 +8,16 @@ import {
   IsObject,
   ValidateNested,
   IsArray,
+  IsIn,
+  IsBoolean,
 } from "class-validator";
+import { SWAP_REASONS, type SwapReason } from "../../utils/meal-learning";
+
+/** Where a swap came from. Free text would make the analytics unusable. */
+export const SWAP_VIAS = [
+  "swap_modal", "my_meals", "quicker", "favorites", "manual", "ai_suggestion",
+  "photo", "chat", "undo",
+] as const;
 import { Type } from "class-transformer";
 
 class MacrosDto {
@@ -64,6 +73,18 @@ class MealDto {
   @IsOptional()
   @IsEnum(["cooked", "ordered", "eaten-out"])
   source?: "cooked" | "ordered" | "eaten-out";
+
+  // Declared for the same reason as `source`: undeclared, the whitelist pipe
+  // drops them, and a swapped-in own dish lost its "Your dish" label.
+  @ApiProperty({ required: false, description: "English name, used to pick the meal's photo" })
+  @IsOptional()
+  @IsString()
+  nameEn?: string;
+
+  @ApiProperty({ required: false, description: "Repertoire dish this meal is, when it is the user's own" })
+  @IsOptional()
+  @IsString()
+  fromRepertoire?: string;
 }
 
 export class ReplaceMealDto {
@@ -110,4 +131,19 @@ export class ReplaceMealDto {
   @IsOptional()
   @IsNumber()
   snackIndex?: number;
+
+  @ApiProperty({ required: false, enum: SWAP_REASONS, description: "Why the planned meal didn't work" })
+  @IsOptional()
+  @IsIn(SWAP_REASONS as unknown as string[])
+  reason?: SwapReason;
+
+  @ApiProperty({ required: false, enum: SWAP_VIAS })
+  @IsOptional()
+  @IsIn(SWAP_VIAS as unknown as string[])
+  via?: (typeof SWAP_VIAS)[number];
+
+  @ApiProperty({ required: false, description: "Putting back the meal a previous swap replaced" })
+  @IsOptional()
+  @IsBoolean()
+  undo?: boolean;
 }

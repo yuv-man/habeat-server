@@ -105,7 +105,10 @@ export class PlanController {
       body.date,
       body.mealType,
       body.newMeal as IMeal & { source?: MealSource },
-      body.snackIndex
+      body.snackIndex,
+      "en",
+      undefined,
+      { reason: body.reason, via: body.via, undo: body.undo }
     );
   }
 

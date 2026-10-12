@@ -62,16 +62,77 @@ const GLUTEN = [
   "matzo", "pie crust", "batter", "biscuit",
 ];
 
+/** Tree nuts. Peanuts are a legume and a separate allergy. */
 const NUTS = [
-  "peanut", "almond", "cashew", "walnut", "pecan", "pistachio", "hazelnut",
+  "almond", "cashew", "walnut", "pecan", "pistachio", "hazelnut",
   "macadamia", "brazil nut", "pine nut", "nut butter", "nutella", "praline", "marzipan",
 ];
+
+const PEANUTS = ["peanut", "groundnut", "satay"];
 
 const PORK = ["pork", "bacon", "ham", "prosciutto", "pancetta", "lard", "gelatin", "chorizo", "salami", "pepperoni"];
 
 const SHELLFISH = [
   "shrimp", "prawn", "crab", "lobster", "clam", "mussel", "oyster",
   "scallop", "squid", "calamari", "octopus", "crayfish", "shellfish",
+];
+
+const FISH = SEAFOOD.filter((k) => !SHELLFISH.includes(k) && k !== "seafood");
+
+/**
+ * What each allergy actually rules out. Allergies used to be enforced only as
+ * the literal word the user picked, so the onboarding chip "Shellfish" blocked
+ * the word "shellfish" and nothing else — shrimp, crab and mussels went
+ * straight through, as did salmon for "Fish", almonds for "Nuts" and milk for
+ * "Dairy". Keys are the singular, lower-case allergy name.
+ */
+const ALLERGEN_KEYWORDS: Record<string, string[]> = {
+  shellfish: SHELLFISH,
+  crustacean: SHELLFISH,
+  seafood: SEAFOOD,
+  fish: FISH,
+  nut: NUTS,
+  "tree nut": NUTS,
+  peanut: PEANUTS,
+  dairy: DAIRY,
+  milk: DAIRY,
+  lactose: DAIRY,
+  egg: EGGS,
+  gluten: GLUTEN,
+  wheat: GLUTEN,
+  soy: ["soy", "soya", "soybean", "tofu", "tempeh", "edamame", "miso", "tamari", "soy sauce"],
+  sesame: ["sesame", "tahini", "halva", "halvah"],
+  corn: ["corn", "maize", "polenta", "cornmeal", "cornstarch", "cornflour", "grits"],
+  mustard: ["mustard", "dijon"],
+  celery: ["celery", "celeriac"],
+  sulfite: ["sulfite", "sulphite"],
+  sulphite: ["sulfite", "sulphite"],
+  lupin: ["lupin", "lupine"],
+};
+
+/** "Tree nuts allergy" → "tree nut". */
+const allergenKey = (allergy: string): string =>
+  allergy
+    .toLowerCase()
+    .trim()
+    .replace(/\s+(allergy|allergies|intolerance)$/, "")
+    .split(/\s+/)
+    .map((w, i, all) => (i === all.length - 1 ? singularizeWord(w) : w))
+    .join(" ");
+
+/** Hoisted copy of `singularize` below, for use while the tables are built. */
+function singularizeWord(word: string): string {
+  if (/(ss|us|is)$/.test(word)) return word;
+  if (/[^aeiou]ies$/.test(word)) return `${word.slice(0, -3)}y`;
+  if (/(s|x|z|ch|sh|o)es$/.test(word)) return word.slice(0, -2);
+  if (/[^s]s$/.test(word)) return word.slice(0, -1);
+  return word;
+}
+
+/** Every keyword an allergy rules out: its group, and always its own name. */
+export const allergenKeywords = (allergy: string): string[] => [
+  allergy,
+  ...(ALLERGEN_KEYWORDS[allergenKey(allergy)] ?? []),
 ];
 
 const PLANT_PROTEINS = [
@@ -164,10 +225,20 @@ export const DIETARY_RULES: DietaryRule[] = [
   {
     id: "nut-free",
     label: "Nut-free",
-    match: /nut[\s-]?free|nut allerg|peanut/i,
-    forbidden: NUTS,
+    // "Nut-free" as a diet means peanuts too; a nut *allergy* means tree nuts
+    // (ALLERGEN_KEYWORDS), and a peanut allergy has its own rule below.
+    match: /\bnut[\s-]?free/i,
+    forbidden: [...NUTS, ...PEANUTS],
     allowedProteins: [],
     promptRule: "NUT-FREE — NO peanuts, tree nuts, or nut butters of any kind.",
+  },
+  {
+    id: "peanut-free",
+    label: "Peanut-free",
+    match: /peanut/i,
+    forbidden: PEANUTS,
+    allowedProteins: [],
+    promptRule: "PEANUT-FREE — NO peanuts, peanut butter, peanut oil or satay.",
   },
   {
     id: "shellfish-free",
@@ -307,8 +378,10 @@ export const resolveDietaryConstraints = (user: {
   const rawRestrictions = (user.dietaryRestrictions || []).filter(Boolean).map(String);
   const allergies = (user.allergies || []).filter(Boolean).map(String);
 
+  // Allergies pick up a matching rule too, for its prompt text: an allergy to
+  // shellfish should read to the model as clearly as a "no shellfish" diet.
   const rules = DIETARY_RULES.filter((rule) =>
-    rawRestrictions.some((r) => rule.match.test(r)),
+    [...rawRestrictions, ...allergies].some((r) => rule.match.test(r)),
   );
 
   // Restriction strings that matched no known rule are still enforced literally.
@@ -320,7 +393,7 @@ export const resolveDietaryConstraints = (user: {
     new Set(
       [
         ...rules.flatMap((r) => r.forbidden),
-        ...allergies,
+        ...allergies.flatMap(allergenKeywords),
         ...unmatched,
       ]
         .map((k) => k.toLowerCase().trim())

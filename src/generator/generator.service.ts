@@ -21,6 +21,9 @@ import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 import { ShoppingService } from "../shopping/shopping.service";
 import { BrainService } from "../brain/brain.service";
 import logger from "../utils/logger";
+import { findMealDislikes } from "../utils/ingredient-match";
+import { resolveMealPreferences } from "../preferences/meal-preferences";
+import { buildMealOptions, type MealOption, type MealOptionsMode } from "./meal-options";
 import {
   IPlan,
   IUserData,
@@ -1764,6 +1767,142 @@ export class GeneratorService {
    * This is an atomic operation: generate + swap in one call for instant UX
    * Used by the "I'm Tired" button feature
    */
+  /**
+   * Alternatives for one planned meal, without changing anything — the user
+   * picks one and it is applied through the normal swap (plan.service
+   * replaceMeal), which is what makes Undo and the learning record work.
+   * Free: built from the user's own dishes, the shared library and, only when
+   * those leave fewer than two choices, one checked AI quick meal.
+   */
+  async getMealOptions(
+    userId: string,
+    planId: string,
+    date: string,
+    mealType: "breakfast" | "lunch" | "dinner" | "snack",
+    mode: MealOptionsMode,
+    snackIndex?: number
+  ): Promise<{
+    success: true;
+    data: { options: MealOption[]; current: { name: string; prepTime?: number } | null; latencyMs: number };
+  }> {
+    const started = Date.now();
+    const [user, plan] = await Promise.all([
+      this.userModel.findById(userId).lean().exec(),
+      this.planModel.findById(planId).lean().exec(),
+    ]);
+    if (!user) throw new NotFoundException("User not found");
+    if (!plan || String((plan as any).userId) !== String(userId)) {
+      throw new NotFoundException("Plan not found");
+    }
+    const day = ((plan as any).weeklyPlan || {})[date];
+    const current =
+      mealType === "snack"
+        ? day?.meals?.snacks?.[snackIndex ?? 0]
+        : day?.meals?.[mealType];
+
+    const prefs = resolveMealPreferences(user as any);
+    const [ownDishes, library] = await Promise.all([
+      this.repertoireService.plannableDishes(userId, 30).catch(() => []),
+      mode === "quicker"
+        ? this.mealLibrary.supplyFor(user as any, [mealType]).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    const options = buildMealOptions({
+      mode,
+      slot: mealType,
+      current: current ?? {},
+      ownDishes: ownDishes as any[],
+      libraryCandidates: library?.candidates ?? [],
+      constraints: prefs.constraints,
+      dislikes: prefs.dislikes,
+      avoidNames: library?.avoidNames ?? prefs.avoidNames,
+      path: (user as any).path,
+    });
+
+    // Only "quicker" may fall back to the model, and only for a main meal:
+    // "mine" is by definition the user's own list.
+    if (mode === "quicker" && options.length < 2 && mealType !== "snack") {
+      const targetCalories = current?.calories || 500;
+      try {
+        const meal = await this.generateCheckedQuickMeal(
+          user,
+          mealType,
+          targetCalories,
+          current?.macros || {
+            protein: Math.round((targetCalories * 0.25) / 4),
+            carbs: Math.round((targetCalories * 0.45) / 4),
+            fat: Math.round((targetCalories * 0.3) / 9),
+          }
+        );
+        options.push({
+          meal: { ...meal, category: mealType, done: false },
+          source: "ai",
+          reason: `${meal.prepTime ?? 10} min · made for you just now`,
+        });
+      } catch (err) {
+        // Fewer options is fine; an error here would hide the ones we have.
+        logger.warn(`[MealOptions] Quick AI meal unavailable: ${(err as Error)?.message ?? err}`);
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        options,
+        current: current ? { name: current.name, prepTime: current.prepTime } : null,
+        latencyMs: Date.now() - started,
+      },
+    };
+  }
+
+  /**
+   * A quick AI meal that has passed the same checks as a planned one.
+   *
+   * The model is told the user's allergies, restrictions and dislikes, but
+   * nothing checked what came back, so a quick meal could carry exactly what
+   * the planner would have rejected. One retry, then a clear error rather
+   * than an unsafe meal. Dislikes get the retry too, but are not a reason to
+   * fail.
+   */
+  async generateCheckedQuickMeal(
+    user: any,
+    mealType: "breakfast" | "lunch" | "dinner",
+    targetCalories: number,
+    targetMacros: { protein: number; carbs: number; fat: number },
+    language: string = "en"
+  ) {
+    const { constraints, dislikes } = resolveMealPreferences(user);
+    let problems: string[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const meal = await aiService.generateRescueMeal(
+        {
+          category: mealType,
+          targetCalories,
+          targetMacros,
+          dietaryRestrictions: [
+            ...(user?.dietaryRestrictions || []),
+            ...(user?.allergies || []),
+          ],
+          preferences: user?.foodPreferences || [],
+          dislikes,
+        },
+        language
+      );
+      problems = findMealViolations(meal, constraints);
+      const disliked = findMealDislikes(meal, dislikes);
+      // A dislike is worth one retry, not a failure: the last attempt is
+      // served if it only falls short there.
+      if (!problems.length && (!disliked.length || attempt === 1)) return meal;
+      logger.warn(
+        `[QuickMeal] Rejected "${meal?.name}" (attempt ${attempt + 1}) — contains ${[...problems, ...disliked].join(", ")}`
+      );
+    }
+    throw new BadRequestException(
+      "Couldn't find a quick meal that fits your preferences right now. Try again or pick one of your own meals."
+    );
+  }
+
   async generateAndSwapRescueMeal(
     userId: string,
     planId: string,
@@ -1821,18 +1960,11 @@ export class GeneratorService {
       `[RescueMeal] Generating rescue meal for ${mealType} on ${date} (target: ${targetCalories} kcal)`
     );
 
-    const rescueMeal = await aiService.generateRescueMeal(
-      {
-        category: mealType,
-        targetCalories,
-        targetMacros,
-        dietaryRestrictions: [
-          ...((user as any).dietaryRestrictions || []),
-          ...((user as any).allergies || []),
-        ],
-        preferences: (user as any).foodPreferences || [],
-        dislikes: (user as any).dislikes || [],
-      },
+    const rescueMeal = await this.generateCheckedQuickMeal(
+      user,
+      mealType,
+      targetCalories,
+      targetMacros,
       language
     );
 

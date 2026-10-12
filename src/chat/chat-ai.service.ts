@@ -21,6 +21,8 @@ import {
   getErrorMessage,
 } from "../utils/gemini-rate-limiter";
 import { BehaviorService } from "../behavior/behavior.service";
+import { screenProposedAction } from "./action-screen";
+import { learnedPreferencesSection, resolveMealPreferences } from "../preferences/meal-preferences";
 
 interface ChatContext {
   currentScreen?: string;
@@ -152,6 +154,12 @@ export class ChatAIService {
 - Food Preferences: ${user.foodPreferences?.length ? user.foodPreferences.join(", ") : "None"}
 - Dislikes: ${user.dislikes?.length ? user.dislikes.join(", ") : "None"}
 ${user.fastingHours ? `- Fasting: ${user.fastingHours} hours starting at ${user.fastingStartTime || "not specified"}` : ""}
+
+`;
+      // The same learned preferences the weekly planner uses, so a suggestion
+      // here agrees with next week's plan instead of contradicting it.
+      const learned = learnedPreferencesSection(resolveMealPreferences(user as any));
+      if (learned) prompt += `${learned}
 
 `;
     }
@@ -370,9 +378,16 @@ ${userMessage}
         .replace(/```action\s*\n?[\s\S]*?\n?```/g, "")
         .trim();
 
+      const screened = screenProposedAction(cleanMessage, action, user ?? {});
+      if (screened.blocked?.length) {
+        logger.warn(
+          `[ChatAI] Removed a proposed ${action?.type} that breaks the user's allergies or restrictions: ${screened.blocked.join(", ")}`,
+        );
+      }
+
       return {
-        message: cleanMessage,
-        action,
+        message: screened.message,
+        action: screened.action,
       };
     } catch (error) {
       logger.error(`[ChatAI] Error generating response: ${getErrorMessage(error)}`);

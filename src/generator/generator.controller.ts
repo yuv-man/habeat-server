@@ -7,6 +7,8 @@ import {
   Query,
   ParseBoolPipe,
   Param,
+  Get,
+  BadRequestException,
 } from "@nestjs/common";
 import {
   ApiTags,
@@ -16,6 +18,7 @@ import {
   ApiQuery,
 } from "@nestjs/swagger";
 import { ConfigService } from "@nestjs/config";
+import { randomUUID } from "crypto";
 import { GeneratorService } from "./generator.service";
 import { AnalyticsService } from "../analytics/analytics.service";
 import { AuthGuard } from "../auth/auth.guard";
@@ -219,6 +222,65 @@ Optional parameters that can be passed as query strings or in the request body. 
       count: body.mealCriteria?.numberOfSuggestions ?? 3,
     });
     return result;
+  }
+
+  @Get("meal-options/:userId/:planId")
+  // "quicker" can call the model when the library comes up short.
+  @Throttle({ default: { limit: 60, ttl: 3_600_000 } })
+  @ApiOperation({
+    summary: "Alternatives for a planned meal, without changing it",
+    description:
+      "mode=mine: the user's own dishes that suit the slot. mode=quicker: own dishes and library meals that take less time, plus one AI quick meal when fewer than two were found. Pick one and apply it with PUT /plan/:userId/meal-replace/:planId. Free for every tier.",
+  })
+  @ApiResponse({ status: 200, description: "Options, in the order to show them" })
+  async getMealOptions(
+    @Param("userId") userId: string,
+    @Param("planId") planId: string,
+    @Query("date") date: string,
+    @Query("mealType") mealType: string,
+    @Query("mode") mode: string,
+    @Query("snackIndex") snackIndex: string | undefined,
+    @Request() req
+  ) {
+    const ownUserId = resolveOwnUserId(req, userId);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date ?? "")) {
+      throw new BadRequestException("date must be YYYY-MM-DD");
+    }
+    const slot = mealType === "snacks" ? "snack" : mealType;
+    if (!["breakfast", "lunch", "dinner", "snack"].includes(slot)) {
+      throw new BadRequestException("mealType must be breakfast, lunch, dinner or snack");
+    }
+    if (mode !== "mine" && mode !== "quicker") {
+      throw new BadRequestException("mode must be mine or quicker");
+    }
+
+    // The client sends this back with how the request ended (picked or
+    // dismissed), so request → offer → outcome can be joined.
+    const requestId = randomUUID();
+    this.analyticsService.capture(ownUserId, "meal_help_requested", {
+      request_id: requestId,
+      entry: mode,
+      meal_type: slot,
+    });
+    const result = await this.generatorService.getMealOptions(
+      ownUserId,
+      planId,
+      date,
+      slot as "breakfast" | "lunch" | "dinner" | "snack",
+      mode,
+      snackIndex !== undefined ? Number(snackIndex) : undefined
+    );
+    const options = result.data.options;
+    this.analyticsService.capture(ownUserId, "meal_help_offered", {
+      request_id: requestId,
+      entry: mode,
+      meal_type: slot,
+      option_count: options.length,
+      sources: options.map((o) => o.source),
+      own_count: options.filter((o) => o.source === "own").length,
+      latency_ms: result.data.latencyMs,
+    });
+    return { ...result, data: { ...result.data, requestId } };
   }
 
   @Post("rescue-meal/:userId/:planId")

@@ -175,8 +175,13 @@ export interface IUserData {
 }
 
 export interface IMealLearningProfile {
+  /** Eaten (ticked off). */
   completedMeals: Array<{ name: string; count: number; lastEaten: Date }>;
-  swappedMeals: Array<{ name: string; count: number }>;
+  /** Replaced. `dislikes`/`unexplained` are absent on records from before swap reasons. */
+  swappedMeals: Array<{ name: string; count: number; dislikes?: number; unexplained?: number }>;
+  /** Picked as a replacement. */
+  selectedMeals?: Array<{ name: string; count: number; lastSelected: Date }>;
+  recentSwaps?: Array<{ name: string; at: Date; reason?: string }>;
   cuisineScores: Record<string, number>;
 }
 
