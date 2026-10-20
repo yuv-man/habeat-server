@@ -11,6 +11,7 @@ import { DailyProgress, DailyProgressSchema } from "../progress/progress.model";
 import { PlanModule } from "../plan/plan.module";
 import { ProgressModule } from "../progress/progress.module";
 import { BehaviorModule } from "../behavior/behavior.module";
+import { ChallengeProgramModule } from "../challenge-program/challenge-program.module";
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { BehaviorModule } from "../behavior/behavior.module";
     forwardRef(() => PlanModule),
     forwardRef(() => ProgressModule),
     forwardRef(() => BehaviorModule),
+    forwardRef(() => ChallengeProgramModule),
   ],
   controllers: [ChatController],
   providers: [ChatService, ChatAIService],

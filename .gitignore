@@ -46,3 +46,4 @@ CLAUDE.md
 **/.claude.json
 **/.last-cleanup
 **/.last-update-result.json
+.gstack/

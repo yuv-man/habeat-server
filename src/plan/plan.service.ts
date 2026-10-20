@@ -4,6 +4,8 @@ import {
   BadRequestException,
   ForbiddenException,
   Optional,
+  Inject,
+  forwardRef,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
@@ -58,6 +60,7 @@ import { UsdaNutritionService } from "../utils/usda-nutrition.service";
 import { estimateSnackFallback } from "./snack-fallback";
 import { recordMealLearning, type SwapReason } from "../utils/meal-learning";
 import { AnalyticsService } from "../analytics/analytics.service";
+import { EnrollmentService } from "../challenge-program/enrollment.service";
 
 /** How a swap happened, beyond the meal itself. */
 export interface ReplaceMealOptions {
@@ -84,7 +87,10 @@ export class PlanService {
     private generatorService: GeneratorService,
     private shoppingService: ShoppingService,
     private usdaNutritionService: UsdaNutritionService,
-    @Optional() private analyticsService?: AnalyticsService
+    @Optional() private analyticsService?: AnalyticsService,
+    @Optional()
+    @Inject(forwardRef(() => EnrollmentService))
+    private enrollmentService?: EnrollmentService
   ) {}
 
   // ============================================================================
@@ -1276,6 +1282,15 @@ export class PlanService {
       to_source: newMeal.fromRepertoire ? "own" : isManualEntry ? "manual" : "suggested",
       from_own_dish: !!oldMeal?.fromRepertoire,
     });
+
+    // A guided-challenge day may complete on a swap ("a swap you'd actually
+    // keep"). An undo is the user changing their mind, not a swap. Never throws.
+    if (!options.undo) {
+      await this.enrollmentService?.onMealEvent(userId, {
+        source: "swap",
+        mealName: mealData.name,
+      });
+    }
 
     // ============================================================================
     // STEP 5: Update progress (if this is for the target date)

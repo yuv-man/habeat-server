@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   Inject,
+  Optional,
   forwardRef,
 } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
@@ -13,6 +14,7 @@ import { Meal } from "../meal/meal.model";
 import { User } from "../user/user.model";
 import { EngagementService } from "../engagement/engagement.service";
 import { ChallengeService } from "../challenge/challenge.service";
+import { EnrollmentService } from "../challenge-program/enrollment.service";
 import { updateMealLearningProfile } from "../utils/meal-learning";
 import logger from "../utils/logger";
 import {
@@ -54,7 +56,10 @@ export class ProgressService {
     @Inject(forwardRef(() => EngagementService))
     private engagementService: EngagementService,
     @Inject(forwardRef(() => ChallengeService))
-    private challengeService: ChallengeService
+    private challengeService: ChallengeService,
+    @Optional()
+    @Inject(forwardRef(() => EnrollmentService))
+    private enrollmentService?: EnrollmentService
   ) {}
 
   /**
@@ -670,6 +675,13 @@ export class ProgressService {
 
         // Update challenge progress for meal completion
         await this.challengeService.onMealCompleted(userId, mealType, isBalanced);
+
+        // A guided-challenge day may complete on a logged meal (e.g. "cook
+        // your upgrade"). Never throws.
+        await this.enrollmentService?.onMealEvent(userId, {
+          source: "meal_log",
+          mealName: meal.name,
+        });
 
         // Update streak challenges with current streak
         if (engagementResult.streak > 0) {

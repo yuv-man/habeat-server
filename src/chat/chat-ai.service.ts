@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Inject, forwardRef } from "@nestjs/common";
+import { Injectable, NotFoundException, Inject, Optional, forwardRef } from "@nestjs/common";
 import { InjectModel } from "@nestjs/mongoose";
 import { Model } from "mongoose";
 import mongoose from "mongoose";
@@ -21,6 +21,7 @@ import {
   getErrorMessage,
 } from "../utils/gemini-rate-limiter";
 import { BehaviorService } from "../behavior/behavior.service";
+import { EnrollmentService } from "../challenge-program/enrollment.service";
 import { screenProposedAction } from "./action-screen";
 import { learnedPreferencesSection, resolveMealPreferences } from "../preferences/meal-preferences";
 
@@ -66,6 +67,9 @@ export class ChatAIService {
     private progressModel: Model<IDailyProgress>,
     @Inject(forwardRef(() => BehaviorService))
     private behaviorService: BehaviorService,
+    @Optional()
+    @Inject(forwardRef(() => EnrollmentService))
+    private enrollmentService?: EnrollmentService,
   ) {}
 
   /**
@@ -125,10 +129,11 @@ export class ChatAIService {
   ): string {
     const today = getLocalDateKey(new Date());
 
-    let prompt = `You are a friendly and knowledgeable nutrition assistant for the Habeat meal planning app.
+    let prompt = `You are a friendly and knowledgeable nutrition assistant and coach for the Habeat app. Many users follow a guided journey that builds steadier everyday eating habits; when they do, it's described below.
 
 ## Your Role:
 - Provide personalized nutrition advice based on the user's profile and goals
+- Support the user's guided journey: help with today's activity, and with what they're practicing, when they ask
 - Answer questions about nutrition, meals, and fitness
 - Suggest improvements to the user's meal plan when appropriate
 - Help users make healthier choices aligned with their goals
@@ -309,10 +314,11 @@ IMPORTANT:
 
     try {
       // Build context
-      const [{ user, plan, goals, todayProgress, todayMeals }, eatingProfile] =
+      const [{ user, plan, goals, todayProgress, todayMeals }, eatingProfile, journey] =
         await Promise.all([
           this.buildContext(userId),
           this.behaviorService.getProfile(userId),
+          this.enrollmentService?.coachSection(userId) ?? Promise.resolve(null),
         ]);
 
       // Generate system prompt
@@ -328,6 +334,8 @@ IMPORTANT:
       if (eatingProfile) {
         systemPrompt += `\n## Eating Profile:\n${this.behaviorService.profileSummaryText(eatingProfile)}\n`;
       }
+
+      if (journey) systemPrompt += `\n${journey}\n`;
 
       const fullPrompt = `${systemPrompt}
 

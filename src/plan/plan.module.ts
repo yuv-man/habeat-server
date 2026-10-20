@@ -1,6 +1,7 @@
 import { Module, forwardRef } from "@nestjs/common";
 import { MongooseModule } from "@nestjs/mongoose";
 import { ShoppingModule } from "../shopping/shopping.module";
+import { ChallengeProgramModule } from "../challenge-program/challenge-program.module";
 import { PlanController } from "./plan.controller";
 import { PlanService } from "./plan.service";
 import { Plan, PlanSchema } from "./plan.model";
@@ -27,6 +28,7 @@ import { UsdaNutritionService } from "../utils/usda-nutrition.service";
     ]),
     forwardRef(() => ProgressModule),
     forwardRef(() => GeneratorModule),
+    forwardRef(() => ChallengeProgramModule),
   ],
   controllers: [PlanController],
   providers: [PlanService, UsdaNutritionService],

@@ -16,6 +16,7 @@ import { ShoppingModule } from "./shopping/shopping.module";
 import { ChatModule } from "./chat/chat.module";
 import { EngagementModule } from "./engagement/engagement.module";
 import { ChallengeModule } from "./challenge/challenge.module";
+import { ChallengeProgramModule } from "./challenge-program/challenge-program.module";
 import { ReflectionModule } from "./reflection/reflection.module";
 import { NotificationModule } from "./notification/notification.module";
 import { PhotoRecognitionModule } from "./photo-recognition/photo-recognition.module";
@@ -95,6 +96,7 @@ import logger from "./utils/logger";
     ChatModule,
     EngagementModule,
     ChallengeModule,
+    ChallengeProgramModule,
     ReflectionModule,
     NotificationModule,
     PhotoRecognitionModule,

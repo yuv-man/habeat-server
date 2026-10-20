@@ -8,6 +8,7 @@ import { User, UserSchema } from "../user/user.model";
 import { Meal, MealSchema } from "../meal/meal.model";
 import { EngagementModule } from "../engagement/engagement.module";
 import { ChallengeModule } from "../challenge/challenge.module";
+import { ChallengeProgramModule } from "../challenge-program/challenge-program.module";
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { ChallengeModule } from "../challenge/challenge.module";
     ]),
     forwardRef(() => EngagementModule),
     forwardRef(() => ChallengeModule),
+    forwardRef(() => ChallengeProgramModule),
   ],
   controllers: [ProgressController],
   providers: [ProgressService],

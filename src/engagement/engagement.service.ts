@@ -161,6 +161,75 @@ export const HABIT_BADGES: Record<string, Omit<IBadge, "earnedAt" | "id">> = {
     icon: "flame",
     category: "consistency",
   },
+  // Guided challenge milestones (src/challenge-program). Named for what was
+  // built, never for results.
+  journey_noticed: {
+    name: "Noticed",
+    description: "Finished Week 1 of a guided challenge",
+    icon: "eye",
+    category: "milestone",
+  },
+  journey_set_up: {
+    name: "Set Up",
+    description: "Built your safety net in Week 2",
+    icon: "shield",
+    category: "milestone",
+  },
+  journey_upgraded: {
+    name: "Upgraded",
+    description: "Made a meal you love a little better",
+    icon: "sparkles",
+    category: "milestone",
+  },
+  journey_steady: {
+    name: "Steady",
+    description: "Four weeks of small steps",
+    icon: "anchor",
+    category: "milestone",
+  },
+  journey_finished: {
+    name: "30 Days",
+    description: "Reached the end of a 30-day challenge",
+    icon: "trophy",
+    category: "milestone",
+  },
+  // 12-week journey: one per stage.
+  journey_routine_mapped: {
+    name: "Routine Mapped",
+    description: "Understood your routine in the first two weeks",
+    icon: "map",
+    category: "milestone",
+  },
+  journey_foundations: {
+    name: "Foundations",
+    description: "Set up the basics that make good days easier",
+    icon: "shield",
+    category: "milestone",
+  },
+  journey_flexible: {
+    name: "Flexible",
+    description: "Built responses for days that don't go to plan",
+    icon: "shuffle",
+    category: "milestone",
+  },
+  journey_experimenter: {
+    name: "Experimenter",
+    description: "Tried strategies and learned what works for you",
+    icon: "flask-conical",
+    category: "milestone",
+  },
+  journey_independent: {
+    name: "On Your Own",
+    description: "Made your own calls with less guidance",
+    icon: "compass",
+    category: "milestone",
+  },
+  journey_twelve_weeks: {
+    name: "12 Weeks",
+    description: "Reached the end of the 12-week journey",
+    icon: "trophy",
+    category: "milestone",
+  },
 };
 
 // Legacy XP rewards (kept for backward compatibility during migration)
